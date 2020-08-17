@@ -12,6 +12,31 @@ static bool print(const char* data, size_t length) {
 	return true;
 }
 
+size_t atoi(int i, char* buf)
+{
+	char digits[10] = {0};
+	memcpy(digits, "0123456789", 10);
+
+	size_t len = 0;
+	int copy = i;
+
+	while(copy)
+	{
+		len++;
+		buf++;
+		copy/=10;
+	}
+
+	*buf = '\0';
+
+	while(i)
+	{
+		*--buf = digits[i%10];
+		i/=10;
+	}
+
+	return len;
+}
 int printf(const char* restrict format, ...) {
 	va_list parameters;
 	va_start(parameters, format);
@@ -59,6 +84,19 @@ int printf(const char* restrict format, ...) {
 				return -1;
 			}
 			if (!print(str, len))
+				return -1;
+			written += len;
+		} else if (*format == 'd') {
+			format++;
+			int val = va_arg(parameters, int);
+			char buf[256] = {0};
+			size_t len = atoi(val, buf);
+			if (maxrem < len) {
+				// TODO: Set errno to EOVERFLOW.
+				return -1;
+			}
+			
+			if (!print(buf, len))
 				return -1;
 			written += len;
 		} else {
