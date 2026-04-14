@@ -3,6 +3,8 @@
 
 #include <kernel/gdt.h>
 
+extern uint32_t stack_top;
+
 void init_gdt_desc(uint32_t base, uint32_t limit, uint8_t acces, uint8_t other, struct gdtdesc *desc)
 {
     desc->lim0_15 = (limit & 0xffff);
@@ -23,8 +25,8 @@ void gdt_initialize(void)
 {
     default_tss.debug_flag = 0x00;
     default_tss.io_map = 0x00;
-    default_tss.esp0 = 0x1FFF0;
-    default_tss.ss0 = 0x18;
+    default_tss.esp0 = (uint32_t)&stack_top;
+    default_tss.ss0 = 0x10; /* kernel data segment selector */
 
     /* Init gdt segments */
     init_gdt_desc(0x0, 0x0, 0x0, 0x0, &kgdt[0]);

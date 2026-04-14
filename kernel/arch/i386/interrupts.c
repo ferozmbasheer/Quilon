@@ -12,6 +12,29 @@ extern char inb(unsigned short port);
 struct IDT_entry IDT[256];
 
 void idt_initialize(void) {
+  /* Register CPU exception handlers (vectors 0-31) */
+  extern int isr0(),  isr1(),  isr2(),  isr3(),  isr4(),  isr5(),  isr6(),
+             isr7(),  isr8(),  isr9(),  isr10(), isr11(), isr12(), isr13(),
+             isr14(), isr15(), isr16(), isr17(), isr18(), isr19(), isr20(),
+             isr21(), isr22(), isr23(), isr24(), isr25(), isr26(), isr27(),
+             isr28(), isr29(), isr30(), isr31();
+
+  static void (*isr_stubs[])(void) = {
+      (void(*)(void))isr0,  (void(*)(void))isr1,  (void(*)(void))isr2,
+      (void(*)(void))isr3,  (void(*)(void))isr4,  (void(*)(void))isr5,
+      (void(*)(void))isr6,  (void(*)(void))isr7,  (void(*)(void))isr8,
+      (void(*)(void))isr9,  (void(*)(void))isr10, (void(*)(void))isr11,
+      (void(*)(void))isr12, (void(*)(void))isr13, (void(*)(void))isr14,
+      (void(*)(void))isr15, (void(*)(void))isr16, (void(*)(void))isr17,
+      (void(*)(void))isr18, (void(*)(void))isr19, (void(*)(void))isr20,
+      (void(*)(void))isr21, (void(*)(void))isr22, (void(*)(void))isr23,
+      (void(*)(void))isr24, (void(*)(void))isr25, (void(*)(void))isr26,
+      (void(*)(void))isr27, (void(*)(void))isr28, (void(*)(void))isr29,
+      (void(*)(void))isr30, (void(*)(void))isr31,
+  };
+  for (int i = 0; i < 32; i++)
+      idt_set_gate(i, (uint32_t)isr_stubs[i], 0x08, 0x8E);
+
   extern int load_idt();
   extern int irq0();
   extern int irq1();
@@ -228,22 +251,18 @@ void irq0_handler(void) {
 void irq1_handler(void) {
     outb(0x20, 0x20); //EOI
 
-    unsigned char s;
-    char keycode;
+    uint8_t scancode = inb(0x60);
 
-    s=inb(0x64);
-    if(s & 0x01)
-    {
-        keycode = inb(0x60);
-        {
-            if(keycode < 0) return;
-            printf("%c", keyboard_map[(unsigned char) keycode]);
-        }
-    }
-    else
-    {
-        printf("!");
-    }
+    /* Bit 7 set means key-release event — ignore it */
+    if (scancode & 0x80)
+        return;
+
+    if (scancode >= sizeof(keyboard_map))
+        return;
+
+    char c = keyboard_map[scancode];
+    if (c != 0)
+        printf("%c", c);
 }
  
 void irq2_handler(void) {

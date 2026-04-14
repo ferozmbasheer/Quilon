@@ -12,27 +12,40 @@ static bool print(const char* data, size_t length) {
 	return true;
 }
 
-size_t atoi(int i, char* buf)
+/* Convert integer to string; returns number of characters written into buf.
+ * Handles zero, positives, and negatives correctly.
+ * buf must be at least 12 bytes (enough for "-2147483648"). */
+static size_t format_int(int value, char* buf)
 {
-	char digits[10] = {0};
-	memcpy(digits, "0123456789", 10);
-
-	size_t len = 0;
-	int copy = i;
-
-	while(copy)
-	{
-		len++;
-		buf++;
-		copy/=10;
+	if (value == 0) {
+		buf[0] = '0';
+		return 1;
 	}
 
-	*buf = '\0';
+	size_t len = 0;
 
-	while(i)
-	{
-		*--buf = digits[i%10];
-		i/=10;
+	if (value < 0) {
+		buf[len++] = '-';
+		/* Use unsigned arithmetic to avoid UB on INT_MIN */
+		unsigned int uval = 0u - (unsigned int)value;
+		char tmp[10];
+		size_t ndigits = 0;
+		while (uval > 0) {
+			tmp[ndigits++] = '0' + (uval % 10);
+			uval /= 10;
+		}
+		for (size_t i = ndigits; i > 0; i--)
+			buf[len++] = tmp[i - 1];
+	} else {
+		unsigned int uval = (unsigned int)value;
+		char tmp[10];
+		size_t ndigits = 0;
+		while (uval > 0) {
+			tmp[ndigits++] = '0' + (uval % 10);
+			uval /= 10;
+		}
+		for (size_t i = ndigits; i > 0; i--)
+			buf[len++] = tmp[i - 1];
 	}
 
 	return len;
@@ -89,13 +102,37 @@ int printf(const char* restrict format, ...) {
 		} else if (*format == 'd') {
 			format++;
 			int val = va_arg(parameters, int);
-			char buf[256] = {0};
-			size_t len = atoi(val, buf);
+			char buf[12] = {0}; /* enough for "-2147483648" */
+			size_t len = format_int(val, buf);
 			if (maxrem < len) {
 				// TODO: Set errno to EOVERFLOW.
 				return -1;
 			}
-			
+			if (!print(buf, len))
+				return -1;
+			written += len;
+		} else if (*format == 'x') {
+			format++;
+			unsigned int val = va_arg(parameters, unsigned int);
+			char buf[9] = {0}; /* 8 hex digits + null */
+			size_t len = 0;
+			if (val == 0) {
+				buf[len++] = '0';
+			} else {
+				char tmp[8];
+				size_t ndigits = 0;
+				while (val > 0) {
+					int digit = (int)(val & 0xF);
+					tmp[ndigits++] = (char)(digit < 10 ? '0' + digit : 'a' + digit - 10);
+					val >>= 4;
+				}
+				for (size_t i = ndigits; i > 0; i--)
+					buf[len++] = tmp[i - 1];
+			}
+			if (maxrem < len) {
+				// TODO: Set errno to EOVERFLOW.
+				return -1;
+			}
 			if (!print(buf, len))
 				return -1;
 			written += len;

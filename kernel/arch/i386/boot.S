@@ -17,6 +17,7 @@
 .align 16
 stack_bottom:
 .skip 16384 # 16 KiB
+.global stack_top
 stack_top:
 
 # The kernel entry point.
@@ -53,6 +54,75 @@ outb:
 	mov 8(%esp), %al
 	out %al, %dx
 	ret
+
+/* ── CPU Exception stubs (vectors 0-31) ─────────────────────────────────── */
+/* Exceptions without a CPU-pushed error code push a fake zero so every stub
+ * leaves the stack in the same layout for exception_common_stub.         */
+
+.macro EXCEPTION_NOERR num
+.global isr\num
+isr\num:
+    push $0
+    push $\num
+    jmp exception_common_stub
+.endm
+
+.macro EXCEPTION_ERR num
+.global isr\num
+isr\num:
+    push $\num
+    jmp exception_common_stub
+.endm
+
+EXCEPTION_NOERR 0
+EXCEPTION_NOERR 1
+EXCEPTION_NOERR 2
+EXCEPTION_NOERR 3
+EXCEPTION_NOERR 4
+EXCEPTION_NOERR 5
+EXCEPTION_NOERR 6
+EXCEPTION_NOERR 7
+EXCEPTION_ERR   8
+EXCEPTION_NOERR 9
+EXCEPTION_ERR   10
+EXCEPTION_ERR   11
+EXCEPTION_ERR   12
+EXCEPTION_ERR   13
+EXCEPTION_ERR   14
+EXCEPTION_NOERR 15
+EXCEPTION_NOERR 16
+EXCEPTION_ERR   17
+EXCEPTION_NOERR 18
+EXCEPTION_NOERR 19
+EXCEPTION_NOERR 20
+EXCEPTION_NOERR 21
+EXCEPTION_NOERR 22
+EXCEPTION_NOERR 23
+EXCEPTION_NOERR 24
+EXCEPTION_NOERR 25
+EXCEPTION_NOERR 26
+EXCEPTION_NOERR 27
+EXCEPTION_NOERR 28
+EXCEPTION_NOERR 29
+EXCEPTION_ERR   30
+EXCEPTION_NOERR 31
+
+exception_common_stub:
+    pusha
+    mov  %ds, %ax
+    push %eax
+    mov  $0x10, %ax
+    mov  %ax, %ds
+    mov  %ax, %es
+    push %esp
+    call exception_handler
+    pop  %eax
+    pop  %eax
+    mov  %ax, %ds
+    mov  %ax, %es
+    popa
+    add  $8, %esp
+    iret
 
 .global irq0
 .global irq1

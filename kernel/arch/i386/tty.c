@@ -96,18 +96,12 @@ void terminal_putchar(char c) {
 		return;
 	}
 	if(uc == '\b') {
-		if(terminal_column == 0) {
-			if(--terminal_row == 1)	{
-				terminal_row = 2;
-			}
-			else {
-				terminal_column = VGA_WIDTH - 1;
-			}	
-		}
-		else {
+		if (terminal_column > 0) {
 			terminal_column--;
+		} else if (terminal_row > 0) {
+			terminal_row--;
+			terminal_column = VGA_WIDTH - 1;
 		}
-		
 		terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
 		update_cursor(terminal_column, terminal_row);
 		return;
