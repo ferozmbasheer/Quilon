@@ -141,6 +141,36 @@ static void test_printf_percent(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * %x — hexadecimal formatting
+ * ═══════════════════════════════════════════════════════════════ */
+static void test_printf_x(void)
+{
+    reset_buf(); printf("%x", 0);
+    ASSERT_STR_EQ(out_buf, "0", "%x: zero");
+
+    reset_buf(); printf("%x", 1);
+    ASSERT_STR_EQ(out_buf, "1", "%x: one");
+
+    reset_buf(); printf("%x", 15);
+    ASSERT_STR_EQ(out_buf, "f", "%x: 15 -> f");
+
+    reset_buf(); printf("%x", 255);
+    ASSERT_STR_EQ(out_buf, "ff", "%x: 255 -> ff");
+
+    reset_buf(); printf("%x", 0xDEAD);
+    ASSERT_STR_EQ(out_buf, "dead", "%x: 0xDEAD -> dead");
+
+    reset_buf(); printf("%x", 0xDEADBEEF);
+    ASSERT_STR_EQ(out_buf, "deadbeef", "%x: 0xDEADBEEF -> deadbeef");
+
+    reset_buf(); printf("%x", 0xB8000);
+    ASSERT_STR_EQ(out_buf, "b8000", "%x: VGA buffer address 0xB8000");
+
+    reset_buf(); printf("0x%x", 0x1BADB002);
+    ASSERT_STR_EQ(out_buf, "0x1badb002", "%x: multiboot magic prefixed with 0x");
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Mixed arguments
  * ═══════════════════════════════════════════════════════════════ */
 static void test_printf_mixed(void)
@@ -188,6 +218,7 @@ int main(void)
     RUN_SUITE(test_printf_s);
     RUN_SUITE(test_printf_c);
     RUN_SUITE(test_printf_percent);
+    RUN_SUITE(test_printf_x);
     RUN_SUITE(test_printf_mixed);
     RUN_SUITE(test_printf_literal);
     RUN_SUITE(test_printf_return);

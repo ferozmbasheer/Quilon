@@ -12,6 +12,17 @@ struct IDT_entry{
 	unsigned short int offset_higherbits;
 };
 
+/* ── IDT gate type_attr constants ───────────────────────────────────────── */
+/* P=1, DPL=0, type=0xE → 32-bit interrupt gate, kernel-only              */
+#define IDT_TYPE_INTERRUPT_GATE  0x8E
+/* P=1, DPL=0, type=0xF → 32-bit trap gate (does not clear IF flag)       */
+#define IDT_TYPE_TRAP_GATE       0x8F
+/* P=1, DPL=3, type=0xE → 32-bit interrupt gate, callable from user mode  */
+#define IDT_TYPE_USER_GATE       0xEE
+
+/* Kernel code segment selector (GDT entry 1 × 8 bytes) */
+#define IDT_SELECTOR_KERNEL_CODE 0x08
+
 void idt_initialize(void);
 
 /* Set a single IDT gate */

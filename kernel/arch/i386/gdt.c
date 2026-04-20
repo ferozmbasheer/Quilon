@@ -29,16 +29,16 @@ void gdt_initialize(void)
     default_tss.ss0 = 0x10; /* kernel data segment selector */
 
     /* Init gdt segments */
-    init_gdt_desc(0x0, 0x0, 0x0, 0x0, &kgdt[0]);
-    init_gdt_desc(0x0, 0xFFFFF, 0x9B, 0x0D, &kgdt[1]);    /* code */
-    init_gdt_desc(0x0, 0xFFFFF, 0x93, 0x0D, &kgdt[2]);    /* data */
-    init_gdt_desc(0x0, 0x0, 0x97, 0x0D, &kgdt[3]);        /* stack */
+    init_gdt_desc(0x0,                   0x0,     0x0,            0x0,                 &kgdt[0]); /* null   */
+    init_gdt_desc(0x0,                   0xFFFFF, GDT_KERNEL_CODE, GDT_FLAGS_32BIT_PAGE, &kgdt[1]); /* kcode */
+    init_gdt_desc(0x0,                   0xFFFFF, GDT_KERNEL_DATA, GDT_FLAGS_32BIT_PAGE, &kgdt[2]); /* kdata */
+    init_gdt_desc(0x0,                   0x0,     GDT_KERNEL_STACK, GDT_FLAGS_32BIT_PAGE, &kgdt[3]); /* kstack */
 
-    init_gdt_desc(0x0, 0xFFFFF, 0xFF, 0x0D, &kgdt[4]);    /* ucode */
-    init_gdt_desc(0x0, 0xFFFFF, 0xF3, 0x0D, &kgdt[5]);    /* udata */
-    init_gdt_desc(0x0, 0x0, 0xF7, 0x0D, &kgdt[6]);        /* ustack */
+    init_gdt_desc(0x0,                   0xFFFFF, GDT_USER_CODE,  GDT_FLAGS_32BIT_PAGE, &kgdt[4]); /* ucode */
+    init_gdt_desc(0x0,                   0xFFFFF, GDT_USER_DATA,  GDT_FLAGS_32BIT_PAGE, &kgdt[5]); /* udata */
+    init_gdt_desc(0x0,                   0x0,     GDT_USER_STACK, GDT_FLAGS_32BIT_PAGE, &kgdt[6]); /* ustack */
 
-    init_gdt_desc((uint32_t) & default_tss, 0x67, 0xE9, 0x00, &kgdt[7]);    /* descripteur de tss */
+    init_gdt_desc((uint32_t)&default_tss, 0x67,   GDT_TSS,        0x00,                &kgdt[7]); /* tss */
 
     /* Init gdtr structure */
     kgdtr.limit = GDTSIZE * 8;

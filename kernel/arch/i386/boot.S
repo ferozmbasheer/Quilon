@@ -124,138 +124,37 @@ exception_common_stub:
     add  $8, %esp
     iret
 
-.global irq0
-.global irq1
-.global irq2
-.global irq3
-.global irq4
-.global irq5
-.global irq6
-.global irq7
-.global irq8
-.global irq9
-.global irq10
-.global irq11
-.global irq12
-.global irq13
-.global irq14
-.global irq15
- 
+/* ── IRQ stubs (hardware interrupts, vectors 32-47) ────────────────────── */
+/* Each stub saves all registers, calls the C handler, restores, and irets. */
+
+.macro IRQ_STUB num
+.global irq\num
+irq\num:
+    pusha
+    call irq\num\()_handler
+    popa
+    iret
+.endm
+
+IRQ_STUB 0
+IRQ_STUB 1
+IRQ_STUB 2
+IRQ_STUB 3
+IRQ_STUB 4
+IRQ_STUB 5
+IRQ_STUB 6
+IRQ_STUB 7
+IRQ_STUB 8
+IRQ_STUB 9
+IRQ_STUB 10
+IRQ_STUB 11
+IRQ_STUB 12
+IRQ_STUB 13
+IRQ_STUB 14
+IRQ_STUB 15
+
 .global load_idt
- 
-.global irq0_handler
-.global irq1_handler
-.global irq2_handler
-.global irq3_handler
-.global irq4_handler
-.global irq5_handler
-.global irq6_handler
-.global irq7_handler
-.global irq8_handler
-.global irq9_handler
-.global irq10_handler
-.global irq11_handler
-.global irq12_handler
-.global irq13_handler
-.global irq14_handler
-.global irq15_handler
- 
-irq0:
-  pusha
-  call irq0_handler
-  popa
-  iret
- 
-irq1:
-  pusha
-  call irq1_handler
-  popa
-  iret
- 
-irq2:
-  pusha
-  call irq2_handler
-  popa
-  iret
- 
-irq3:
-  pusha
-  call irq3_handler
-  popa
-  iret
- 
-irq4:
-  pusha
-  call irq4_handler
-  popa
-  iret
- 
-irq5:
-  pusha
-  call irq5_handler
-  popa
-  iret
- 
-irq6:
-  pusha
-  call irq6_handler
-  popa
-  iret
- 
-irq7:
-  pusha
-  call irq7_handler
-  popa
-  iret
- 
-irq8:
-  pusha
-  call irq8_handler
-  popa
-	  iret
- 
-irq9:
-  pusha
-  call irq9_handler
-  popa
-  iret
- 
-irq10:
-  pusha
-  call irq10_handler
-  popa
-  iret
- 
-irq11:
-  pusha
-  call irq11_handler
-  popa
-  iret
- 
-irq12:
-  pusha
-  call irq12_handler
-  popa
-  iret
- 
-irq13:
-  pusha
-  call irq13_handler
-  popa
-  iret
- 
-irq14:
-  pusha
-  call irq14_handler
-  popa
-  iret
- 
-irq15:
-  pusha
-  call irq15_handler
-  popa
-  iret
- 
+
 load_idt:
 	mov 4(%esp), %edx
 	lidt (%edx)
