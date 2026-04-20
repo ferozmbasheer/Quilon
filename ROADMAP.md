@@ -368,12 +368,12 @@ typedef struct {
 } registers_t;
 
 void exception_handler(registers_t *regs) {
-    kprintf("\n--- KERNEL PANIC ---\n");
-    kprintf("Exception: %s (vector %d)\n",
+    kprintf("\r\n--- KERNEL PANIC ---\r\n");
+    kprintf("Exception: %s (vector %d)\r\n",
             exception_messages[regs->int_no], regs->int_no);
-    kprintf("EIP=0x%x  CS=0x%x  EFLAGS=0x%x\n",
+    kprintf("EIP=0x%x  CS=0x%x  EFLAGS=0x%x\r\n",
             regs->eip, regs->cs, regs->eflags);
-    kprintf("EAX=0x%x  EBX=0x%x  ECX=0x%x  EDX=0x%x\n",
+    kprintf("EAX=0x%x  EBX=0x%x  ECX=0x%x  EDX=0x%x\r\n",
             regs->eax, regs->ebx, regs->ecx, regs->edx);
     for(;;) asm("hlt"); // halt
 }

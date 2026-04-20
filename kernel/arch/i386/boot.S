@@ -20,12 +20,22 @@ stack_bottom:
 .global stack_top
 stack_top:
 
+# Storage for the Multiboot info pointer passed by GRUB in %ebx.
+# Saved before _init so the stack stays 16-byte aligned for kernel_main.
+.section .data
+.global multiboot_info_ptr
+multiboot_info_ptr:
+    .long 0
+
 # The kernel entry point.
 .section .text
 .global _start
 .type _start, @function
 _start:
 	movl $stack_top, %esp
+
+	# Save the Multiboot info pointer before calling _init.
+	movl %ebx, multiboot_info_ptr
 
 	# Call the global constructors.
 	call _init

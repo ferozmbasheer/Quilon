@@ -52,17 +52,17 @@ static const char *exception_messages[] = {
 
 void exception_handler(registers_t *regs)
 {
-    printf("\n--- KERNEL PANIC ---\n");
+    printf("\r\n--- KERNEL PANIC ---\r\n");
     if (regs->int_no < 32)
-        printf("Exception: %s (vector %d)\n",
+        printf("Exception: %s (vector %d)\r\n",
                exception_messages[regs->int_no], (int)regs->int_no);
     else
-        printf("Exception: unknown (vector %d)\n", (int)regs->int_no);
+        printf("Exception: unknown (vector %d)\r\n", (int)regs->int_no);
 
-    printf("err_code=0x%x\n", (int)regs->err_code);
-    printf("EIP=0x%x  CS=0x%x  EFLAGS=0x%x\n",
+    printf("err_code=0x%x\r\n", (int)regs->err_code);
+    printf("EIP=0x%x  CS=0x%x  EFLAGS=0x%x\r\n",
            (int)regs->eip, (int)regs->cs, (int)regs->eflags);
-    printf("EAX=0x%x  EBX=0x%x  ECX=0x%x  EDX=0x%x\n",
+    printf("EAX=0x%x  EBX=0x%x  ECX=0x%x  EDX=0x%x\r\n",
            (int)regs->eax, (int)regs->ebx, (int)regs->ecx, (int)regs->edx);
 
     for (;;)

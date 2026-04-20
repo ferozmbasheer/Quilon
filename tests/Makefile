@@ -41,10 +41,16 @@ LIBC_STRING = \
 # mock putchar() defined in test_printf.c is used by the linker.
 LIBC_PRINTF = ../libc/stdio/printf.c
 
+# PMM source under test.
+PMM_SRC = ../kernel/arch/i386/pmm.c
+
+# Extra include path for kernel headers (<kernel/pmm.h>, <kernel/multiboot.h>).
+PMM_INCLUDES = -I../kernel/include
+
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm
 
 .PHONY: all build run clean help
 
@@ -82,6 +88,12 @@ $(BINDIR)/test_string: test_string.c framework.h $(LIBC_STRING)
 # printf.c calls our mock, which captures output to a buffer for inspection.
 $(BINDIR)/test_printf: test_printf.c framework.h $(LIBC_PRINTF) $(LIBC_STRING)
 	$(CC) $(CFLAGS) -o $@ test_printf.c $(LIBC_PRINTF) $(LIBC_STRING)
+
+# PMM tests
+# Uses pmm_init_range() instead of pmm_initialize() to avoid the
+# 32-bit/64-bit pointer-truncation problem on PIE binaries.
+$(BINDIR)/test_pmm: test_pmm.c framework.h $(PMM_SRC) $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(PMM_INCLUDES) -o $@ test_pmm.c $(PMM_SRC) $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 
