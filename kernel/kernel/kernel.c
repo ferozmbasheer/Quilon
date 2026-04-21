@@ -14,6 +14,7 @@
 #include <kernel/pit.h>
 #include <kernel/scheduler.h>
 #include <kernel/usermode.h>
+#include <kernel/syscall.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -25,6 +26,7 @@ void kernel_main(void) {
 	keyboard_initialize();
 	scheduler_initialize();
 	pit_initialize(100); /* 100 Hz — 10 ms tick */
+	syscall_initialize();
 
 	multiboot_info_t *mbi = (multiboot_info_t *)multiboot_info_ptr;
 	pmm_initialize(mbi);

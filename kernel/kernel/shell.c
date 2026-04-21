@@ -8,7 +8,7 @@
 
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
-        printf("Commands: help, clear, cls, halt, ticks, seconds, ring3\r\n");
+        printf("Commands: help, clear, cls, halt, ticks, seconds, ring3, syscall\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -28,6 +28,12 @@ static void shell_execute(const char *cmd) {
         usermode_initialize();
         usermode_enter(user_task_demo);
         /* usermode_enter() never returns; the GPF handler halts the CPU. */
+    } else if (strcmp(cmd, "syscall") == 0) {
+        printf("Entering ring 3 to demo system calls via int $0x80...\r\n");
+        printf("Expect: SYS_WRITE output, SYS_GETPID result, then SYS_EXIT halt.\r\n");
+        usermode_initialize();
+        usermode_enter(user_task_syscall);
+        /* usermode_enter() never returns; SYS_EXIT halts the CPU. */
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

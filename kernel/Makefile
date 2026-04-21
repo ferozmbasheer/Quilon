@@ -35,6 +35,7 @@ kernel/keyboard.o \
 kernel/shell.o \
 kernel/scheduler.o \
 kernel/usermode.o \
+kernel/syscall.o \
 
 OBJS=\
 $(ARCHDIR)/crti.o \

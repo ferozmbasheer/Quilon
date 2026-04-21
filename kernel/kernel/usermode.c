@@ -42,6 +42,7 @@
 
 #include <kernel/usermode.h>
 #include <kernel/paging.h>
+#include <kernel/syscall.h>
 
 /* ── User-mode stack ─────────────────────────────────────────────────────────
  * One 4-KiB page in .bss, 4-KiB aligned.
@@ -176,5 +177,69 @@ void user_task_spin(void)
      * power consumption and pipeline contention.
      * Useful for validating that the ring-3 entry itself works without
      * deliberately triggering a General Protection Fault.              */
+    while (1) asm volatile("pause");
+}
+
+void user_task_syscall(void)
+{
+    /* ── SYS_WRITE — print a message through the kernel ─────────────────────
+     *
+     * This is the correct way for user-mode code to output text:
+     * instead of writing directly to the VGA buffer (which would work in
+     * our permissive demo setup), we ask the kernel to do it via a syscall.
+     * In a real OS, user code can never touch kernel or device memory
+     * directly — syscalls are the only bridge.                           */
+    const char msg[] = "[ring3] SYS_WRITE via int $0x80 : syscall works!\r\n";
+    uint32_t   len   = (uint32_t)(sizeof(msg) - 1);
+    uint32_t   ret;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(ret)
+        : "a"((uint32_t)SYS_WRITE),
+          "b"((uint32_t)FD_STDOUT),
+          "c"((uint32_t)(uintptr_t)msg),
+          "d"(len)
+        : "memory"
+    );
+
+    /* ── SYS_GETPID — retrieve the process ID ────────────────────────────────
+     *
+     * Returns 0 in this single-task kernel.  Demonstrates a zero-argument
+     * syscall and shows that EAX is correctly delivered back to user code.  */
+    uint32_t pid;
+    asm volatile(
+        "int $0x80"
+        : "=a"(pid)
+        : "a"((uint32_t)SYS_GETPID)
+        : "memory"
+    );
+
+    /* Report the PID we got back — write the message via SYS_WRITE again. */
+    if (pid == 0) {
+        const char pid_ok[] = "[ring3] SYS_GETPID returned 0 (expected)\r\n";
+        uint32_t pid_len = (uint32_t)(sizeof(pid_ok) - 1);
+        asm volatile(
+            "int $0x80"
+            :: "a"((uint32_t)SYS_WRITE),
+               "b"((uint32_t)FD_STDOUT),
+               "c"((uint32_t)(uintptr_t)pid_ok),
+               "d"(pid_len)
+            : "memory"
+        );
+    }
+
+    /* ── SYS_EXIT — terminate cleanly ────────────────────────────────────────
+     *
+     * Asks the kernel to end this process with exit code 0.
+     * The kernel prints a termination message and halts the CPU.
+     * This instruction is never reached.                                  */
+    asm volatile(
+        "int $0x80"
+        :: "a"((uint32_t)SYS_EXIT), "b"(0u)
+        : "memory"
+    );
+
+    /* Unreachable — SYS_EXIT halts the CPU. */
     while (1) asm volatile("pause");
 }

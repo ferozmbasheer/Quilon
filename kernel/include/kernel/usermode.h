@@ -81,4 +81,11 @@ void user_task_demo(void);
  * Useful for verifying scheduler integration without triggering a fault. */
 void user_task_spin(void);
 
+/* Demonstrates system calls from ring-3 code.
+ *   1. Calls SYS_WRITE (int $0x80, eax=1) to print a message via the kernel.
+ *   2. Calls SYS_GETPID (int $0x80, eax=2) to retrieve the process ID.
+ *   3. Calls SYS_EXIT  (int $0x80, eax=3) to terminate cleanly.
+ * Never returns — SYS_EXIT halts the CPU. */
+void user_task_syscall(void);
+
 #endif /* _KERNEL_USERMODE_H */

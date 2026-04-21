@@ -57,7 +57,7 @@ KERNEL_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall
 
 .PHONY: all build run clean help
 
@@ -123,6 +123,20 @@ $(BINDIR)/test_pit: test_pit.c framework.h $(SCHEDULER_SRC)
 # usermode.h and the inline helpers from paging.h.
 $(BINDIR)/test_usermode: test_usermode.c framework.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_usermode.c
+
+# Syscall tests
+# Links syscall.c directly — the handler contains no x86 asm (the hlt in
+# SYS_EXIT is guarded by #ifdef __is_kernel, absent in the host build).
+# terminal_write and putchar are provided as mocks inside test_syscall.c.
+# putchar.c is excluded so the mock wins at link time.
+# interrupts.c is NOT linked (idt_set_gate is inline, but syscall_initialize
+# is never called in tests so no reference to IDT[] is emitted).
+$(BINDIR)/test_syscall: test_syscall.c framework.h \
+                        ../kernel/kernel/syscall.c \
+                        $(LIBC_PRINTF) $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_syscall.c ../kernel/kernel/syscall.c \
+	    $(LIBC_PRINTF) $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

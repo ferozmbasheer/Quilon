@@ -170,3 +170,46 @@ load_idt:
 	lidt (%edx)
 	sti
 	ret
+
+/* ── int $0x80 system call stub ─────────────────────────────────────────── */
+/*
+ * Entry point for `int $0x80` system calls.  Registered in the IDT with
+ * DPL=3 by syscall_initialize() so ring-3 code may invoke it.
+ *
+ * Stack on entry (ring-3 → ring-0 transition, CPU pushes 5 items):
+ *   ss       ← user stack segment
+ *   useresp  ← user stack pointer
+ *   eflags
+ *   cs       ← user code segment (RPL=3 tells iret to restore ss/esp)
+ *   eip      ← return address in user code
+ *
+ * This stub:
+ *   1. Pushes a fake err_code (0) and int_no (0x80) for a uniform layout.
+ *   2. Saves all general-purpose registers with pusha.
+ *   3. Saves DS and switches to the kernel data segment (0x10).
+ *   4. Passes a pointer to the save area to syscall_handler.
+ *   5. Restores DS, all registers, and irets back to ring 3.
+ *
+ * Return value: syscall_handler writes the result into regs->eax (the pusha
+ * slot) before returning.  The subsequent popa restores EAX from that slot,
+ * so the caller's EAX holds the syscall return value after `int $0x80`.
+ */
+.global int80_stub
+int80_stub:
+    push $0          /* fake err_code — keeps layout identical to exceptions */
+    push $0x80       /* int_no                                                */
+    pusha
+    mov  %ds, %ax
+    push %eax        /* save caller's data segment                            */
+    mov  $0x10, %ax  /* switch to kernel data segment                         */
+    mov  %ax, %ds
+    mov  %ax, %es
+    push %esp        /* argument: pointer to syscall_regs_t                   */
+    call syscall_handler
+    add  $4, %esp    /* remove the esp-pointer argument                       */
+    pop  %eax        /* pop saved ds value into eax (clobbers, then popa fix) */
+    mov  %ax, %ds   /* restore caller's data segment                          */
+    mov  %ax, %es
+    popa             /* restores all regs including eax = syscall return value */
+    add  $8, %esp    /* remove int_no and err_code                             */
+    iret             /* restores eip, cs, eflags, useresp, ss (ring-3 return)  */
