@@ -50,7 +50,7 @@ PMM_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging
 
 .PHONY: all build run clean help
 
@@ -94,6 +94,13 @@ $(BINDIR)/test_printf: test_printf.c framework.h $(LIBC_PRINTF) $(LIBC_STRING)
 # 32-bit/64-bit pointer-truncation problem on PIE binaries.
 $(BINDIR)/test_pmm: test_pmm.c framework.h $(PMM_SRC) $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(PMM_INCLUDES) -o $@ test_pmm.c $(PMM_SRC) $(LIBC_STRING)
+
+# Paging tests
+# Only exercises paging.h (inline functions + macros) — paging.c is NOT
+# linked because it contains x86 inline assembly (CR3/CR0 writes) that
+# cannot run on a 64-bit host.  No extra .c files are required.
+$(BINDIR)/test_paging: test_paging.c framework.h
+	$(CC) $(CFLAGS) $(PMM_INCLUDES) -o $@ test_paging.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 
