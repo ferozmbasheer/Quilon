@@ -57,7 +57,7 @@ KERNEL_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode
 
 .PHONY: all build run clean help
 
@@ -115,6 +115,14 @@ $(BINDIR)/test_paging: test_paging.c framework.h
 # host (the ESP swap is guarded by #ifdef __is_kernel), so it links cleanly.
 $(BINDIR)/test_pit: test_pit.c framework.h $(SCHEDULER_SRC)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_pit.c $(SCHEDULER_SRC)
+
+# User-mode tests
+# Only the pure-C / header-only parts are tested on the host.
+# usermode.c itself is NOT linked (it contains x86-only inline asm: ltr,
+# iret, invlpg) — the tests exercise only the constants defined in
+# usermode.h and the inline helpers from paging.h.
+$(BINDIR)/test_usermode: test_usermode.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_usermode.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

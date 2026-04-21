@@ -13,6 +13,7 @@
 #include <kernel/shell.h>
 #include <kernel/pit.h>
 #include <kernel/scheduler.h>
+#include <kernel/usermode.h>
 
 extern uint32_t multiboot_info_ptr;
 

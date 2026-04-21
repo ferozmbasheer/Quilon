@@ -34,6 +34,7 @@ kernel/kmalloc.o \
 kernel/keyboard.o \
 kernel/shell.o \
 kernel/scheduler.o \
+kernel/usermode.o \
 
 OBJS=\
 $(ARCHDIR)/crti.o \

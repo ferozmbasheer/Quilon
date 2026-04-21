@@ -41,3 +41,52 @@ void paging_initialize(void)
         : "eax"
     );
 }
+
+void paging_set_user_access(uint32_t virt_start, uint32_t virt_end)
+{
+    /* Walk every page in [virt_start, virt_end) and add PAGE_USER to
+     * the PDE and PTE for any page that is already marked present.
+     * Silently skips pages that have no mapping yet.                    */
+    for (uint32_t addr = virt_start; addr < virt_end; addr += PAGE_SIZE) {
+        uint32_t pd_idx = VIRT_PD_INDEX(addr);
+        uint32_t pt_idx = VIRT_PT_INDEX(addr);
+
+        if (!(page_directory[pd_idx] & PAGE_PRESENT))
+            continue;
+
+        /* Set USER on the page directory entry covering this 4-MiB slot. */
+        page_directory[pd_idx] |= PAGE_USER;
+
+        /* Dereference the page table pointer stored in the PDE. */
+        uint32_t *pt = (uint32_t *)(page_directory[pd_idx] & ~0xFFFu);
+        if (pt[pt_idx] & PAGE_PRESENT)
+            pt[pt_idx] |= PAGE_USER;
+    }
+
+    /* Flush the entire TLB by reloading CR3. */
+    asm volatile(
+        "mov %%cr3, %%eax\n\t"
+        "mov %%eax, %%cr3\n\t"
+        :: : "eax"
+    );
+}
+
+int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags)
+{
+    uint32_t pd_idx = VIRT_PD_INDEX(virt);
+    uint32_t pt_idx = VIRT_PT_INDEX(virt);
+
+    if (!(page_directory[pd_idx] & PAGE_PRESENT))
+        return -1;   /* no page table for this PD slot */
+
+    uint32_t *pt = (uint32_t *)(page_directory[pd_idx] & ~0xFFFu);
+    pt[pt_idx] = paging_make_entry(phys, flags);
+
+    /* Propagate any new flags (e.g. PAGE_USER) up to the PDE too. */
+    page_directory[pd_idx] |= (flags & (PAGE_USER | PAGE_WRITABLE));
+
+    /* Invalidate just this one TLB entry. */
+    asm volatile("invlpg (%0)" :: "r"(virt) : "memory");
+
+    return 0;
+}

@@ -44,4 +44,25 @@ static inline uint32_t paging_make_entry(uint32_t phys_addr, uint32_t flags)
  */
 void paging_initialize(void);
 
+/* Mark every PTE in [virt_start, virt_end) that is already present with
+ * the PAGE_USER flag (and also set PAGE_USER on the covering PDEs).
+ * Pages that are not yet mapped are silently skipped.
+ * Flushes the TLB by reloading CR3 after the update.
+ *
+ * Used by usermode_initialize() to allow ring-3 code to access the
+ * identity-mapped first 4 MiB.
+ */
+void paging_set_user_access(uint32_t virt_start, uint32_t virt_end);
+
+/* Map a single physical page at virtual address virt with the given flags.
+ *
+ * Requires that a page table already exists for the PD slot covering virt
+ * (i.e. that paging_initialize() has already mapped something in the same
+ * 4-MiB region).  Returns 0 on success, -1 if no page table exists for
+ * that slot.
+ *
+ * Invalidates the single TLB entry for virt via invlpg.
+ */
+int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags);
+
 #endif /* _KERNEL_PAGING_H */
