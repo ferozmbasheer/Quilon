@@ -3,15 +3,24 @@
 #include <kernel/shell.h>
 #include <kernel/keyboard.h>
 #include <kernel/tty.h>
+#include <kernel/pit.h>
 
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, halt\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
+    } else if (strcmp(cmd, "cls") == 0) {
+        terminal_initialize();
     } else if (strcmp(cmd, "halt") == 0) {
         printf("Halting.\r\n");
         asm volatile("cli; hlt");
+    } else if (strcmp(cmd, "ticks") == 0) {
+        printf("%d\r\n", pit_get_ticks());
+    } else if (strcmp(cmd, "seconds") == 0) {
+        uint32_t hz = pit_get_hz();
+        uint32_t secs = (hz > 0) ? pit_get_ticks() / hz : 0;
+        printf("%d\r\n", (int)secs);
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

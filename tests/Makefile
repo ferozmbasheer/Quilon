@@ -44,13 +44,20 @@ LIBC_PRINTF = ../libc/stdio/printf.c
 # PMM source under test.
 PMM_SRC = ../kernel/arch/i386/pmm.c
 
-# Extra include path for kernel headers (<kernel/pmm.h>, <kernel/multiboot.h>).
+# Scheduler source under test.
+# pit.c is NOT linked because it calls outb/hlt (hardware-only).
+# pit_divisor() is an inline function in pit.h and needs no .c file.
+SCHEDULER_SRC = ../kernel/kernel/scheduler.c
+
+# Extra include path for kernel headers (<kernel/pmm.h>, <kernel/multiboot.h>,
+# <kernel/pit.h>, <kernel/scheduler.h>, ...).
 PMM_INCLUDES = -I../kernel/include
+KERNEL_INCLUDES = -I../kernel/include
 
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit
 
 .PHONY: all build run clean help
 
@@ -101,6 +108,13 @@ $(BINDIR)/test_pmm: test_pmm.c framework.h $(PMM_SRC) $(LIBC_STRING)
 # cannot run on a 64-bit host.  No extra .c files are required.
 $(BINDIR)/test_paging: test_paging.c framework.h
 	$(CC) $(CFLAGS) $(PMM_INCLUDES) -o $@ test_paging.c
+
+# PIT and scheduler tests
+# pit.c is NOT linked (calls outb/hlt).  pit_divisor() is tested via its
+# inline definition in pit.h.  scheduler.c contains no x86 asm on the
+# host (the ESP swap is guarded by #ifdef __is_kernel), so it links cleanly.
+$(BINDIR)/test_pit: test_pit.c framework.h $(SCHEDULER_SRC)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_pit.c $(SCHEDULER_SRC)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

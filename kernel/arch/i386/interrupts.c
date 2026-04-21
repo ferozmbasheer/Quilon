@@ -6,6 +6,7 @@
 
 #include <kernel/interrupts.h>
 #include <kernel/keyboard.h>
+#include <kernel/pit.h>
 
 extern void outb(unsigned short port, unsigned char data);
 extern char inb(unsigned short port);
@@ -81,7 +82,9 @@ void idt_initialize(void) {
 }
 
 void irq0_handler(void) {
-    outb(0x20, 0x20); //EOI
+    outb(0x20, 0x20); /* EOI — must come before pit_tick so the PIC
+                         is ready for the next IRQ before we process */
+    pit_tick();
 }
  
 void irq1_handler(void) {

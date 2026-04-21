@@ -11,6 +11,8 @@
 #include <kernel/serial.h>
 #include <kernel/keyboard.h>
 #include <kernel/shell.h>
+#include <kernel/pit.h>
+#include <kernel/scheduler.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -20,6 +22,8 @@ void kernel_main(void) {
 	idt_initialize();
 	terminal_initialize();
 	keyboard_initialize();
+	scheduler_initialize();
+	pit_initialize(100); /* 100 Hz — 10 ms tick */
 
 	multiboot_info_t *mbi = (multiboot_info_t *)multiboot_info_ptr;
 	pmm_initialize(mbi);
@@ -101,7 +105,7 @@ void kernel_main(void) {
 	printf("  / _ \\ _   _(_) | ___  _ __  \r\n");
 	printf(" | | | | | | | | |/ _ \\| '_ \\ \r\n");
 	printf(" | |_| | |_| | | | (_) | | | |\r\n");
-	printf("  \\__\\_\\__,_|_|_|\\___/|_| |_|\r\n\n");
+	printf("  \\__\\_\\__,__|_|_|\\___/|_| |_|\r\n\n");
 
 	shell_run();
 }
