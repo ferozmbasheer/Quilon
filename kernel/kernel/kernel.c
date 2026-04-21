@@ -8,13 +8,18 @@
 #include <kernel/pmm.h>
 #include <kernel/paging.h>
 #include <kernel/kmalloc.h>
+#include <kernel/serial.h>
+#include <kernel/keyboard.h>
+#include <kernel/shell.h>
 
 extern uint32_t multiboot_info_ptr;
 
 void kernel_main(void) {
+	serial_initialize();
 	gdt_initialize();
 	idt_initialize();
 	terminal_initialize();
+	keyboard_initialize();
 
 	multiboot_info_t *mbi = (multiboot_info_t *)multiboot_info_ptr;
 	pmm_initialize(mbi);
@@ -91,10 +96,12 @@ void kernel_main(void) {
 	/* 5. Dump the heap — should show a single large free block after all
 	 *    the frees and coalescing above.                                   */
 	kmalloc_dump();
-printf("   ___        _ _ \r\n");            
-printf("  / _ \\ _   _(_) | ___  _ __  \r\n");
-printf(" | | | | | | | | |/ _ \\| '_ \\ \r\n");
-printf(" | |_| | |_| | | | (_) | | | |\r\n");
-printf("  \\__\\\\_\\__,_|_|_|\\___/|_| |_|\r\n");
-		
+
+	printf("   ___        _ _ \r\n");
+	printf("  / _ \\ _   _(_) | ___  _ __  \r\n");
+	printf(" | | | | | | | | |/ _ \\| '_ \\ \r\n");
+	printf(" | |_| | |_| | | | (_) | | | |\r\n");
+	printf("  \\__\\_\\__,_|_|_|\\___/|_| |_|\r\n\n");
+
+	shell_run();
 }

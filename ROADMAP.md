@@ -638,7 +638,7 @@ void shell_run(void) {
             line[pos] = '\0';
             shell_execute(line);
             pos = 0;
-            kprintf("\nquilon> ");
+            kprintf("\r\nquilon> ");
         } else if (c == '\b' && pos > 0) {
             pos--;
             kprintf("\b \b");

@@ -31,6 +31,8 @@ KERNEL_OBJS=\
 $(KERNEL_ARCH_OBJS) \
 kernel/kernel.o \
 kernel/kmalloc.o \
+kernel/keyboard.o \
+kernel/shell.o \
 
 OBJS=\
 $(ARCHDIR)/crti.o \
