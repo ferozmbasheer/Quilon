@@ -65,4 +65,17 @@ void paging_set_user_access(uint32_t virt_start, uint32_t virt_end);
  */
 int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags);
 
+/* Like paging_map_page, but allocates a page table via pmm_alloc_page() if
+ * no page table exists yet for the 4-MiB PD slot covering virt.
+ *
+ * Use this when mapping ELF segments or other memory outside the first 4 MiB
+ * that was set up by paging_initialize().
+ *
+ * Returns 0 on success, -1 if pmm_alloc_page() returns NULL (out of memory).
+ *
+ * Side effect: the newly allocated page table page is zero-initialised (all
+ * PTEs marked not-present) before the first entry is written.
+ */
+int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags);
+
 #endif /* _KERNEL_PAGING_H */

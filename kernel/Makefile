@@ -38,6 +38,7 @@ kernel/usermode.o \
 kernel/syscall.o \
 kernel/vfs.o \
 kernel/fat16.o \
+kernel/elf.o \
 
 OBJS=\
 $(ARCHDIR)/crti.o \

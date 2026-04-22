@@ -2,9 +2,9 @@
 set -e
 . ./iso.sh
 
-# Auto-create the FAT16 disk image if it doesn't exist yet.
-if [ ! -f disk.img ]; then
-    echo "disk.img not found — generating FAT16 demo disk..."
+# Rebuild the FAT16 disk image if it doesn't exist or the ELF source changed.
+if [ ! -f disk.img ] || [ user/hello.S -nt disk.img ] || [ user/link.ld -nt disk.img ]; then
+    echo "Rebuilding disk.img (ELF source changed or image missing)..."
     ./create_disk.sh
 fi
 

@@ -59,7 +59,7 @@ KERNEL_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf
 
 .PHONY: all build run clean help
 
@@ -157,6 +157,18 @@ $(BINDIR)/test_fat16: test_fat16.c framework.h \
                       $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_fat16.c ../kernel/kernel/fat16.c \
+	    $(LIBC_STRING)
+
+# ELF loader tests
+# elf.c's elf_validate() and elf_phdr() are pure parsing (no kernel asm, no
+# hardware calls).  elf_load() is guarded by #ifdef __is_kernel and is absent
+# in the host build, so only the parsing helpers are tested here.
+# string.h functions are provided by LIBC_STRING.
+$(BINDIR)/test_elf: test_elf.c framework.h \
+                    ../kernel/kernel/elf.c \
+                    $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_elf.c ../kernel/kernel/elf.c \
 	    $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────

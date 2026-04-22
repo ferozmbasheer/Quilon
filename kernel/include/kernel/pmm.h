@@ -3,7 +3,9 @@
 
 #include <stdint.h>
 
+#ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
+#endif
 
 /* Call once from kernel_main after terminal_initialize so errors are visible. */
 void     pmm_initialize(void *multiboot_info);

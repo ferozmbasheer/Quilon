@@ -18,6 +18,7 @@
 #include <kernel/ata.h>
 #include <kernel/vfs.h>
 #include <kernel/fat16.h>
+#include <kernel/elf.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -88,22 +89,17 @@ void kernel_main(void) {
 	printf("heap: *a=0x%x (expect 0xcafebabe)  *b=0x%x (expect 0xdeadbeef)\r\n",
 	       (unsigned)*a, (unsigned)*b);
 
-	kmalloc_dump();
 
 	/* 3. After freeing `a`, a fresh allocation of the same size should
 	 *    reuse the same address (first-fit, no other freed blocks ahead). */
-	
-	printf("Freeing a\r\n");
-
 	kfree(a);
 
-	kmalloc_dump();
 
 	uint32_t *c = (uint32_t *)kmalloc(sizeof(uint32_t));
 	printf("heap: after free+realloc c=0x%x (expect 0x%x)\r\n",
 	       (unsigned)c, (unsigned)a);
 
-	kmalloc_dump();
+
 
 	/* 4. A larger allocation to exercise splitting. */
 	char *buf = (char *)kmalloc(256);
@@ -144,11 +140,47 @@ void kernel_main(void) {
 		printf("fs: no disk detected — filesystem unavailable\r\n");
 	}
 
-	printf("   ___        _ _ \r\n");
-	printf("  / _ \\ _   _(_) | ___  _ __  \r\n");
-	printf(" | | | | | | | | |/ _ \\| '_ \\ \r\n");
-	printf(" | |_| | |_| | | | (_) | | | |\r\n");
-	printf("  \\__\\_\\__,__|_|_|\\___/|_| |_|\r\n\n");
+	/* ── ELF loader — scan for executable files (section 4.12) ───────────────
+	 * Walk the root directory and report any .ELF files found.
+	 * The ELF loader itself is invoked interactively with the shell `exec`
+	 * command:  quilon> exec HELLO.ELF
+	 *
+	 * To create a runnable ELF for Quilon, cross-compile a freestanding
+	 * i386 program and copy it to the disk image (see BUILD.md).         */
+	if (vfs_mounted()) {
+		vfs_dirent_t elf_ent;
+		uint32_t     elf_idx   = 0;
+		int          elf_found = 0;
+
+		while (vfs_readdir(elf_idx, &elf_ent) == 0) {
+			/* Check for a ".ELF" extension (case-insensitive) */
+			const char *nm = elf_ent.name;
+			int len = 0;
+			while (nm[len]) len++;
+
+			if (len >= 4 &&
+			    nm[len - 4] == '.' &&
+			    (nm[len - 3] == 'E' || nm[len - 3] == 'e') &&
+			    (nm[len - 2] == 'L' || nm[len - 2] == 'l') &&
+			    (nm[len - 1] == 'F' || nm[len - 1] == 'f')) {
+				printf("elf: found '%s' (%d bytes) — "
+				       "run with: exec %s\r\n",
+				       elf_ent.name, (int)elf_ent.size,
+				       elf_ent.name);
+				elf_found = 1;
+			}
+			elf_idx++;
+		}
+		if (!elf_found)
+			printf("elf: no .ELF files on disk "
+			       "(see ROADMAP.md 4.12 and BUILD.md)\r\n");
+	}
+
+	printf("  ___        _ _ \r\n");
+	printf(" / _ \\ _   _(_) | ___  _ __  \r\n");
+	printf("| | | | | | | | |/ _ \\| '_ \\ \r\n");
+	printf("| |_| | |_| | | | (_) | | | |\r\n");
+	printf(" \\__\\_\\__,__|_|_|\\___/|_| |_|\r\n\n");
 
 	shell_run();
 }

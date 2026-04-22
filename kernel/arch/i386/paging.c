@@ -1,6 +1,8 @@
 #include <stdint.h>
+#include <string.h>
 
 #include <kernel/paging.h>
+#include <kernel/pmm.h>
 
 /* Page directory and first page table: statically allocated and 4 KiB-
  * aligned so the CPU will accept them as PD/PT base addresses.
@@ -83,6 +85,42 @@ int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags)
     pt[pt_idx] = paging_make_entry(phys, flags);
 
     /* Propagate any new flags (e.g. PAGE_USER) up to the PDE too. */
+    page_directory[pd_idx] |= (flags & (PAGE_USER | PAGE_WRITABLE));
+
+    /* Invalidate just this one TLB entry. */
+    asm volatile("invlpg (%0)" :: "r"(virt) : "memory");
+
+    return 0;
+}
+
+int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags)
+{
+    uint32_t pd_idx = VIRT_PD_INDEX(virt);
+    uint32_t pt_idx = VIRT_PT_INDEX(virt);
+
+    if (!(page_directory[pd_idx] & PAGE_PRESENT)) {
+        /* No page table exists for this 4-MiB slot — allocate one.
+         *
+         * pmm_alloc_page() returns a 4 KiB-aligned physical page.
+         * Because the PMM only allocates pages within the first 4 MiB
+         * (the identity-mapped region), the physical address equals the
+         * virtual address and we can safely write to it via the kernel's
+         * identity mapping.                                               */
+        void *new_pt = pmm_alloc_page();
+        if (!new_pt) return -1;
+
+        /* Zero-initialise: every PTE starts as "not present". */
+        memset(new_pt, 0, PAGE_SIZE);
+
+        page_directory[pd_idx] = paging_make_entry(
+            (uint32_t)(uintptr_t)new_pt, PAGE_PRESENT | PAGE_WRITABLE);
+    }
+
+    uint32_t *pt = (uint32_t *)(page_directory[pd_idx] & ~(uint32_t)0xFFF);
+    pt[pt_idx] = paging_make_entry(phys, flags);
+
+    /* Propagate PAGE_USER / PAGE_WRITABLE to the PDE so the CPU allows
+     * ring-3 accesses through the page directory entry too.             */
     page_directory[pd_idx] |= (flags & (PAGE_USER | PAGE_WRITABLE));
 
     /* Invalidate just this one TLB entry. */

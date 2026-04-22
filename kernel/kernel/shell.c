@@ -6,6 +6,7 @@
 #include <kernel/pit.h>
 #include <kernel/usermode.h>
 #include <kernel/vfs.h>
+#include <kernel/elf.h>
 
 static void shell_cmd_ls(void)
 {
@@ -21,6 +22,40 @@ static void shell_cmd_ls(void)
     }
     if (i == 0)
         printf("  (empty)\r\n");
+}
+
+static void shell_cmd_exec(const char *path)
+{
+    if (!vfs_mounted()) {
+        printf("No filesystem mounted.\r\n");
+        return;
+    }
+    if (path[0] == '\0') {
+        printf("Usage: exec <file.elf>\r\n");
+        return;
+    }
+
+    printf("Loading ELF '%s'...\r\n", path);
+    uint32_t entry = elf_load(path);
+    if (entry == 0) {
+        printf("exec: failed to load '%s'\r\n", path);
+        return;
+    }
+
+    /* Save a return point so SYS_EXIT can longjmp back here. */
+    if (exec_setjmp(&exec_return_buf) == 0) {
+        /* First call — jump to ring 3. */
+        exec_return_active = 1;
+        usermode_initialize();
+        usermode_enter((void (*)(void))(uintptr_t)entry);
+        /* usermode_enter() fires iret and never returns. */
+    }
+    /* Reached via exec_longjmp from the SYS_EXIT handler.
+     * int80_stub's iret was bypassed, so IF is still 0 — re-enable interrupts
+     * so the keyboard and PIT IRQs resume. */
+    asm volatile("sti");
+    exec_return_active = 0;
+    printf("exec: returned from user program\r\n");
 }
 
 static void shell_cmd_cat(const char *path)
@@ -46,7 +81,8 @@ static void shell_cmd_cat(const char *path)
 
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
-        printf("Commands: help, clear, cls, halt, ticks, seconds, ring3, syscall, ls, cat <file>\r\n");
+        printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
+        printf("          ring3, syscall, ls, cat <file>, exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -76,6 +112,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_ls();
     } else if (strncmp(cmd, "cat ", 4) == 0) {
         shell_cmd_cat(cmd + 4);
+    } else if (strncmp(cmd, "exec ", 5) == 0) {
+        shell_cmd_exec(cmd + 5);
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

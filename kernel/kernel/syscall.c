@@ -41,6 +41,7 @@
 #include <kernel/interrupts.h>
 #include <kernel/serial.h>
 #include <kernel/vfs.h>
+#include <kernel/usermode.h>
 #endif
 
 /* ── Kernel-only initialisation ──────────────────────────────────────────────
@@ -142,6 +143,12 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_EXIT:
         printf("\r\n[kernel] process exited (code %d)\r\n", (int)regs->ebx);
 #ifdef __is_kernel
+        if (exec_return_active) {
+            /* Shell launched this program — longjmp back to shell_cmd_exec. */
+            exec_longjmp(&exec_return_buf, 1);
+            __builtin_unreachable();
+        }
+        /* No return context (e.g. direct ring3/syscall shell command). */
         for (;;)
             asm volatile("hlt");
         __builtin_unreachable();

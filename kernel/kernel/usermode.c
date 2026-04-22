@@ -44,6 +44,14 @@
 #include <kernel/paging.h>
 #include <kernel/syscall.h>
 
+/* ── exec_setjmp / exec_longjmp global state ─────────────────────────────────
+ * shell_cmd_exec sets exec_return_active = 1 before entering ring 3 and
+ * expects exec_longjmp to fire when the user program calls SYS_EXIT.
+ * syscall.c checks exec_return_active in the SYS_EXIT handler.
+ */
+exec_jmp_buf_t exec_return_buf;
+int            exec_return_active = 0;
+
 /* ── User-mode stack ─────────────────────────────────────────────────────────
  * One 4-KiB page in .bss, 4-KiB aligned.
  * The kernel identity-maps the first 4 MiB (virt == phys), so this page's
@@ -55,6 +63,13 @@ static uint8_t user_stack_page[USER_STACK_SIZE]
 
 void usermode_initialize(void)
 {
+    /* Guard: LTR sets the TSS "busy" bit in the GDT descriptor.  Issuing LTR
+     * again on an already-busy TSS raises a General Protection Fault.
+     * The paging steps are idempotent, so skip everything after the first call. */
+    static int initialized = 0;
+    if (initialized) return;
+    initialized = 1;
+
     /* ── Step 1: load the TSS into the task register ────────────────────
      * LTR marks the TSS descriptor in the GDT as "busy" and stores the
      * selector in TR.  The CPU reads esp0/ss0 from this TSS whenever it

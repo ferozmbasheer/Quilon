@@ -25,6 +25,32 @@
  */
 #define USER_STACK_SIZE  4096u   /* one page                    */
 
+/* ── exec_setjmp / exec_longjmp ─────────────────────────────────────────────
+ *
+ * Minimal save/restore used by shell_cmd_exec so that the shell regains
+ * control after a user program calls SYS_EXIT.
+ *
+ * Layout (must match the offsets in boot.S):
+ *   [0]  ebx  [4]  esi  [8]  edi  [12] ebp  [16] esp  [20] eip
+ */
+typedef struct {
+    uint32_t ebx, esi, edi, ebp, esp, eip;
+} exec_jmp_buf_t;
+
+/* Returns 0 the first time (direct call); returns val (≥1) when exec_longjmp
+ * fires.  Saves EBX, ESI, EDI, EBP, ESP, and the return address.           */
+int exec_setjmp(exec_jmp_buf_t *buf);
+
+/* Restore the registers saved by exec_setjmp and jump back to the saved EIP,
+ * making exec_setjmp appear to return val (minimum 1).                      */
+void exec_longjmp(exec_jmp_buf_t *buf, int val) __attribute__((noreturn));
+
+/* Global state shared between shell.c and syscall.c.
+ * exec_return_active is set to 1 by shell_cmd_exec before entering ring 3,
+ * and cleared to 0 again when control returns (via SYS_EXIT longjmp).      */
+extern exec_jmp_buf_t exec_return_buf;
+extern int            exec_return_active;
+
 /* ── Public API ──────────────────────────────────────────────────────────────
  *
  * Call order (in kernel_main or a shell command):

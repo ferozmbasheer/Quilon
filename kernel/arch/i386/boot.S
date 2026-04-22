@@ -171,6 +171,52 @@ load_idt:
 	sti
 	ret
 
+/* ── exec_setjmp / exec_longjmp ─────────────────────────────────────────── */
+/*
+ * Minimal setjmp/longjmp used by shell_cmd_exec to resume the shell after a
+ * user program calls SYS_EXIT.
+ *
+ * exec_jmp_buf layout (6 × uint32_t, 24 bytes):
+ *   [0]  EBX
+ *   [4]  ESI
+ *   [8]  EDI
+ *   [12] EBP
+ *   [16] ESP  (caller's stack pointer, i.e. ESP+4 on entry = return address slot)
+ *   [20] EIP  (return address, i.e. the word at (%esp) on entry)
+ *
+ * Only callee-saved registers need to be preserved; caller-saved registers
+ * (EAX, ECX, EDX) are clobbered across any call boundary anyway.
+ */
+
+.global exec_setjmp
+exec_setjmp:
+    movl  4(%esp), %eax        /* buf = first argument                         */
+    movl  (%esp),  %ecx        /* return address (EIP to restore)              */
+    movl  %ecx,  20(%eax)      /* save EIP                                     */
+    leal  4(%esp), %ecx        /* caller's ESP (after this call returns)       */
+    movl  %ecx,  16(%eax)      /* save ESP                                     */
+    movl  %ebx,   0(%eax)      /* save EBX                                     */
+    movl  %esi,   4(%eax)      /* save ESI                                     */
+    movl  %edi,   8(%eax)      /* save EDI                                     */
+    movl  %ebp,  12(%eax)      /* save EBP                                     */
+    xorl  %eax,  %eax          /* return 0 from exec_setjmp                    */
+    ret
+
+.global exec_longjmp
+exec_longjmp:
+    movl  4(%esp), %edx        /* buf                                          */
+    movl  8(%esp), %eax        /* val                                          */
+    testl %eax, %eax
+    jnz   .Lexec_longjmp_nonzero
+    movl  $1, %eax             /* longjmp(buf,0) returns 1, never 0            */
+.Lexec_longjmp_nonzero:
+    movl   0(%edx), %ebx       /* restore EBX                                  */
+    movl   4(%edx), %esi       /* restore ESI                                  */
+    movl   8(%edx), %edi       /* restore EDI                                  */
+    movl  12(%edx), %ebp       /* restore EBP                                  */
+    movl  16(%edx), %esp       /* restore ESP (jumps back to caller's frame)   */
+    jmp  *20(%edx)             /* jump to saved EIP — exec_setjmp "returns" 1  */
+
 /* ── int $0x80 system call stub ─────────────────────────────────────────── */
 /*
  * Entry point for `int $0x80` system calls.  Registered in the IDT with

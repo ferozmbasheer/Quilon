@@ -132,6 +132,68 @@ c this 42
 
 ---
 
+## User programs (ELF demo)
+
+`user/hello.S` is a freestanding i386 assembly program that runs at ring 3 using
+Quilon's `int $0x80` syscall interface. It is compiled to `user/hello.elf` and
+placed on the FAT16 disk image as `HELLO.ELF`.
+
+### Building the ELF manually
+
+```bash
+cd user && make
+```
+
+This produces `user/hello.elf` — a bare ELF32 i386 executable linked at virtual
+address `0x400000` with no standard library dependencies.
+
+### Adding it to the disk image
+
+`create_disk.sh` builds the ELF automatically before creating `disk.img`:
+
+```bash
+./create_disk.sh
+```
+
+`qemu.sh` also rebuilds the disk whenever `user/hello.S` is newer than `disk.img`,
+so editing the user program and running `./qemu.sh` is enough.
+
+### Running the ELF inside Quilon
+
+Once the kernel boots to the shell:
+
+```
+quilon> exec HELLO.ELF
+```
+
+The kernel will:
+1. Open `HELLO.ELF` from the FAT16 disk via `elf_load()`.
+2. Allocate physical pages with `pmm_alloc_page()` and map them at `0x400000`
+   using `paging_map_page_alloc()`.
+3. Copy the ELF segment data into the mapped pages.
+4. Switch to ring 3 via `usermode_enter()` and jump to the entry point.
+5. The program prints a banner using `SYS_WRITE`, then calls `SYS_EXIT`.
+
+### Writing your own user program
+
+Copy `user/hello.S` as a starting point. The syscall convention is:
+
+| Register | Role |
+|---|---|
+| `eax` | Syscall number |
+| `ebx` | First argument |
+| `ecx` | Second argument |
+| `edx` | Third argument |
+
+| Number | Name | Arguments |
+|---|---|---|
+| 1 | `SYS_WRITE` | ebx=fd (1=stdout), ecx=buf, edx=len |
+| 3 | `SYS_EXIT`  | ebx=exit code |
+
+Link at `0x400000` (or higher) to avoid the kernel's first-4-MiB region.
+
+---
+
 ## Project layout
 
 ```
@@ -139,13 +201,19 @@ Quilon/
 ├── build.sh              # Top-level build (headers + libc + kernel)
 ├── clean.sh              # Remove all build artifacts
 ├── config.sh             # Sets CC, AR, cross-compile env vars
+├── create_disk.sh        # Builds user/hello.elf + creates disk.img
 ├── headers.sh            # Installs headers into sysroot/
 ├── iso.sh                # Builds quilon.iso with GRUB2
-├── qemu.sh               # iso.sh + QEMU boot
+├── qemu.sh               # iso.sh + QEMU boot (rebuilds disk if ELF changed)
 ├── start-kernel.sh       # QEMU direct kernel boot
+├── user/
+│   ├── Makefile          # Builds ELF user programs
+│   ├── hello.S           # Demo: print banner via syscalls, then exit
+│   └── link.ld           # Linker script: loads at 0x400000
 ├── kernel/
 │   ├── Makefile
 │   ├── kernel/kernel.c   # Kernel entry point (kernel_main)
+│   ├── kernel/elf.c      # ELF32 loader (section 4.12)
 │   ├── include/kernel/   # Public kernel headers
 │   └── arch/i386/
 │       ├── boot.S        # Multiboot header + ISR stubs
