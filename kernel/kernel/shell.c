@@ -5,10 +5,48 @@
 #include <kernel/tty.h>
 #include <kernel/pit.h>
 #include <kernel/usermode.h>
+#include <kernel/vfs.h>
+
+static void shell_cmd_ls(void)
+{
+    if (!vfs_mounted()) {
+        printf("No filesystem mounted.\r\n");
+        return;
+    }
+    vfs_dirent_t ent;
+    uint32_t i = 0;
+    while (vfs_readdir(i, &ent) == 0) {
+        printf("  %s  (%d bytes)\r\n", ent.name, (int)ent.size);
+        i++;
+    }
+    if (i == 0)
+        printf("  (empty)\r\n");
+}
+
+static void shell_cmd_cat(const char *path)
+{
+    if (!vfs_mounted()) {
+        printf("No filesystem mounted.\r\n");
+        return;
+    }
+    int fd = vfs_open(path);
+    if (fd < 0) {
+        printf("cat: %s: not found\r\n", path);
+        return;
+    }
+    char buf[64];
+    int n;
+    while ((n = vfs_read(fd, buf, sizeof(buf) - 1)) > 0) {
+        buf[n] = '\0';
+        printf("%s", buf);
+    }
+    printf("\r\n");
+    vfs_close(fd);
+}
 
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
-        printf("Commands: help, clear, cls, halt, ticks, seconds, ring3, syscall\r\n");
+        printf("Commands: help, clear, cls, halt, ticks, seconds, ring3, syscall, ls, cat <file>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -34,6 +72,10 @@ static void shell_execute(const char *cmd) {
         usermode_initialize();
         usermode_enter(user_task_syscall);
         /* usermode_enter() never returns; SYS_EXIT halts the CPU. */
+    } else if (strcmp(cmd, "ls") == 0) {
+        shell_cmd_ls();
+    } else if (strncmp(cmd, "cat ", 4) == 0) {
+        shell_cmd_cat(cmd + 4);
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

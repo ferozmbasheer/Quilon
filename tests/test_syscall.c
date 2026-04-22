@@ -93,16 +93,25 @@ static void test_syscall_numbers(void)
     ASSERT_EQ(SYS_WRITE,  1u, "SYS_WRITE  == 1");
     ASSERT_EQ(SYS_GETPID, 2u, "SYS_GETPID == 2");
     ASSERT_EQ(SYS_EXIT,   3u, "SYS_EXIT   == 3");
+    ASSERT_EQ(SYS_OPEN,   4u, "SYS_OPEN   == 4");
+    ASSERT_EQ(SYS_READ,   5u, "SYS_READ   == 5");
+    ASSERT_EQ(SYS_CLOSE,  6u, "SYS_CLOSE  == 6");
 
     /* No two syscall numbers may be equal */
     ASSERT(SYS_WRITE  != SYS_GETPID, "SYS_WRITE  != SYS_GETPID");
     ASSERT(SYS_WRITE  != SYS_EXIT,   "SYS_WRITE  != SYS_EXIT");
     ASSERT(SYS_GETPID != SYS_EXIT,   "SYS_GETPID != SYS_EXIT");
+    ASSERT(SYS_OPEN   != SYS_READ,   "SYS_OPEN   != SYS_READ");
+    ASSERT(SYS_OPEN   != SYS_CLOSE,  "SYS_OPEN   != SYS_CLOSE");
+    ASSERT(SYS_READ   != SYS_CLOSE,  "SYS_READ   != SYS_CLOSE");
 
     /* All defined syscall numbers must be positive */
     ASSERT(SYS_WRITE  > 0u, "SYS_WRITE  > 0");
     ASSERT(SYS_GETPID > 0u, "SYS_GETPID > 0");
     ASSERT(SYS_EXIT   > 0u, "SYS_EXIT   > 0");
+    ASSERT(SYS_OPEN   > 0u, "SYS_OPEN   > 0");
+    ASSERT(SYS_READ   > 0u, "SYS_READ   > 0");
+    ASSERT(SYS_CLOSE  > 0u, "SYS_CLOSE  > 0");
 }
 
 /* ── File descriptor constants ─────────────────────────────────────────── */
@@ -326,6 +335,51 @@ static void test_syscall_zero_returns_minus1(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * 6b. Filesystem syscalls (host build — hardware not available)
+ *
+ * In the host build, SYS_OPEN / SYS_READ / SYS_CLOSE are guarded by
+ * #ifdef __is_kernel.  They should fall through to return (uint32_t)-1
+ * (ENOSYS) so that user-mode tests still get a well-defined result.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_sys_open_returns_minus1_in_host(void)
+{
+    const char path[] = "/README.TXT";
+    syscall_regs_t r = make_regs(SYS_OPEN);
+    r.ebx = (uint32_t)(uintptr_t)path;
+
+    syscall_handler(&r);
+
+    ASSERT_EQ(r.eax, (uint32_t)-1,
+              "SYS_OPEN returns -1 in host build (no filesystem)");
+}
+
+static void test_sys_read_returns_minus1_in_host(void)
+{
+    char buf[8];
+    syscall_regs_t r = make_regs(SYS_READ);
+    r.ebx = 3;                              /* fd */
+    r.ecx = (uint32_t)(uintptr_t)buf;
+    r.edx = (uint32_t)sizeof(buf);
+
+    syscall_handler(&r);
+
+    ASSERT_EQ(r.eax, (uint32_t)-1,
+              "SYS_READ returns -1 in host build (no filesystem)");
+}
+
+static void test_sys_close_returns_minus1_in_host(void)
+{
+    syscall_regs_t r = make_regs(SYS_CLOSE);
+    r.ebx = 3;   /* fd */
+
+    syscall_handler(&r);
+
+    ASSERT_EQ(r.eax, (uint32_t)-1,
+              "SYS_CLOSE returns -1 in host build (no filesystem)");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * 7. regs->eax is always written (no stale caller value)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -377,6 +431,11 @@ int main(void)
     /* Unknown syscalls */
     RUN_SUITE(test_unknown_syscall_returns_minus1);
     RUN_SUITE(test_syscall_zero_returns_minus1);
+
+    /* Filesystem syscalls (host build: no hardware, return -1) */
+    RUN_SUITE(test_sys_open_returns_minus1_in_host);
+    RUN_SUITE(test_sys_read_returns_minus1_in_host);
+    RUN_SUITE(test_sys_close_returns_minus1_in_host);
 
     /* General correctness */
     RUN_SUITE(test_eax_is_always_overwritten);

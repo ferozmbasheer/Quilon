@@ -35,7 +35,9 @@ LIBC_STRING = \
   ../libc/string/memmove.c \
   ../libc/string/memset.c  \
   ../libc/string/memcmp.c  \
-  ../libc/string/strlen.c
+  ../libc/string/strlen.c  \
+  ../libc/string/strcmp.c  \
+  ../libc/string/strncmp.c
 
 # printf.c only — putchar.c is deliberately excluded so that the
 # mock putchar() defined in test_printf.c is used by the linker.
@@ -57,7 +59,7 @@ KERNEL_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16
 
 .PHONY: all build run clean help
 
@@ -137,6 +139,25 @@ $(BINDIR)/test_syscall: test_syscall.c framework.h \
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_syscall.c ../kernel/kernel/syscall.c \
 	    $(LIBC_PRINTF) $(LIBC_STRING)
+
+# VFS tests
+# vfs.c is pure C (no asm, no hardware).  Compile it alongside the test.
+$(BINDIR)/test_vfs: test_vfs.c framework.h \
+                    ../kernel/kernel/vfs.c \
+                    $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_vfs.c ../kernel/kernel/vfs.c \
+	    $(LIBC_STRING)
+
+# FAT16 tests
+# fat16.c uses only memcmp/memcpy from string.h (no kernel asm).
+# vfs.c is not needed — tests call fat16_vfs_ops functions directly.
+$(BINDIR)/test_fat16: test_fat16.c framework.h \
+                      ../kernel/kernel/fat16.c \
+                      $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_fat16.c ../kernel/kernel/fat16.c \
+	    $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

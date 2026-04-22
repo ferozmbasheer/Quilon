@@ -17,6 +17,9 @@
 #define SYS_WRITE   1   /* write(fd, buf, len) → bytes written              */
 #define SYS_GETPID  2   /* getpid() → 0  (single-task stub)                 */
 #define SYS_EXIT    3   /* exit(code)    → does not return                   */
+#define SYS_OPEN    4   /* open(path) → fd (>= 3) or -1                      */
+#define SYS_READ    5   /* read(fd, buf, len) → bytes read, 0=EOF, -1=err    */
+#define SYS_CLOSE   6   /* close(fd) → 0 or -1                               */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

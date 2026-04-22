@@ -55,4 +55,5 @@ dkms.conf
 isodir
 sysroot
 tests/bin/
+*.img
 

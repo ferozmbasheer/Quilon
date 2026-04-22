@@ -40,6 +40,7 @@
 #ifdef __is_kernel
 #include <kernel/interrupts.h>
 #include <kernel/serial.h>
+#include <kernel/vfs.h>
 #endif
 
 /* ── Kernel-only initialisation ──────────────────────────────────────────────
@@ -149,6 +150,57 @@ void syscall_handler(syscall_regs_t *regs)
         regs->eax = 0;
         return;
 #endif
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_OPEN (4)
+     *   EBX = pointer to null-terminated path string (user-space address).
+     *   Returns: file descriptor (>= VFS_FD_BASE) on success, -1 on failure.
+     *
+     * Security note: the path pointer is trusted here (same caveat as
+     * SYS_WRITE — pointer validation is left for a future memory-map check).
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_OPEN: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        ret = (path != (void *)0) ? (uint32_t)vfs_open(path) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;   /* filesystem not available in host build */
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_READ (5)
+     *   EBX = fd (must be >= VFS_FD_BASE, i.e. a filesystem fd)
+     *   ECX = buf — pointer to the receive buffer (user-space address).
+     *   EDX = len — maximum bytes to read.
+     *   Returns: bytes read (0 = EOF), or -1 on error.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_READ: {
+#ifdef __is_kernel
+        void *buf = (void *)(uintptr_t)regs->ecx;
+        ret = (buf != (void *)0)
+                ? (uint32_t)vfs_read((int)regs->ebx, buf, regs->edx)
+                : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_CLOSE (6)
+     *   EBX = fd.
+     *   Returns: 0 on success, -1 on error.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_CLOSE: {
+#ifdef __is_kernel
+        ret = (uint32_t)vfs_close((int)regs->ebx);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
 
     /* ────────────────────────────────────────────────────────────────────────
      * Unknown syscall

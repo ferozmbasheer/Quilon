@@ -15,8 +15,20 @@
 #include <kernel/scheduler.h>
 #include <kernel/usermode.h>
 #include <kernel/syscall.h>
+#include <kernel/ata.h>
+#include <kernel/vfs.h>
+#include <kernel/fat16.h>
 
 extern uint32_t multiboot_info_ptr;
+
+/* Thin wrapper so fat16_ctx_t can call ata_read_sectors via a function pointer.
+ * ctx is the drive index (ATA_MASTER / ATA_SLAVE) cast to void*. */
+static int ata_sector_read(void *ctx, uint32_t lba, void *buf)
+{
+	return ata_read_sectors((int)(uintptr_t)ctx, lba, 1, buf);
+}
+
+static fat16_ctx_t fs_ctx;
 
 void kernel_main(void) {
 	serial_initialize();
@@ -103,6 +115,34 @@ void kernel_main(void) {
 	/* 5. Dump the heap — should show a single large free block after all
 	 *    the frees and coalescing above.                                   */
 	kmalloc_dump();
+
+	/* ── Filesystem initialisation ─────────────────────────────────────────
+	 * Probe the primary ATA bus for a disk and attempt to mount it as FAT16.
+	 * If no drive is found, or the first sector is not a valid FAT16 volume,
+	 * the shell still works — ls/cat will report "No filesystem mounted."  */
+
+	int drives_found = ata_initialize();
+	printf("ata: %d drive(s) detected\r\n", drives_found);
+
+	/* Try master first, then slave — mount whichever has a valid FAT16 volume. */
+	int fs_drive = -1;
+	if (ata_drive_present(ATA_MASTER))      fs_drive = ATA_MASTER;
+	else if (ata_drive_present(ATA_SLAVE))  fs_drive = ATA_SLAVE;
+
+	if (fs_drive >= 0) {
+		const char *drive_name = (fs_drive == ATA_MASTER) ? "master" : "slave";
+		fs_ctx.sector_read = ata_sector_read;
+		fs_ctx.ctx         = (void *)(uintptr_t)fs_drive;
+
+		if (fat16_mount(&fs_ctx) == 0) {
+			vfs_mount(&fat16_vfs_ops, &fs_ctx);
+			printf("fs: FAT16 mounted on primary %s\r\n", drive_name);
+		} else {
+			printf("fs: primary %s is not a FAT16 volume\r\n", drive_name);
+		}
+	} else {
+		printf("fs: no disk detected — filesystem unavailable\r\n");
+	}
 
 	printf("   ___        _ _ \r\n");
 	printf("  / _ \\ _   _(_) | ___  _ __  \r\n");
