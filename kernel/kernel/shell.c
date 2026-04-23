@@ -7,6 +7,9 @@
 #include <kernel/usermode.h>
 #include <kernel/vfs.h>
 #include <kernel/elf.h>
+#include <kernel/paging.h>
+#include <kernel/pmm.h>
+#include <kernel/process.h>
 
 static void shell_cmd_ls(void)
 {
@@ -35,27 +38,60 @@ static void shell_cmd_exec(const char *path)
         return;
     }
 
-    printf("Loading ELF '%s'...\r\n", path);
-    uint32_t entry = elf_load(path);
-    if (entry == 0) {
-        printf("exec: failed to load '%s'\r\n", path);
+    printf("Loading ELF '%s' into isolated address space...\r\n", path);
+
+    /*
+     * Section 5.1: allocate a fresh page directory for this process.
+     * The kernel's first-4-MiB entry is copied in so the kernel remains
+     * reachable after we switch to this PD.
+     */
+    uint32_t *proc_pd = paging_create_address_space();
+    if (!proc_pd) {
+        printf("exec: out of memory (cannot allocate page directory)\r\n");
         return;
     }
 
-    /* Save a return point so SYS_EXIT can longjmp back here. */
+    /*
+     * Load the ELF segments into the process's own page directory.
+     * Physical pages are allocated from the PMM and mapped only in proc_pd
+     * — the global kernel PD is untouched, so a second exec of the same
+     * binary will not collide with the first.
+     */
+    uint32_t entry = elf_load_into(path, proc_pd);
+    if (entry == 0) {
+        printf("exec: failed to load '%s'\r\n", path);
+        pmm_free_page(proc_pd);
+        return;
+    }
+
+    printf("exec: entry=0x%x  switching to process address space\r\n",
+           (unsigned)entry);
+
+    /*
+     * Save a return point so SYS_EXIT can longjmp back here instead of
+     * halting the CPU.  exec_setjmp returns 0 the first time (direct
+     * call) and ≥1 after an exec_longjmp from the SYS_EXIT handler.
+     */
     if (exec_setjmp(&exec_return_buf) == 0) {
-        /* First call — jump to ring 3. */
         exec_return_active = 1;
+
+        /* Switch to the process's isolated address space. */
+        paging_switch((uint32_t)(uintptr_t)proc_pd);
+
         usermode_initialize();
         usermode_enter((void (*)(void))(uintptr_t)entry);
-        /* usermode_enter() fires iret and never returns. */
+        /* usermode_enter() does iret and never returns to here. */
     }
-    /* Reached via exec_longjmp from the SYS_EXIT handler.
-     * int80_stub's iret was bypassed, so IF is still 0 — re-enable interrupts
-     * so the keyboard and PIT IRQs resume. */
+
+    /*
+     * Reached via exec_longjmp from the SYS_EXIT handler.
+     * Restore the kernel's page directory before resuming the shell.
+     * STI re-enables hardware interrupts (the longjmp bypassed iret).
+     */
+    paging_switch((uint32_t)(uintptr_t)paging_get_kernel_pd());
     asm volatile("sti");
     exec_return_active = 0;
-    printf("exec: returned from user program\r\n");
+    printf("exec: '%s' exited — back in kernel address space\r\n", path);
 }
 
 static void shell_cmd_cat(const char *path)
@@ -79,10 +115,25 @@ static void shell_cmd_cat(const char *path)
     vfs_close(fd);
 }
 
+static void shell_cmd_ps(void)
+{
+    static const char *state_names[] = {
+        "unused ", "running", "ready  ", "blocked", "zombie "
+    };
+    printf("  PID  PARENT  STATE    NAME\r\n");
+    for (int i = 0; i < PROCESS_MAX; i++) {
+        const process_t *p = &process_table[i];
+        if (p->state == PROC_UNUSED) continue;
+        const char *sname = (p->state < 5) ? state_names[p->state] : "?";
+        printf("  %3d  %6d  %s  %s\r\n",
+               (int)p->pid, (int)p->parent_pid, sname, p->name);
+    }
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
-        printf("          ring3, syscall, ls, cat <file>, exec <file.elf>\r\n");
+        printf("          ring3, syscall, ps, ls, cat <file>, exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -108,6 +159,8 @@ static void shell_execute(const char *cmd) {
         usermode_initialize();
         usermode_enter(user_task_syscall);
         /* usermode_enter() never returns; SYS_EXIT halts the CPU. */
+    } else if (strcmp(cmd, "ps") == 0) {
+        shell_cmd_ps();
     } else if (strcmp(cmd, "ls") == 0) {
         shell_cmd_ls();
     } else if (strncmp(cmd, "cat ", 4) == 0) {

@@ -217,6 +217,73 @@ exec_longjmp:
     movl  16(%edx), %esp       /* restore ESP (jumps back to caller's frame)   */
     jmp  *20(%edx)             /* jump to saved EIP — exec_setjmp "returns" 1  */
 
+/* ── Context switch (section 5.3) ───────────────────────────────────────── */
+/*
+ * context_switch(prev_esp_ptr, next_esp_val)
+ *
+ * Saves callee-saved registers (edi, esi, ebx, ebp) plus the kernel stack
+ * pointer into *prev_esp_ptr, then restores those registers from the frame
+ * that starts at next_esp_val and returns into the new process's context.
+ *
+ * For an EXISTING process:  next_esp_val points to the frame saved the last
+ * time that process was suspended here.  The ret returns to wherever that
+ * process was inside scheduler_tick / scheduler_yield.
+ *
+ * For a NEW process: next_esp_val points to the initial frame built by
+ * process_create().  The ret jumps to process_first_run (below), which
+ * calls process_launch() → usermode_enter() → iret into ring 3.
+ *
+ * Calling convention (cdecl):
+ *   [esp+ 0]  return address
+ *   [esp+ 4]  prev_esp_ptr   — pointer to prev->kernel_esp
+ *   [esp+ 8]  next_esp_val   — value of next->kernel_esp
+ */
+.global context_switch
+context_switch:
+    push %ebp
+    push %ebx
+    push %esi
+    push %edi
+    /*
+     * Stack layout after 4 pushes (offsets from current ESP):
+     *   + 0  edi
+     *   + 4  esi
+     *   + 8  ebx
+     *   +12  ebp
+     *   +16  return address (back into scheduler_tick / scheduler_yield)
+     *   +20  prev_esp_ptr
+     *   +24  next_esp_val
+     */
+    mov  20(%esp), %eax          /* eax = prev_esp_ptr                   */
+    mov  %esp,    (%eax)         /* *prev_esp_ptr = current ESP (save)   */
+    mov  24(%esp), %esp          /* ESP = next_esp_val   (stack switch)  */
+    /*
+     * We are now on the new process's kernel stack.
+     * Its layout must mirror what we just pushed above.
+     */
+    pop  %edi
+    pop  %esi
+    pop  %ebx
+    pop  %ebp
+    ret                          /* jump into the new process's context  */
+
+/*
+ * process_first_run — trampoline for a brand-new process's first scheduling.
+ *
+ * process_create() plants the address of this label as the "return address"
+ * in the initial kernel stack frame.  When context_switch's ret fires for
+ * that process the very first time, execution arrives here.
+ *
+ * We simply tail-call process_launch(), which updates the TSS kernel stack
+ * pointer, calls usermode_initialize(), and does iret into ring 3.
+ * It is declared noreturn, so the hlt below is a safety net only.
+ */
+.global process_first_run
+process_first_run:
+    call process_launch
+1:  hlt
+    jmp  1b
+
 /* ── int $0x80 system call stub ─────────────────────────────────────────── */
 /*
  * Entry point for `int $0x80` system calls.  Registered in the IDT with

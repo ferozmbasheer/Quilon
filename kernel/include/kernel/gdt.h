@@ -99,4 +99,12 @@ struct tss {
 
 void gdt_initialize(void);
 
+/*
+ * gdt_set_kernel_stack — set the TSS esp0 field to esp0.
+ *
+ * Must be called on every context switch so that the CPU knows which
+ * kernel stack to use when a ring-3 interrupt fires for the new process.
+ */
+void gdt_set_kernel_stack(uint32_t esp0);
+
 #endif

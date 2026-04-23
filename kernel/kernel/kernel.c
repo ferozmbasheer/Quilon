@@ -19,6 +19,7 @@
 #include <kernel/vfs.h>
 #include <kernel/fat16.h>
 #include <kernel/elf.h>
+#include <kernel/process.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -38,6 +39,7 @@ void kernel_main(void) {
 	terminal_initialize();
 	keyboard_initialize();
 	scheduler_initialize();
+	process_init();
 	pit_initialize(100); /* 100 Hz — 10 ms tick */
 	syscall_initialize();
 
@@ -174,6 +176,29 @@ void kernel_main(void) {
 		if (!elf_found)
 			printf("elf: no .ELF files on disk "
 			       "(see ROADMAP.md 4.12 and BUILD.md)\r\n");
+	}
+
+	/* ── Process isolation demo (section 5.1) ─────────────────────────────
+	 * Show that two processes can have independent page directories at the
+	 * same virtual address range without colliding.                       */
+	{
+		uint32_t *pd_a = paging_create_address_space();
+		uint32_t *pd_b = paging_create_address_space();
+		uint32_t *pd_k = paging_get_kernel_pd();
+
+		printf("process: kernel PD @ 0x%x\r\n", (unsigned)pd_k);
+		if (pd_a && pd_b) {
+			printf("process: child A PD @ 0x%x  child B PD @ 0x%x\r\n",
+			       (unsigned)pd_a, (unsigned)pd_b);
+			printf("process: A != B: %s  (isolated address spaces)\r\n",
+			       (pd_a != pd_b) ? "yes" : "no");
+			printf("process: all share kernel entry[0]=0x%x  "
+			       "(same page table)\r\n", pd_k[0]);
+			pmm_free_page(pd_a);
+			pmm_free_page(pd_b);
+		}
+		printf("process: table initialised — %d slots, "
+		       "use 'exec' to run in isolation\r\n", PROCESS_MAX);
 	}
 
 	printf("  ___        _ _ \r\n");

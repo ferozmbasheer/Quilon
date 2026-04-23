@@ -42,6 +42,11 @@
 #include <kernel/serial.h>
 #include <kernel/vfs.h>
 #include <kernel/usermode.h>
+#include <kernel/process.h>
+#include <kernel/scheduler.h>
+#include <kernel/elf.h>
+#include <kernel/paging.h>
+#include <kernel/pmm.h>
 #endif
 
 /* ── Kernel-only initialisation ──────────────────────────────────────────────
@@ -125,10 +130,14 @@ void syscall_handler(syscall_regs_t *regs)
     /* ────────────────────────────────────────────────────────────────────────
      * SYS_GETPID (2)
      *   No arguments.
-     *   Returns: 0 — there is only one "process" in a single-task kernel.
+     *   Returns: the current process's PID.
      * ──────────────────────────────────────────────────────────────────────── */
     case SYS_GETPID:
+#ifdef __is_kernel
+        ret = current_process ? current_process->pid : 0;
+#else
         ret = 0;
+#endif
         break;
 
     /* ────────────────────────────────────────────────────────────────────────
@@ -140,20 +149,43 @@ void syscall_handler(syscall_regs_t *regs)
      * implementation would mark the task as ZOMBIE/DEAD and call schedule()
      * to switch to the next runnable task.
      * ──────────────────────────────────────────────────────────────────────── */
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_EXIT (3)
+     *   EBX = exit code.
+     *   Does not return.
+     *
+     * Marks the process ZOMBIE, wakes the parent if it is blocked in
+     * wait(), and calls scheduler_yield() to hand off the CPU.  The
+     * shell's exec_return_active path is kept for the longjmp-based
+     * shell-exec flow (when the shell drives exec directly).
+     * ──────────────────────────────────────────────────────────────────────── */
     case SYS_EXIT:
-        printf("\r\n[kernel] process exited (code %d)\r\n", (int)regs->ebx);
+        printf("\r\n[kernel] pid %d exited (code %d)\r\n",
+#ifdef __is_kernel
+               current_process ? (int)current_process->pid : -1,
+#else
+               -1,
+#endif
+               (int)regs->ebx);
 #ifdef __is_kernel
         if (exec_return_active) {
-            /* Shell launched this program — longjmp back to shell_cmd_exec. */
+            /* Shell launched this program via exec_setjmp — longjmp back. */
             exec_longjmp(&exec_return_buf, 1);
             __builtin_unreachable();
         }
-        /* No return context (e.g. direct ring3/syscall shell command). */
-        for (;;)
-            asm volatile("hlt");
+        if (current_process) {
+            current_process->exit_code = (int)regs->ebx;
+            current_process->state     = PROC_ZOMBIE;
+            /* Wake the parent if it is sleeping in SYS_WAIT. */
+            process_t *_parent = process_find(current_process->parent_pid);
+            if (_parent && _parent->state == PROC_BLOCKED)
+                _parent->state = PROC_READY;
+            scheduler_yield();   /* never returns — process is ZOMBIE */
+            __builtin_unreachable();
+        }
+        for (;;) asm volatile("hlt");
         __builtin_unreachable();
 #else
-        /* Host/test build: halt is skipped; write return value and return. */
         regs->eax = 0;
         return;
 #endif
@@ -203,6 +235,79 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_CLOSE: {
 #ifdef __is_kernel
         ret = (uint32_t)vfs_close((int)regs->ebx);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_WAIT (7)
+     *   EBX = child PID to wait for.
+     *   ECX = pointer to int where exit code is written (may be 0/NULL).
+     *   Returns: 0 on success, -1 if the child PID is unknown.
+     *
+     * Blocks the caller (sets state PROC_BLOCKED) and yields the CPU.
+     * The SYS_EXIT handler wakes us when the child becomes ZOMBIE.
+     * We then read the exit code and reap the child (set it PROC_UNUSED).
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_WAIT: {
+#ifdef __is_kernel
+        uint32_t   child_pid    = regs->ebx;
+        int       *exit_code_p  = (int *)(uintptr_t)regs->ecx;
+        process_t *_child       = process_find(child_pid);
+        if (!_child) { ret = (uint32_t)-1; break; }
+
+        /* Block until the child transitions to PROC_ZOMBIE. */
+        current_process->state = PROC_BLOCKED;
+        while (_child->state != PROC_ZOMBIE)
+            scheduler_yield();
+
+        if (exit_code_p) *exit_code_p = _child->exit_code;
+        _child->state = PROC_UNUSED;   /* reap: free the slot */
+        ret = 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_EXEC (8)
+     *   EBX = pointer to null-terminated path string.
+     *   Returns: child PID on success, -1 on failure.
+     *
+     * Creates a new address space, loads the ELF into it, and adds a new
+     * PROC_READY entry to the process table.  The child runs when the
+     * scheduler picks it.  The caller can use SYS_WAIT to synchronise.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_EXEC: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        if (!path) { ret = (uint32_t)-1; break; }
+
+        /* 1. Allocate a new page directory (kernel half shared). */
+        uint32_t *child_pd = paging_create_address_space();
+        if (!child_pd) { ret = (uint32_t)-1; break; }
+
+        /* 2. Load the ELF into the child's address space. */
+        uint32_t _entry = elf_load_into(path, child_pd);
+        if (!_entry) {
+            pmm_free_page(child_pd);
+            ret = (uint32_t)-1;
+            break;
+        }
+
+        /* 3. Create the PCB and mark it READY for the scheduler. */
+        process_t *_child = process_create(path, _entry,
+                                           (uint32_t)(uintptr_t)child_pd);
+        if (!_child) {
+            pmm_free_page(child_pd);
+            ret = (uint32_t)-1;
+            break;
+        }
+
+        ret = _child->pid;
 #else
         ret = (uint32_t)-1;
 #endif

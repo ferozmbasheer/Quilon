@@ -2,6 +2,14 @@
 #include <stdint.h>
 #include <kernel/scheduler.h>
 
+#ifdef __is_kernel
+#include <kernel/process.h>
+#include <kernel/paging.h>
+#include <kernel/gdt.h>
+/* context_switch is defined in arch/i386/boot.S */
+extern void context_switch(uint32_t *prev_esp_ptr, uint32_t next_esp_val);
+#endif
+
 static task_t   tasks[SCHEDULER_MAX_TASKS];
 static int      current_task = 0;
 static uint32_t task_count   = 0;
@@ -84,45 +92,88 @@ uint32_t scheduler_task_count(void)
 }
 
 /*
- * scheduler_tick — called from pit_tick() on every IRQ0.
+ * scheduler_tick — called from pit_tick() on every IRQ0 (100 Hz).
  *
- * Selects the next READY task (round-robin) and updates task states.
+ * In the kernel build, delegates to the process table for real preemptive
+ * context switching (section 5.3).  The low-level swap is done by
+ * context_switch() in boot.S, which saves/restores callee-saved registers
+ * and the kernel stack pointer.
  *
- * ── Note on preemptive context switching ─────────────────────────────────
- * Full preemption requires saving and restoring all CPU registers atomically
- * inside the interrupt frame.  The IRQ0 stub in boot.S would need to pass
- * a pointer to the saved register state so that modifying saved EIP here
- * causes `iret` to resume the new task.
- *
- * The ESP swap below is the minimal form; a complete implementation also
- * needs to coordinate EFLAGS, segment registers, and the initial stack
- * frame for newly created tasks.
- * ─────────────────────────────────────────────────────────────────────────
+ * In the host (test) build, falls back to the task_t round-robin table
+ * without any hardware-specific code so unit tests remain runnable.
  */
 void scheduler_tick(void)
 {
-    int next = scheduler_next_index();
-    if (next == current_task)
-        return;
+#ifdef __is_kernel
+    if (!current_process) return;
 
-    /* Demote the outgoing task so it re-enters the ready queue. */
+    process_t *next = process_pick_next();
+    if (!next) return;   /* no other runnable process */
+
+    /* Switch address space if the new process has a different PD. */
+    if (next->cr3 && next->cr3 != current_process->cr3)
+        paging_switch(next->cr3);
+
+    /* Update TSS so ring-3 interrupts land on the new process's stack. */
+    uint32_t kstack_top =
+        (uint32_t)(uintptr_t)(next->kernel_stack + sizeof(next->kernel_stack));
+    gdt_set_kernel_stack(kstack_top);
+
+    process_t *prev = current_process;
+    current_process = next;
+    if (prev->state == PROC_RUNNING) prev->state = PROC_READY;
+    next->state = PROC_RUNNING;
+
+    /* Perform the actual stack swap.  After this call returns we are
+     * executing on next's kernel stack.  For an existing process, the
+     * return goes back through pit_tick → irq0_handler → irq0 → iret.
+     * For a new process, it goes to process_first_run (boot.S).        */
+    context_switch(&prev->kernel_esp, next->kernel_esp);
+
+#else  /* host / unit-test build */
+    int next_idx = scheduler_next_index();
+    if (next_idx == current_task) return;
+
     if (tasks[current_task].state == TASK_RUNNING)
         tasks[current_task].state = TASK_READY;
-
-    int prev    = current_task;
-    current_task = next;
+    int prev = current_task;
+    current_task = next_idx;
     tasks[current_task].state = TASK_RUNNING;
-
-#ifdef __is_kernel
-    /* x86 context switch: save current stack pointer, load next. */
-    asm volatile(
-        "mov %%esp, %0\n"
-        "mov %1, %%esp\n"
-        : "=m"(tasks[prev].esp)
-        : "m"(tasks[next].esp)
-        : "memory"
-    );
-#else
     (void)prev;
+#endif
+}
+
+/*
+ * scheduler_yield — voluntarily give up the CPU.
+ *
+ * Called by SYS_EXIT (to hand off after marking the process ZOMBIE) and
+ * by SYS_WAIT (to sleep while waiting for a child).  Unlike scheduler_tick,
+ * it does not emit the PIC EOI — we are not inside an IRQ handler.
+ *
+ * In the kernel build: does a real context switch to the next READY process.
+ * In the host build: no-op (no hardware, no real switching needed).
+ */
+void scheduler_yield(void)
+{
+#ifdef __is_kernel
+    if (!current_process) return;
+
+    process_t *next = process_pick_next();
+    if (!next) return;
+
+    if (next->cr3 && next->cr3 != current_process->cr3)
+        paging_switch(next->cr3);
+
+    uint32_t kstack_top =
+        (uint32_t)(uintptr_t)(next->kernel_stack + sizeof(next->kernel_stack));
+    gdt_set_kernel_stack(kstack_top);
+
+    process_t *prev = current_process;
+    current_process = next;
+    /* NOTE: do NOT change prev->state here.  Callers (SYS_EXIT, SYS_WAIT)
+     * have already set it to PROC_ZOMBIE or PROC_BLOCKED.               */
+    next->state = PROC_RUNNING;
+
+    context_switch(&prev->kernel_esp, next->kernel_esp);
 #endif
 }

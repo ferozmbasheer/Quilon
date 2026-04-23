@@ -59,7 +59,7 @@ KERNEL_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process
 
 .PHONY: all build run clean help
 
@@ -170,6 +170,17 @@ $(BINDIR)/test_elf: test_elf.c framework.h \
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_elf.c ../kernel/kernel/elf.c \
 	    $(LIBC_STRING)
+
+# Process management tests
+# process.c is pure C (no asm, no hardware).  The host build skips the
+# #ifdef __is_kernel sections so process_launch, gdt_set_kernel_stack, and
+# the process_first_run trampoline are all absent.  Only process_init,
+# process_create, process_find, and process_pick_next are exercised.
+PROCESS_SRC = ../kernel/kernel/process.c
+
+$(BINDIR)/test_process: test_process.c framework.h $(PROCESS_SRC) $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_process.c $(PROCESS_SRC) $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

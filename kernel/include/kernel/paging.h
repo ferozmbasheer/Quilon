@@ -42,6 +42,16 @@ static inline uint32_t paging_make_entry(uint32_t phys_addr, uint32_t flags)
  *
  * Call after pmm_initialize() so the PMM bitmap is already populated.
  */
+/* ── Kernel page directory ──────────────────────────────────────────────────
+ * Exposed so shell_cmd_exec can restore it after running a process in its
+ * own address space.
+ */
+extern uint32_t page_directory[1024];
+
+/* Return a pointer to the kernel's global page directory.
+ * Used when switching back to the kernel address space after exec_longjmp. */
+uint32_t *paging_get_kernel_pd(void);
+
 void paging_initialize(void);
 
 /* Mark every PTE in [virt_start, virt_end) that is already present with
@@ -77,5 +87,48 @@ int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags);
  * PTEs marked not-present) before the first entry is written.
  */
 int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags);
+
+/* ── Per-process address space (section 5.1) ────────────────────────────── */
+
+/*
+ * paging_create_address_space — allocate a fresh page directory for a process.
+ *
+ * Allocates a new 4-KiB page directory and copies the kernel's PD entry 0
+ * (the identity-mapped first 4-MiB page table) into it.  The kernel half is
+ * shared (same physical page table), so kernel code and data are visible in
+ * every address space.  User pages are private to each process.
+ *
+ * Returns the new page directory pointer (phys == virt, identity-mapped),
+ * or NULL on OOM.  Cast to uint32_t for paging_switch().
+ */
+uint32_t *paging_create_address_space(void);
+
+/*
+ * paging_switch — load pd_phys into CR3, switching the active address space.
+ *
+ * Flushes the TLB as a side effect (CR3 write always does this on x86).
+ * Call with the physical address of a page directory (returned by
+ * paging_create_address_space() or paging_get_kernel_pd()).
+ */
+void paging_switch(uint32_t pd_phys);
+
+/*
+ * paging_map_page_alloc_into — map a page into an arbitrary page directory.
+ *
+ * Like paging_map_page_alloc() but operates on an explicit pd[] instead of
+ * the active global page_directory[].  Used by elf_load_into() to populate
+ * a child process's address space before it is first scheduled.
+ *
+ * pd   — pointer to the target page directory (must be identity-mapped, i.e.
+ *         in the first 4 MiB, as all pmm_alloc_page() results are).
+ * virt — virtual address to map.
+ * phys — physical page to map there.
+ * flags — PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER as needed.
+ *
+ * Returns 0 on success, -1 if pmm_alloc_page() fails for a new page table.
+ * No TLB flush — the target PD is not currently active in CR3.
+ */
+int paging_map_page_alloc_into(uint32_t *pd, uint32_t virt,
+                                uint32_t phys, uint32_t flags);
 
 #endif /* _KERNEL_PAGING_H */

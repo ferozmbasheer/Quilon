@@ -34,6 +34,7 @@ kernel/kmalloc.o \
 kernel/keyboard.o \
 kernel/shell.o \
 kernel/scheduler.o \
+kernel/process.o \
 kernel/usermode.o \
 kernel/syscall.o \
 kernel/vfs.o \

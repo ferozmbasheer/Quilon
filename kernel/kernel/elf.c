@@ -260,4 +260,140 @@ uint32_t elf_load(const char *path)
     return entry;
 }
 
+/*
+ * elf_load_into — load an ELF32 executable into a specific page directory.
+ *
+ * This is the process-isolation version of elf_load().  Instead of mapping
+ * segments into the global (kernel) page directory, it maps them into the
+ * target_pd provided by the caller (typically created by
+ * paging_create_address_space() for a new child process).
+ *
+ * Key difference: physical pages are written to via their identity-mapped
+ * physical addresses (not via the ELF virtual address), so the data lands
+ * in the right physical memory even though target_pd is not active in CR3.
+ *
+ * This allows the kernel to prepare a child's address space entirely in
+ * the background, before the child is ever scheduled.
+ */
+uint32_t elf_load_into(const char *path, uint32_t *target_pd)
+{
+    /* ── Step 1: open the file ───────────────────────────────────────────── */
+    int fd = vfs_open(path);
+    if (fd < 0) {
+        printf("[elf] cannot open '%s'\r\n", path);
+        return 0;
+    }
+
+    /* ── Step 2: read into heap buffer ──────────────────────────────────── */
+    uint8_t *buf = (uint8_t *)kmalloc(ELF_MAX_SIZE);
+    if (!buf) {
+        printf("[elf] out of heap memory for '%s'\r\n", path);
+        vfs_close(fd);
+        return 0;
+    }
+
+    uint32_t total = 0;
+    int n;
+    while (total < ELF_MAX_SIZE && (n = vfs_read(fd, buf + total, 512)) > 0)
+        total += (uint32_t)n;
+    vfs_close(fd);
+
+    if (total == 0) {
+        printf("[elf] '%s' is empty\r\n", path);
+        kfree(buf);
+        return 0;
+    }
+
+    /* ── Step 3: validate ────────────────────────────────────────────────── */
+    if (elf_validate(buf, total) != 0) {
+        printf("[elf] '%s': not a valid ELF32 i386 executable\r\n", path);
+        kfree(buf);
+        return 0;
+    }
+
+    const elf32_ehdr_t *ehdr = (const elf32_ehdr_t *)buf;
+    printf("[elf] loading '%s' into pd=0x%x  entry=0x%x  phnum=%d\r\n",
+           path, (unsigned)(uintptr_t)target_pd,
+           (unsigned)ehdr->e_entry, (int)ehdr->e_phnum);
+
+    /* ── Step 4: map segments into target_pd ─────────────────────────────── */
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const elf32_phdr_t *ph = elf_phdr(buf, i);
+
+        if (ph->p_type != PT_LOAD) continue;
+        if (ph->p_memsz == 0)      continue;
+
+        if (ph->p_filesz > 0 &&
+            ph->p_offset + ph->p_filesz > total) {
+            printf("[elf] segment %d extends past end of file\r\n", (int)i);
+            kfree(buf);
+            return 0;
+        }
+
+        uint32_t virt_start = ph->p_vaddr & ~(PAGE_SIZE - 1u);
+        uint32_t virt_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1u)
+                              & ~(PAGE_SIZE - 1u);
+
+        printf("[elf] segment %d: vaddr=0x%x  filesz=%d  memsz=%d\r\n",
+               (int)i, (unsigned)ph->p_vaddr,
+               (int)ph->p_filesz, (int)ph->p_memsz);
+
+        for (uint32_t virt = virt_start; virt < virt_end; virt += PAGE_SIZE) {
+            /* Allocate a fresh physical page (in the first 4 MiB, so
+             * its physical address equals its virtual address).        */
+            uint8_t *phys_page = (uint8_t *)pmm_alloc_page();
+            if (!phys_page) {
+                printf("[elf] PMM out of pages at virt=0x%x\r\n",
+                       (unsigned)virt);
+                kfree(buf);
+                return 0;
+            }
+            memset(phys_page, 0, PAGE_SIZE);   /* zero including BSS  */
+
+            /* Map the physical page at virt in the child's PD. */
+            if (paging_map_page_alloc_into(
+                    target_pd, virt,
+                    (uint32_t)(uintptr_t)phys_page,
+                    PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+                printf("[elf] mapping failed at virt=0x%x\r\n", (unsigned)virt);
+                pmm_free_page(phys_page);
+                kfree(buf);
+                return 0;
+            }
+
+            /*
+             * Copy the portion of this segment that overlaps the current page.
+             *
+             * The page covers [virt, virt + PAGE_SIZE).
+             * File data covers [p_vaddr, p_vaddr + p_filesz).
+             * Intersection: [copy_start, copy_end).
+             *
+             * We write to phys_page (identity-mapped), not to virt —
+             * because virt lives in target_pd which is not currently
+             * active in CR3.
+             */
+            if (ph->p_filesz > 0) {
+                uint32_t copy_start =
+                    (ph->p_vaddr > virt) ? ph->p_vaddr : virt;
+                uint32_t copy_end =
+                    (ph->p_vaddr + ph->p_filesz < virt + PAGE_SIZE)
+                    ? ph->p_vaddr + ph->p_filesz : virt + PAGE_SIZE;
+
+                if (copy_start < copy_end) {
+                    uint8_t       *dst = phys_page + (copy_start - virt);
+                    const uint8_t *src = buf + ph->p_offset
+                                         + (copy_start - ph->p_vaddr);
+                    memcpy(dst, src, copy_end - copy_start);
+                }
+            }
+        }
+    }
+
+    uint32_t entry = ehdr->e_entry;
+    kfree(buf);
+    printf("[elf] '%s' ready in pd=0x%x — entry=0x%x\r\n",
+           path, (unsigned)(uintptr_t)target_pd, (unsigned)entry);
+    return entry;
+}
+
 #endif /* __is_kernel */

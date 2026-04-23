@@ -15,11 +15,13 @@
  *   asm volatile("int $0x80" : "=a"(ret) : "a"(num), "b"(a1), ...);
  */
 #define SYS_WRITE   1   /* write(fd, buf, len) → bytes written              */
-#define SYS_GETPID  2   /* getpid() → 0  (single-task stub)                 */
-#define SYS_EXIT    3   /* exit(code)    → does not return                   */
+#define SYS_GETPID  2   /* getpid() → current process PID                   */
+#define SYS_EXIT    3   /* exit(code) → does not return                      */
 #define SYS_OPEN    4   /* open(path) → fd (>= 3) or -1                      */
 #define SYS_READ    5   /* read(fd, buf, len) → bytes read, 0=EOF, -1=err    */
 #define SYS_CLOSE   6   /* close(fd) → 0 or -1                               */
+#define SYS_WAIT    7   /* wait(pid, &exit_code) → 0 on success, -1 on error */
+#define SYS_EXEC    8   /* exec(path) → child PID on success, -1 on failure  */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

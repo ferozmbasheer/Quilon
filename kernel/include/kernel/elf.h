@@ -160,4 +160,23 @@ const elf32_phdr_t *elf_phdr(const uint8_t *buf, uint16_t i);
  */
 uint32_t elf_load(const char *path);
 
+/*
+ * elf_load_into — load an ELF32 executable into an explicit page directory.
+ *
+ * Process-isolation version of elf_load().  Maps each PT_LOAD segment into
+ * target_pd (not into the currently active global page directory), writing
+ * file data directly to the allocated physical pages via their identity-
+ * mapped addresses.  This allows the kernel to prepare a child process's
+ * address space entirely before the child is first scheduled.
+ *
+ * target_pd — pointer to the child's page directory, as returned by
+ *             paging_create_address_space().  Must be in the first 4 MiB
+ *             (identity-mapped) so writes to it are safe.
+ *
+ * Returns the entry point virtual address on success, or 0 on failure.
+ *
+ * Only compiled in the kernel build (__is_kernel defined).
+ */
+uint32_t elf_load_into(const char *path, uint32_t *target_pd);
+
 #endif /* _KERNEL_ELF_H */
