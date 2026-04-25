@@ -275,5 +275,70 @@ void kernel_main(void) {
 	printf("| |_| | |_| | | | (_) | | | |\r\n");
 	printf(" \\__\\_\\__,__|_|_|\\___/|_| |_|\r\n\n");
 
+	/* ── Section 7: User Space ────────────────────────────────────────────────
+	 *
+	 * Attempt to load SHELL.ELF from the FAT16 disk and launch it as the
+	 * first ring-3 process.  This replaces the kernel's ring-0 shell_run()
+	 * call — the kernel's role after boot becomes: initialise hardware,
+	 * mount the disk, spawn SHELL.ELF, and yield to the scheduler.
+	 *
+	 * New in section 7:
+	 *   7.1  user/libc/       — user-space C library (stdio, stdlib, string)
+	 *                           with int $0x80 syscall stubs
+	 *   7.2  user/shell/      — ring-3 shell built against user libc
+	 *   7.3  user/hello_c/    — example C program using printf/malloc/exit
+	 *   SYS_READDIR (12)      — new syscall: enumerate root directory entries
+	 *   SYS_READ + FD_STDIN   — keyboard read path for ring-3 shell readline
+	 *
+	 * Fallback: if SHELL.ELF is not on disk (first build without section 7
+	 * user binaries), the kernel falls back to the ring-0 shell_run() so the
+	 * system remains usable during development.
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 7: User Space ===\r\n");
+	printf("user space: SYS_READDIR=%d  (ring-3 ls)\r\n", SYS_READDIR);
+	printf("user space: user/libc  — stdio/stdlib/string/syscall stubs\r\n");
+	printf("user space: user/shell — ring-3 C shell (SHELL.ELF)\r\n");
+	printf("user space: user/hello_c — C demo program (HELLOC.ELF)\r\n");
+
+	if (vfs_mounted()) {
+		/* Try to find and launch SHELL.ELF as the first ring-3 process. */
+		uint32_t *shell_pd = paging_create_address_space();
+		if (shell_pd) {
+			uint32_t shell_entry = elf_load_into("SHELL.ELF", shell_pd);
+			if (shell_entry != 0) {
+				process_t *shell_proc =
+				    process_create("shell", shell_entry,
+				                   (uint32_t)(uintptr_t)shell_pd);
+				if (shell_proc) {
+					printf("user space: launching SHELL.ELF "
+					       "(pid=%d, entry=0x%x)\r\n",
+					       (int)shell_proc->pid,
+					       (unsigned)shell_entry);
+					printf("=== Section 7 ready ===\r\n\r\n");
+
+					/* Set as the running process and switch to its
+					 * page directory before entering ring 3.          */
+					current_process       = shell_proc;
+					shell_proc->state     = PROC_RUNNING;
+					paging_switch(shell_proc->cr3);
+
+					/* process_launch() updates TSS, calls
+					 * usermode_initialize(), then irets to ring 3.
+					 * Never returns.                                   */
+					process_launch();
+					__builtin_unreachable();
+				}
+			}
+			pmm_free_page(shell_pd);
+		}
+		printf("user space: SHELL.ELF not found — falling back to "
+		       "kernel ring-0 shell\r\n");
+		printf("  (build user programs with: cd user && make)\r\n");
+	} else {
+		printf("user space: no filesystem — cannot load SHELL.ELF\r\n");
+	}
+	printf("=== Section 7 fallback ===\r\n\r\n");
+
+	/* ── Fallback: kernel ring-0 shell ──────────────────────────────────── */
 	shell_run();
 }

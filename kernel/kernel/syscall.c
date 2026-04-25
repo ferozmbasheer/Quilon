@@ -40,6 +40,7 @@
 #ifdef __is_kernel
 #include <kernel/interrupts.h>
 #include <kernel/serial.h>
+#include <kernel/keyboard.h>
 #include <kernel/vfs.h>
 #include <kernel/usermode.h>
 #include <kernel/process.h>
@@ -66,22 +67,23 @@ extern void int80_stub(void);
 /*
  * syscall_initialize — register the int $0x80 gate in the IDT.
  *
- * IDT_TYPE_USER_GATE = 0xEE = P=1 | DPL=3 | type=0xE (32-bit interrupt gate).
+ * IDT_TYPE_USER_TRAP_GATE = 0xEF = P=1 | DPL=3 | type=0xF (32-bit trap gate).
  *
- * DPL=3 is the critical detail: without it, `int $0x80` from ring-3 code
- * raises a General Protection Fault (vector 13) instead of entering the
- * kernel.  Hardware interrupts always bypass the DPL check, so only
- * software-triggered interrupts care about this field.
+ * A trap gate (type=0xF) does NOT clear IF on entry, so hardware interrupts
+ * (IRQ0 PIT timer, IRQ1 keyboard, etc.) remain enabled while the syscall
+ * handler runs.  This is essential for SYS_READ on stdin: keyboard_getchar()
+ * spins until IRQ1 fires and fills the ring buffer; if IF were cleared by an
+ * interrupt gate the spin would deadlock.
  *
- * Must be called after idt_initialize() has loaded the IDTR, because
- * idt_set_gate() writes into the IDT array whose base address was just
- * committed to the CPU.  Adding entries after lidt() is safe — the CPU
- * reads the table on each interrupt, not only at startup.
+ * DPL=3 allows ring-3 code to trigger the gate; hardware interrupts always
+ * bypass the DPL check.
+ *
+ * Must be called after idt_initialize() has loaded the IDTR.
  */
 void syscall_initialize(void)
 {
     idt_set_gate(0x80, (uint32_t)(uintptr_t)int80_stub,
-                 IDT_SELECTOR_KERNEL_CODE, IDT_TYPE_USER_GATE);
+                 IDT_SELECTOR_KERNEL_CODE, IDT_TYPE_USER_TRAP_GATE);
 }
 
 #endif /* __is_kernel */
@@ -185,7 +187,8 @@ void syscall_handler(syscall_regs_t *regs)
             process_t *_parent = process_find(current_process->parent_pid);
             if (_parent && _parent->state == PROC_BLOCKED)
                 _parent->state = PROC_READY;
-            scheduler_yield();   /* never returns — process is ZOMBIE */
+            scheduler_yield();   /* returns only if no other runnable process */
+            for (;;) asm volatile("hlt");  /* all processes exited — halt CPU */
             __builtin_unreachable();
         }
         for (;;) asm volatile("hlt");
@@ -215,17 +218,32 @@ void syscall_handler(syscall_regs_t *regs)
 
     /* ────────────────────────────────────────────────────────────────────────
      * SYS_READ (5)
-     *   EBX = fd (must be >= VFS_FD_BASE, i.e. a filesystem fd)
+     *   EBX = fd — FD_STDIN (0) reads from the keyboard ring buffer.
+     *              fd >= VFS_FD_BASE reads from a VFS file.
      *   ECX = buf — pointer to the receive buffer (user-space address).
      *   EDX = len — maximum bytes to read.
      *   Returns: bytes read (0 = EOF), or -1 on error.
+     *
+     * FD_STDIN path: calls keyboard_getchar() in a loop for `len` bytes.
+     * The ring-3 shell reads one character at a time (len=1), so each call
+     * blocks until one key is pressed and returns exactly 1 byte.
      * ──────────────────────────────────────────────────────────────────────── */
     case SYS_READ: {
 #ifdef __is_kernel
-        void *buf = (void *)(uintptr_t)regs->ecx;
-        ret = (buf != (void *)0)
-                ? (uint32_t)vfs_read((int)regs->ebx, buf, regs->edx)
-                : (uint32_t)-1;
+        char    *buf = (char *)(uintptr_t)regs->ecx;
+        uint32_t len = regs->edx;
+        if (!buf || len == 0) { ret = (uint32_t)-1; break; }
+        if ((int)regs->ebx == FD_STDIN) {
+            /* Read up to len chars from the keyboard ring buffer. */
+            uint32_t n = 0;
+            while (n < len) {
+                buf[n++] = keyboard_getchar();
+                /* Stop after filling the buffer; caller decides line-ending. */
+            }
+            ret = n;
+        } else {
+            ret = (uint32_t)vfs_read((int)regs->ebx, buf, len);
+        }
 #else
         ret = (uint32_t)-1;
 #endif
@@ -483,6 +501,27 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_SIGRETURN:
         ret = 0;
         break;
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_READDIR (12)
+     *   EBX = index — zero-based directory entry index.
+     *   ECX = pointer to a user-space struct compatible with vfs_dirent_t:
+     *         { char name[13]; uint32_t size; uint8_t type; }
+     *   Returns: 0 on success, -1 at end-of-directory or error.
+     *
+     * Enables ring-3 programs to enumerate the root directory without access
+     * to kernel VFS internals.  Used by the ring-3 shell's `ls` command.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_READDIR: {
+#ifdef __is_kernel
+        vfs_dirent_t *ent = (vfs_dirent_t *)(uintptr_t)regs->ecx;
+        if (!ent) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_readdir(regs->ebx, ent);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
 
     /* ────────────────────────────────────────────────────────────────────────
      * Unknown syscall

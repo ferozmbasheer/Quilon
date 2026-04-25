@@ -11,36 +11,45 @@
 #   README.TXT   — general greeting
 #   GREET.TXT    — short message
 #   NUMBERS.TXT  — a line of numbers
-#   HELLO.ELF    — real ELF32 i386 user program (built from user/hello.S)
+#   HELLO.ELF    — assembly demo (built from user/hello.S)
+#   SHELL.ELF    — ring-3 C shell (built from user/shell/main.c)
+#   HELLOC.ELF   — C demo program (built from user/hello_c/main.c)
 #
-# To run the ELF once the kernel boots:
-#   quilon> exec HELLO.ELF
+# The kernel launches SHELL.ELF automatically at boot.
 
 set -e
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 DISK="$SCRIPT_DIR/disk.img"
-ELF_FILE=""
+HELLO_ELF=""
+SHELL_ELF=""
+HELLOC_ELF=""
 
-# ── Build user/hello.elf if the cross-compiler is available ─────────────────
+# ── Build all user programs if the cross-compiler is available ───────────────
 if command -v i686-elf-gcc >/dev/null 2>&1; then
-    echo "Building user/hello.elf..."
+    echo "Building user programs..."
     (cd "$SCRIPT_DIR/user" && make -s)
-    ELF_FILE="$SCRIPT_DIR/user/hello.elf"
-    echo "Built: $ELF_FILE ($(wc -c < "$ELF_FILE") bytes)"
+    HELLO_ELF="$SCRIPT_DIR/user/hello.elf"
+    SHELL_ELF="$SCRIPT_DIR/user/shell/shell.elf"
+    HELLOC_ELF="$SCRIPT_DIR/user/hello_c/helloc.elf"
+    echo "Built: $HELLO_ELF ($(wc -c < "$HELLO_ELF") bytes)"
+    echo "Built: $SHELL_ELF ($(wc -c < "$SHELL_ELF") bytes)"
+    echo "Built: $HELLOC_ELF ($(wc -c < "$HELLOC_ELF") bytes)"
 else
-    echo "Warning: i686-elf-gcc not found — HELLO.ELF will not be included."
-    echo "         Install the cross-compiler to get the ELF demo on disk."
+    echo "Warning: i686-elf-gcc not found — ELF files will not be included."
+    echo "         Install the cross-compiler to get the ELF programs on disk."
 fi
 
 # ── Build the FAT16 image ────────────────────────────────────────────────────
-python3 - "$DISK" "$ELF_FILE" <<'PYEOF'
+python3 - "$DISK" "$HELLO_ELF" "$SHELL_ELF" "$HELLOC_ELF" <<'PYEOF'
 import struct, sys, os
 
-OUT      = sys.argv[1]
-ELF_PATH = sys.argv[2] if len(sys.argv) > 2 else ""
+OUT        = sys.argv[1]
+HELLO_PATH = sys.argv[2] if len(sys.argv) > 2 else ""
+SHELL_PATH = sys.argv[3] if len(sys.argv) > 3 else ""
+HELLOC_PATH= sys.argv[4] if len(sys.argv) > 4 else ""
 
 SS    = 512    # bytes per sector
-TOTAL = 1024   # total sectors → 512 KB image (room for the ELF + text files)
+TOTAL = 2048   # total sectors → 1 MB image (room for multiple ELFs)
 
 # ── BPB parameters ───────────────────────────────────────────────────────────
 BPS  = 512   # bytes per sector
@@ -48,7 +57,7 @@ SPC  = 1     # sectors per cluster
 RSC  = 1     # reserved sector count  (sector 0 = boot)
 NF   = 2     # number of FAT copies
 REC  = 64    # root entry count       (64 × 32 B = 4 sectors)
-SPF  = 2     # sectors per FAT        (512 FAT16 entries → enough for 512 KB)
+SPF  = 4     # sectors per FAT        (1024 FAT16 entries → enough for 1 MB)
 
 # ── Derived layout ───────────────────────────────────────────────────────────
 FAT_LBA   = RSC                          # 1
@@ -89,7 +98,8 @@ files = [
      b"Hello from Quilon OS!\r\n"
      b"This file lives on a FAT16 disk read via the ATA PIO driver.\r\n"
      b"Type 'ls' to list files, 'cat <file>' to read them.\r\n"
-     b"Type 'exec HELLO.ELF' to run the ELF demo program.\r\n"),
+     b"Type 'exec HELLO.ELF' to run the assembly demo.\r\n"
+     b"Type 'exec HELLOC.ELF' to run the C demo.\r\n"),
 
     ("GREET   ", "TXT",
      b"Greetings, kernel hacker!\r\n"
@@ -99,11 +109,18 @@ files = [
      b"one two three four five six seven eight nine ten\r\n"),
 ]
 
-# Add the ELF binary if it was built
-if ELF_PATH and os.path.isfile(ELF_PATH):
-    with open(ELF_PATH, 'rb') as f:
-        elf_data = f.read()
-    files.append(("HELLO   ", "ELF", elf_data))
+# Add ELF binaries if they were built
+if HELLO_PATH and os.path.isfile(HELLO_PATH):
+    with open(HELLO_PATH, 'rb') as f:
+        files.append(("HELLO   ", "ELF", f.read()))
+
+if SHELL_PATH and os.path.isfile(SHELL_PATH):
+    with open(SHELL_PATH, 'rb') as f:
+        files.append(("SHELL   ", "ELF", f.read()))
+
+if HELLOC_PATH and os.path.isfile(HELLOC_PATH):
+    with open(HELLOC_PATH, 'rb') as f:
+        files.append(("HELLOC  ", "ELF", f.read()))
 
 # ── Write files into data region, building FAT chain ─────────────────────────
 entries = []    # (name8, ext3, start_cluster, byte_size)

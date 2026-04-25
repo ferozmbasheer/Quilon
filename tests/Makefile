@@ -56,10 +56,13 @@ SCHEDULER_SRC = ../kernel/kernel/scheduler.c
 PMM_INCLUDES = -I../kernel/include
 KERNEL_INCLUDES = -I../kernel/include
 
+# Include path for user libc headers (needed by test_libc).
+USER_LIBC_INCLUDES = -I../user/libc/include
+
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc
 
 .PHONY: all build run clean help
 
@@ -194,6 +197,21 @@ $(BINDIR)/test_signal: test_signal.c framework.h \
                        $(SIGNAL_SRC) $(PROCESS_SRC) $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_signal.c $(SIGNAL_SRC) $(PROCESS_SRC) $(LIBC_STRING)
+
+# User libc tests (section 7.1)
+# Tests string.c, stdio.c, and stdlib.c from user/libc/ on the host.
+# syscall.S (int $0x80 stubs) is NOT linked — mock write() and sbrk() are
+# defined inside test_libc.c instead.
+# USER_LIBC_INCLUDES ensures <string.h>, <stdio.h>, <stdlib.h> etc. resolve
+# to the user libc headers rather than the system ones.
+USER_LIBC_STRING = ../user/libc/string.c
+USER_LIBC_STDIO  = ../user/libc/stdio.c
+USER_LIBC_STDLIB = ../user/libc/stdlib.c
+
+$(BINDIR)/test_libc: test_libc.c framework.h \
+                     $(USER_LIBC_STRING) $(USER_LIBC_STDIO) $(USER_LIBC_STDLIB)
+	$(CC) $(USER_LIBC_INCLUDES) $(CFLAGS) -o $@ \
+	    test_libc.c $(USER_LIBC_STRING) $(USER_LIBC_STDIO) $(USER_LIBC_STDLIB)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

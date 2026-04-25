@@ -48,6 +48,14 @@ void paging_initialize(void)
 
 void paging_set_user_access(uint32_t virt_start, uint32_t virt_end)
 {
+    /* Operate on the ACTIVE page directory (whatever is currently in CR3),
+     * not the kernel's global page_directory[].  This ensures the function
+     * works correctly both when called from the kernel context and when
+     * called after paging_switch() has loaded a process's private PD.    */
+    uint32_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3));
+    uint32_t *active_pd = (uint32_t *)(uintptr_t)cr3;
+
     /* Walk every page in [virt_start, virt_end) and add PAGE_USER to
      * the PDE and PTE for any page that is already marked present.
      * Silently skips pages that have no mapping yet.                    */
@@ -55,14 +63,14 @@ void paging_set_user_access(uint32_t virt_start, uint32_t virt_end)
         uint32_t pd_idx = VIRT_PD_INDEX(addr);
         uint32_t pt_idx = VIRT_PT_INDEX(addr);
 
-        if (!(page_directory[pd_idx] & PAGE_PRESENT))
+        if (!(active_pd[pd_idx] & PAGE_PRESENT))
             continue;
 
         /* Set USER on the page directory entry covering this 4-MiB slot. */
-        page_directory[pd_idx] |= PAGE_USER;
+        active_pd[pd_idx] |= PAGE_USER;
 
         /* Dereference the page table pointer stored in the PDE. */
-        uint32_t *pt = (uint32_t *)(page_directory[pd_idx] & ~0xFFFu);
+        uint32_t *pt = (uint32_t *)(active_pd[pd_idx] & ~0xFFFu);
         if (pt[pt_idx] & PAGE_PRESENT)
             pt[pt_idx] |= PAGE_USER;
     }

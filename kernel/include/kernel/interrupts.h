@@ -19,6 +19,9 @@ struct IDT_entry{
 #define IDT_TYPE_TRAP_GATE       0x8F
 /* P=1, DPL=3, type=0xE → 32-bit interrupt gate, callable from user mode  */
 #define IDT_TYPE_USER_GATE       0xEE
+/* P=1, DPL=3, type=0xF → 32-bit trap gate, callable from user mode,
+ * does NOT clear IF — interrupts stay enabled during the syscall handler  */
+#define IDT_TYPE_USER_TRAP_GATE  0xEF
 
 /* Kernel code segment selector (GDT entry 1 × 8 bytes) */
 #define IDT_SELECTOR_KERNEL_CODE 0x08
