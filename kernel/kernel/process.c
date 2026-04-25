@@ -179,16 +179,22 @@ void __attribute__((noreturn)) process_launch(void)
     gdt_set_kernel_stack(kstack_top);
 
     /*
-     * Load the TSS into TR (if not already done) and make the first 4 MiB
-     * user-accessible so ring-3 code can execute.
+     * Load the TSS into TR (once only — ltr faults if called twice) and
+     * set PAGE_USER on the active page directory's first-4-MiB entry so
+     * ring-3 code can access the user stack.
      *
-     * usermode_initialize() is idempotent (it checks a static flag), so
-     * calling it on every first-run is safe.
+     * usermode_initialize() guards ltr with a static flag but always calls
+     * paging_set_user_access(), which uses the current CR3.  This is
+     * correct: every process has its own PD and needs PAGE_USER set on it
+     * before its first ring-3 instruction can access the stack.
      */
     usermode_initialize();
 
-    /* Jump to ring 3 — never returns. */
-    usermode_enter((void (*)(void))(uintptr_t)current_process->entry);
+    /* Jump to ring 3 using the per-process stack at USER_STACK_TOP.
+     * elf_load_into() mapped a private 4-KiB page at USER_STACK_TOP-PAGE_SIZE
+     * in the process's page directory, so this virtual address is valid.   */
+    usermode_enter_esp((void (*)(void))(uintptr_t)current_process->entry,
+                       USER_STACK_TOP);
 
     __builtin_unreachable();
 }

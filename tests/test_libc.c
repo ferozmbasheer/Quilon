@@ -340,6 +340,25 @@ static void test_printf_mixed(void)
     ASSERT_STR_EQ(out_buf, "pid=3 hex=0xff str=ok", "printf mixed format");
 }
 
+static void test_printf_width(void)
+{
+    /* Left-aligned string with field width — the bug that broke ls */
+    out_pos = 0; printf("%-14s|", "hi"); out_buf[out_pos] = '\0';
+    ASSERT_STR_EQ(out_buf, "hi            |", "printf %-14s left-align");
+
+    /* Right-aligned string */
+    out_pos = 0; printf("%6s|", "hi"); out_buf[out_pos] = '\0';
+    ASSERT_STR_EQ(out_buf, "    hi|", "printf %6s right-align");
+
+    /* Right-aligned unsigned with zero-pad */
+    out_pos = 0; printf("%05u", 42u); out_buf[out_pos] = '\0';
+    ASSERT_STR_EQ(out_buf, "00042", "printf %05u zero-pad");
+
+    /* Width + multiple args — subsequent args must not be skewed */
+    out_pos = 0; printf("%-8s%u", "file.txt", 1234u); out_buf[out_pos] = '\0';
+    ASSERT_STR_EQ(out_buf, "file.txt1234", "printf %-8s%u no arg skew");
+}
+
 static void test_puts(void)
 {
     out_pos = 0;
@@ -381,6 +400,7 @@ int main(void)
     RUN_SUITE(test_printf_char);
     RUN_SUITE(test_printf_percent);
     RUN_SUITE(test_printf_mixed);
+    RUN_SUITE(test_printf_width);
     RUN_SUITE(test_puts);
 
     TEST_SUMMARY();

@@ -18,12 +18,21 @@
 
 /* ── User-mode stack layout ─────────────────────────────────────────────────
  *
- * A single 4-KiB page in BSS, 4-KiB aligned.
- * Because the kernel identity-maps the first 4 MiB (virt == phys),
- * the virtual address of this page is also its physical address.
- * usermode_initialize() marks it PAGE_USER | PAGE_WRITABLE.
+ * Demo tasks (user_task_demo etc.) use a single 4-KiB page in BSS,
+ * identity-mapped inside the first 4 MiB, as their ring-3 stack.
+ *
+ * ELF processes loaded by elf_load_into() get a PRIVATE stack page mapped
+ * at USER_STACK_TOP - PAGE_SIZE in their own page directory.  This keeps
+ * each process's stack isolated — multiple simultaneous executions cannot
+ * corrupt each other's stack.
+ *
+ * USER_STACK_TOP: the exclusive upper bound of the per-process user stack.
+ *   Ring-3 ESP starts here (stack grows downward).
+ *   One 4-KiB page is mapped just below: [USER_STACK_TOP-0x1000, USER_STACK_TOP).
+ *   Placed at 3 GiB to leave plenty of virtual space for heap growth.
  */
-#define USER_STACK_SIZE  4096u   /* one page                    */
+#define USER_STACK_SIZE  4096u          /* demo-task BSS stack, one page    */
+#define USER_STACK_TOP   0xC0000000u    /* per-process ELF stack top (excl) */
 
 /* ── exec_setjmp / exec_longjmp ─────────────────────────────────────────────
  *
@@ -73,21 +82,26 @@ void usermode_initialize(void);
 
 /* Jump to ring 3 and begin executing user_func.
  *
- * Builds an artificial iret frame on the kernel stack:
- *   SS    = USER_DS  (user data selector, RPL=3)
- *   ESP   = top of user stack page
- *   EFLAGS = 0x202  (IF=1, reserved bit 1 always set)
- *   CS    = USER_CS  (user code selector, RPL=3)
- *   EIP   = user_func
- *
- * When iret detects CS.RPL > CPL (ring 3 > ring 0) it performs a
- * full privilege-level change: pops ESP and SS from the frame, then
- * resumes at EIP with CPL=3.
+ * Uses the per-demo BSS stack (user_stack_page + USER_STACK_SIZE) as ESP.
+ * Suitable for built-in demo tasks that live in the kernel image.
  *
  * This function never returns to the caller.
  * usermode_initialize() must be called first.
  */
 void usermode_enter(void (*user_func)(void));
+
+/* Jump to ring 3 with an explicit user-mode stack pointer.
+ *
+ * Use this variant for ELF processes that have their own private stack
+ * page mapped in their page directory (e.g. at USER_STACK_TOP).
+ *
+ * Builds the same iret frame as usermode_enter() but uses user_esp_top
+ * instead of the static BSS stack address as the initial ring-3 ESP.
+ *
+ * This function never returns to the caller.
+ * usermode_initialize() must be called first.
+ */
+void usermode_enter_esp(void (*user_func)(void), uint32_t user_esp_top);
 
 /* ── Ring-3 demo tasks ───────────────────────────────────────────────────────
  *

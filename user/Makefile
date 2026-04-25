@@ -1,20 +1,22 @@
-# user/Makefile — build Quilon user-space programs
+# user/Makefile — build all Quilon user-space programs and the disk image.
 #
-# Produces bare ELF32 i386 executables loaded from the FAT16 disk and
-# run via the ring-3 shell command:  quilon> exec SHELL.ELF
+# Auto-discovery
+# ──────────────
+# Any subdirectory (except libc/) that contains a main.c is treated as a user
+# program.  A new program is added by creating user/<name>/main.c — no changes
+# to this Makefile are needed.
 #
-# Build targets
-# ─────────────
-#   hello.elf         — original assembly demo (no libc)
-#   shell/shell.elf   — ring-3 shell (section 7.2); launched by kernel_main
-#   hello_c/helloc.elf — C demo program (section 7.3)
+# Naming convention:  user/<dir>/main.c  →  user/<dir>/<dir>.elf
+#                     on disk:               <DIR>.ELF  (uppercased)
 #
-# Requirements:
-#   i686-elf-gcc   — Quilon cross-compiler toolchain
+# Targets
+# ───────
+#   make            — build libc + all user programs
+#   make disk       — build + write every ELF into $(DISK)
+#   make clean      — remove all build artefacts (including libc/)
 #
-# Usage:
-#   make           — build libc, then all ELF binaries
-#   make clean     — remove all build artefacts (including libc/)
+# Variables
+#   DISK   path to the disk image  (default: ../disk.img)
 
 CC = i686-elf-gcc
 
@@ -23,56 +25,64 @@ LIBC_A   = $(LIBC_DIR)/libc.a
 CRT0_O   = $(LIBC_DIR)/crt0.o
 
 # Flags for compiling user programs.
-#   -ffreestanding  : no host startup or headers
-#   -fno-pie        : no position-independent code
-#   -fno-stack-protector : no __stack_chk_fail dependency
-CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
-         -I$(LIBC_DIR)/include
+CFLAGS  = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
+          -I$(LIBC_DIR)/include
 
 # Flags for the final link step.
-#   LDFLAGS  — options that must appear before the object files
-#   LDLIBS   — libraries that must appear AFTER object files
-#              (the linker scans left-to-right; -lc/-lgcc must follow the
-#               objects that reference them so undefined symbols are resolved)
+# LDLIBS must appear AFTER object files (linker scans left-to-right).
 LDFLAGS = -m32 -ffreestanding -nostdlib -fno-pie -T link.ld
 LDLIBS  = -L$(LIBC_DIR) -lc -lgcc
 
-ELFS = hello.elf shell/shell.elf hello_c/helloc.elf
+# ── Auto-discover C programs ──────────────────────────────────────────────────
+# Scan for */main.c, strip the filename, exclude libc/.
+PROG_DIRS := $(filter-out libc,$(patsubst %/main.c,%,$(wildcard */main.c)))
+# Each dir produces <dir>/<dir>.elf
+PROG_ELFS := $(foreach d,$(PROG_DIRS),$(d)/$(d).elf)
 
-.PHONY: all clean libc
+# Assembly demo: lives at user/hello.S, defines its own _start, no libc.
+ASM_ELFS = hello.elf
 
-all: libc $(ELFS)
+# Disk image path (override: make disk DISK=/path/to/disk.img)
+DISK ?= ../disk.img
 
+.PHONY: all clean libc disk
+
+all: libc $(ASM_ELFS) $(PROG_ELFS)
+
+# ── libc ──────────────────────────────────────────────────────────────────────
 libc:
 	$(MAKE) -C $(LIBC_DIR)
 
-# ── Assembly hello demo (defines its own _start; no libc needed) ───────
-
+# ── Assembly hello demo ───────────────────────────────────────────────────────
 hello.o: hello.S
 	$(CC) -m32 -ffreestanding -fno-pie -c -o $@ $<
 
 hello.elf: hello.o link.ld
-	$(CC) -m32 -ffreestanding -nostdlib -fno-pie \
-	    -T link.ld -o $@ hello.o
+	$(CC) -m32 -ffreestanding -nostdlib -fno-pie -T link.ld -o $@ hello.o
 
-# ── Ring-3 shell (section 7.2) ─────────────────────────────────────────
-
-shell/main.o: shell/main.c
+# ── Generic compile rule for any discovered main.c ────────────────────────────
+%/main.o: %/main.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-shell/shell.elf: $(CRT0_O) shell/main.o $(LIBC_A) link.ld
-	$(CC) $(LDFLAGS) -o $@ $(CRT0_O) shell/main.o $(LDLIBS)
+# ── Per-program link rule (generated for each discovered directory) ────────────
+# Expands to, e.g.:
+#   shell/shell.elf: $(CRT0_O) shell/main.o $(LIBC_A) link.ld
+#       $(CC) $(LDFLAGS) -o $@ $(CRT0_O) shell/main.o $(LDLIBS)
+define PROG_link
+$(1)/$(1).elf: $$(CRT0_O) $(1)/main.o $$(LIBC_A) link.ld
+	$$(CC) $$(LDFLAGS) -o $$@ $$(CRT0_O) $(1)/main.o $$(LDLIBS)
+endef
+$(foreach d,$(PROG_DIRS),$(eval $(call PROG_link,$(d))))
 
-# ── Hello C demo (section 7.3) ─────────────────────────────────────────
+# ── Disk image ────────────────────────────────────────────────────────────────
+# Writes the assembly demo and every auto-discovered ELF into $(DISK).
+# To add a new program to the disk: just create user/<name>/main.c.
+disk: all
+	python3 ../tools/make_disk.py $(DISK) $(ASM_ELFS) $(PROG_ELFS)
 
-hello_c/main.o: hello_c/main.c
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-hello_c/helloc.elf: $(CRT0_O) hello_c/main.o $(LIBC_A) link.ld
-	$(CC) $(LDFLAGS) -o $@ $(CRT0_O) hello_c/main.o $(LDLIBS)
-
-# ── Clean ──────────────────────────────────────────────────────────────
+# ── Clean ─────────────────────────────────────────────────────────────────────
+PROG_OBJS := $(foreach d,$(PROG_DIRS),$(d)/main.o)
 
 clean:
 	$(MAKE) -C $(LIBC_DIR) clean
-	rm -f *.o $(ELFS) shell/main.o hello_c/main.o
+	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS)

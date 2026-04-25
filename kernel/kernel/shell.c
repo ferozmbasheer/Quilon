@@ -79,8 +79,10 @@ static void shell_cmd_exec(const char *path)
         paging_switch((uint32_t)(uintptr_t)proc_pd);
 
         usermode_initialize();
-        usermode_enter((void (*)(void))(uintptr_t)entry);
-        /* usermode_enter() does iret and never returns to here. */
+        /* Use the per-process stack mapped by elf_load_into() at
+         * USER_STACK_TOP - PAGE_SIZE, not the shared BSS demo stack. */
+        usermode_enter_esp((void (*)(void))(uintptr_t)entry, USER_STACK_TOP);
+        /* usermode_enter_esp() does iret and never returns to here. */
     }
 
     /*

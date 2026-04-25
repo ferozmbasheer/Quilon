@@ -67,6 +67,7 @@
 #include <kernel/kmalloc.h>
 #include <kernel/pmm.h>
 #include <kernel/paging.h>
+#include <kernel/usermode.h>
 #endif
 
 /* Maximum ELF file size accepted by the loader.
@@ -389,10 +390,42 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
         }
     }
 
+    /* ── Step 5: allocate and map a per-process user stack ──────────────── */
+    /*
+     * Each ELF process gets its own private 4-KiB stack page mapped at
+     * [USER_STACK_TOP - PAGE_SIZE, USER_STACK_TOP) in target_pd.
+     * Ring-3 ESP starts at USER_STACK_TOP (top of this page) and grows
+     * downward into it.
+     *
+     * Placing the stack high (near 3 GiB) keeps it well clear of the ELF
+     * text/data segments at 0x400000 and the heap above them, so no two
+     * processes can accidentally share stack memory even if they are both
+     * mapped at the same virtual addresses in different page directories.
+     */
+    uint8_t *stack_phys = (uint8_t *)pmm_alloc_page();
+    if (!stack_phys) {
+        printf("[elf] PMM out of pages for stack of '%s'\r\n", path);
+        kfree(buf);
+        return 0;
+    }
+    memset(stack_phys, 0, PAGE_SIZE);
+
+    if (paging_map_page_alloc_into(
+            target_pd,
+            USER_STACK_TOP - PAGE_SIZE,
+            (uint32_t)(uintptr_t)stack_phys,
+            PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+        printf("[elf] stack page mapping failed for '%s'\r\n", path);
+        pmm_free_page(stack_phys);
+        kfree(buf);
+        return 0;
+    }
+
     uint32_t entry = ehdr->e_entry;
     kfree(buf);
-    printf("[elf] '%s' ready in pd=0x%x — entry=0x%x\r\n",
-           path, (unsigned)(uintptr_t)target_pd, (unsigned)entry);
+    printf("[elf] '%s' ready in pd=0x%x — entry=0x%x  stack=0x%x\r\n",
+           path, (unsigned)(uintptr_t)target_pd,
+           (unsigned)entry, (unsigned)USER_STACK_TOP);
     return entry;
 }
 

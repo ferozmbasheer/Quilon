@@ -63,49 +63,29 @@ static uint8_t user_stack_page[USER_STACK_SIZE]
 
 void usermode_initialize(void)
 {
-    /* Guard: LTR sets the TSS "busy" bit in the GDT descriptor.  Issuing LTR
-     * again on an already-busy TSS raises a General Protection Fault.
-     * The paging steps are idempotent, so skip everything after the first call. */
-    static int initialized = 0;
-    if (initialized) return;
-    initialized = 1;
-
-    /* ── Step 1: load the TSS into the task register ────────────────────
-     * LTR marks the TSS descriptor in the GDT as "busy" and stores the
-     * selector in TR.  The CPU reads esp0/ss0 from this TSS whenever it
-     * needs to switch to ring 0 (e.g. on a ring-3 exception).
-     * Without this step any ring-3 fault causes an immediate triple-fault.
+    /* ── Step 1: load the TSS into the task register (once only) ────────
+     * LTR marks the TSS descriptor in the GDT as "busy".  Issuing LTR a
+     * second time on a busy TSS raises a General Protection Fault, so we
+     * guard this step with a static flag.
      */
-    asm volatile("ltr %0" :: "r"((uint16_t)TSS_SEL));
+    static int tss_loaded = 0;
+    if (!tss_loaded) {
+        asm volatile("ltr %0" :: "r"((uint16_t)TSS_SEL));
+        tss_loaded = 1;
+    }
 
-    /* ── Step 2: make first 4 MiB user-accessible ───────────────────────
-     * Our ring-3 demo functions live in the kernel text segment, which
-     * sits inside the first 4 MiB identity-mapped region.  For the CPU
-     * to let ring-3 code execute those pages, their PTEs must have the
-     * PAGE_USER bit set.
-     *
-     * Production note: a real OS maps user code into a separate virtual
-     * address range that the kernel does NOT share, preventing user code
-     * from reading or executing kernel memory.
+    /* ── Step 2: make first 4 MiB user-accessible in the active PD ──────
+     * paging_set_user_access() reads CR3, so it operates on whatever page
+     * directory is currently loaded — the calling process's private PD.
+     * This must run for EVERY process launch (not just the first), because
+     * each process has its own PD and needs PAGE_USER on PD[0] before
+     * ring-3 code can access the user stack in the first 4 MiB.
      */
     paging_set_user_access(0x00000000u, 0x00400000u);
-
-    /* ── Step 3: make the user stack writable + user-accessible ─────────
-     * The stack page is already covered by the first-4-MiB mapping above,
-     * but we set it explicitly to document intent and to ensure PAGE_WRITABLE
-     * is present (ring-3 needs to be able to push/pop on its stack).
-     */
-    uint32_t stack_base = (uint32_t)(uintptr_t)user_stack_page;
-    paging_set_user_access(stack_base, stack_base + USER_STACK_SIZE);
 }
 
-void usermode_enter(void (*user_func)(void))
+void usermode_enter_esp(void (*user_func)(void), uint32_t user_esp_top)
 {
-    /* Top of the user stack (stack grows downward; ESP points here
-     * before the first push inside user_func).                          */
-    uint32_t user_esp =
-        (uint32_t)(uintptr_t)user_stack_page + USER_STACK_SIZE;
-
     /* Load user-data selector into the segment registers that IRET does
      * not restore automatically (DS, ES, FS, GS).  Without this they
      * would still hold 0x10 (kernel data), and ring-3 code accessing data
@@ -125,7 +105,7 @@ void usermode_enter(void (*user_func)(void))
      *   EIP    ← pushed last  (top of frame)
      *   CS     ← user code selector (RPL=3 signals the privilege change)
      *   EFLAGS ← 0x202: IF=1 (enable hardware interrupts), bit 1 always 1
-     *   ESP    ← user stack pointer
+     *   ESP    ← user stack pointer (user_esp_top)
      *   SS     ← user stack/data selector (RPL=3)
      *
      * Pushing in reverse order because the stack grows downward:
@@ -133,14 +113,14 @@ void usermode_enter(void (*user_func)(void))
      * Then IRET pops them in the order listed above.                     */
     asm volatile(
         "push %0   \n\t"    /* SS    = USER_DS                  */
-        "push %1   \n\t"    /* ESP   = top of user stack        */
+        "push %1   \n\t"    /* ESP   = user_esp_top             */
         "push $0x202\n\t"   /* EFLAGS: IF=1, reserved bit 1     */
         "push %2   \n\t"    /* CS    = USER_CS                  */
         "push %3   \n\t"    /* EIP   = user_func                */
         "iret      \n\t"
         ::
           "r"((uint32_t)USER_DS),
-          "r"(user_esp),
+          "r"(user_esp_top),
           "r"((uint32_t)USER_CS),
           "r"((uint32_t)(uintptr_t)user_func)
         : "memory"
@@ -148,6 +128,14 @@ void usermode_enter(void (*user_func)(void))
 
     /* iret transfers control to ring 3 — this line is never reached. */
     __builtin_unreachable();
+}
+
+void usermode_enter(void (*user_func)(void))
+{
+    /* Demo tasks (user_task_demo etc.) use the static BSS stack page.   */
+    uint32_t user_esp =
+        (uint32_t)(uintptr_t)user_stack_page + USER_STACK_SIZE;
+    usermode_enter_esp(user_func, user_esp);
 }
 
 /* ── Ring-3 demo tasks ───────────────────────────────────────────────────────
