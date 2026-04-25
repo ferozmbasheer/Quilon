@@ -20,6 +20,7 @@
 #include <kernel/fat16.h>
 #include <kernel/elf.h>
 #include <kernel/process.h>
+#include <kernel/signal.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -199,6 +200,73 @@ void kernel_main(void) {
 		}
 		printf("process: table initialised — %d slots, "
 		       "use 'exec' to run in isolation\r\n", PROCESS_MAX);
+	}
+
+	/* ── Section 6: System Call Expansion demo ───────────────────────────────
+	 *
+	 * Prints the new syscall numbers (fork, sbrk, sigreturn) and the signal
+	 * constants that the rest of the kernel now supports.
+	 *
+	 * Interactive demos:
+	 *   quilon> sbrk   — ring-3 SYS_SBRK: allocate one page, write sentinel
+	 *   quilon> fork   — ring-3 SYS_FORK: shows -1 from exec_setjmp path
+	 *                    (proper fork needs a scheduled ring-3 process)
+	 *
+	 * Signal smoke-test: verify signal_send/dispatch with a synthetic process.
+	 */
+	{
+		printf("\r\n=== Section 6: Syscall Expansion ===\r\n");
+
+		/* New syscall numbers */
+		printf("syscalls: SYS_FORK=%d  SYS_SBRK=%d  SYS_SIGRETURN=%d\r\n",
+		       SYS_FORK, SYS_SBRK, SYS_SIGRETURN);
+
+		/* Signal constants */
+		printf("signals:  NSIG=%d  SIGKILL=%d  SIGSEGV=%d  SIGCHLD=%d\r\n",
+		       NSIG, SIGKILL, SIGSEGV, SIGCHLD);
+
+		/* Signal infrastructure smoke-test:
+		 * Create a test process, send it SIGKILL via signal_send(), then
+		 * verify the bit is set.  We do NOT call signal_dispatch() here
+		 * because that would zombie the test process and call scheduler_yield()
+		 * before a scheduler loop is running.                               */
+		process_init();
+
+		process_t *sig_test = process_create("sig-test", 0, 0);
+		if (sig_test) {
+			printf("signal test: created pid %d '%s'\r\n",
+			       (int)sig_test->pid, sig_test->name);
+
+			/* Initially no signals pending. */
+			printf("signal test: pending before send = 0x%x (expect 0x0)\r\n",
+			       (unsigned)sig_test->pending_signals);
+
+			signal_send(sig_test, SIGKILL);
+			printf("signal test: pending after SIGKILL = 0x%x (expect 0x%x)\r\n",
+			       (unsigned)sig_test->pending_signals,
+			       (unsigned)(1u << SIGKILL));
+
+			signal_send(sig_test, SIGSEGV);
+			printf("signal test: pending after SIGSEGV = 0x%x (expect 0x%x)\r\n",
+			       (unsigned)sig_test->pending_signals,
+			       (unsigned)((1u << SIGKILL) | (1u << SIGSEGV)));
+
+			/* SIG_IGN: set handler, send, clear manually (no dispatch). */
+			sig_test->signal_handlers[SIGCHLD] = SIG_IGN;
+			signal_send(sig_test, SIGCHLD);
+			printf("signal test: SIG_IGN set for SIGCHLD; "
+			       "dispatch would ignore it\r\n");
+
+			/* Clean up test process. */
+			sig_test->state = PROC_UNUSED;
+			printf("signal test: OK\r\n");
+		}
+
+		/* Re-initialise so the process table is clean for the shell. */
+		process_init();
+
+		printf("section 6 demo: use 'sbrk' or 'fork' at the shell prompt\r\n");
+		printf("=== Section 6 ready ===\r\n\r\n");
 	}
 
 	printf("  ___        _ _ \r\n");

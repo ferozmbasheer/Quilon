@@ -37,6 +37,7 @@ kernel/scheduler.o \
 kernel/process.o \
 kernel/usermode.o \
 kernel/syscall.o \
+kernel/signal.o \
 kernel/vfs.o \
 kernel/fat16.o \
 kernel/elf.o \

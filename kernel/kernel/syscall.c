@@ -47,7 +47,12 @@
 #include <kernel/elf.h>
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
+#include <kernel/signal.h>
+#include <string.h>
 #endif
+
+/* Virtual address where the user heap starts (just above typical ELF range). */
+#define USER_HEAP_START  0x00800000u
 
 /* ── Kernel-only initialisation ──────────────────────────────────────────────
  * int80_stub and IDT[] only exist in the kernel build (boot.S / interrupts.c).
@@ -315,6 +320,171 @@ void syscall_handler(syscall_regs_t *regs)
     }
 
     /* ────────────────────────────────────────────────────────────────────────
+     * SYS_FORK (9)
+     *   No arguments.
+     *   Returns: child PID in parent, 0 in child, -1 on failure.
+     *
+     * Steps (see ROADMAP2.md section 6.2):
+     *   1. Allocate child page directory (kernel half shared).
+     *   2. Copy all user pages: paging_fork_address_space().
+     *   3. Allocate child PCB via process_create().
+     *   4. Copy parent's syscall iret frame into child's kernel stack.
+     *   5. Patch child EAX = 0 (fork returns 0 in child).
+     *   6. Install 5-word context_switch frame pointing to fork_child_return.
+     *   7. Return child PID to parent (regs->eax set at end of handler).
+     *
+     * The child is placed in PROC_READY and will be scheduled by IRQ0.
+     * When first scheduled, context_switch rets to fork_child_return (boot.S),
+     * which restores the full register set and irets to the user's return EIP
+     * with EAX == 0.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_FORK: {
+#ifdef __is_kernel
+        if (!current_process) { ret = (uint32_t)-1; break; }
+
+        /* 1. Allocate child page directory. */
+        uint32_t *fork_pd = paging_create_address_space();
+        if (!fork_pd) { ret = (uint32_t)-1; break; }
+
+        /* 2. Copy user pages from parent's address space into child's. */
+        uint32_t *parent_pd = (uint32_t *)(uintptr_t)current_process->cr3;
+        if (paging_fork_address_space(parent_pd, fork_pd) != 0) {
+            pmm_free_page(fork_pd);
+            ret = (uint32_t)-1;
+            break;
+        }
+
+        /* 3. Allocate PCB.  entry=0 because kernel_esp is set manually. */
+        process_t *fork_child = process_create(
+            current_process->name, 0, (uint32_t)(uintptr_t)fork_pd);
+        if (!fork_child) {
+            pmm_free_page(fork_pd);
+            ret = (uint32_t)-1;
+            break;
+        }
+        fork_child->parent_pid = current_process->pid;
+        fork_child->heap_end   = current_process->heap_end;
+
+        /* 4. Copy the 64-byte int80_stub frame from parent's kernel stack.
+         *
+         * regs points to the ds slot at (kstack_top - 64).  The frame
+         * extends 64 bytes upward to kstack_top (including useresp/ss beyond
+         * the struct).
+         *
+         * We copy to the corresponding position in the child's kernel stack
+         * so the iret frame is at the same offset from the top.
+         */
+        uint8_t *child_ktop =
+            fork_child->kernel_stack + sizeof(fork_child->kernel_stack);
+
+        memcpy(child_ktop - 64, (const uint8_t *)regs, 64);
+
+        /* 5. Patch child EAX = 0.  EAX is at offset 32 from the ds slot
+         *    (i.e. 8 uint32_ts from the struct start: ds,edi,esi,ebp,esp,ebx,
+         *     edx,ecx = 8 × 4 = 32 bytes before eax).                      */
+        *((uint32_t *)(child_ktop - 64 + 32)) = 0u;
+
+        /* 6. Build the 5-word context_switch frame just below the iret frame.
+         *
+         * context_switch pops edi, esi, ebx, ebp, then rets.
+         * We pre-push them (high→low): fork_child_return, ebp=0, ebx=0, esi=0, edi=0
+         */
+        extern void fork_child_return(void);
+        uint32_t *fork_sp = (uint32_t *)(child_ktop - 64);
+        *(--fork_sp) = (uint32_t)(uintptr_t)fork_child_return;
+        *(--fork_sp) = 0u;   /* ebp */
+        *(--fork_sp) = 0u;   /* ebx */
+        *(--fork_sp) = 0u;   /* esi */
+        *(--fork_sp) = 0u;   /* edi — kernel_esp points here */
+        fork_child->kernel_esp = (uint32_t)(uintptr_t)fork_sp;
+
+        ret = fork_child->pid;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_SBRK (10)
+     *   EBX = increment (bytes, signed).  Negative increments shrink the heap.
+     *   Returns: old program break (void*) on success, -1 on OOM.
+     *
+     * sbrk(0) is a no-op that returns the current break (standard Unix idiom
+     * for querying the break without changing it).
+     *
+     * The heap starts at USER_HEAP_START (0x800000) the first time sbrk is
+     * called for a process whose heap_end == 0.
+     *
+     * If current_process is NULL (ring-3 code called from exec_setjmp path),
+     * a static anonymous break is used so the shell's `sbrk` command works
+     * without a scheduler-managed process context.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_SBRK: {
+#ifdef __is_kernel
+        int32_t  sbrk_inc = (int32_t)regs->ebx;
+
+        /* Resolve the current break pointer. */
+        static uint32_t anon_break = 0;   /* fallback when no PCB */
+        uint32_t *break_ptr =
+            current_process ? &current_process->heap_end : &anon_break;
+
+        if (*break_ptr == 0)
+            *break_ptr = USER_HEAP_START;
+
+        uint32_t old_brk = *break_ptr;
+        if (sbrk_inc == 0) { ret = old_brk; break; }  /* query only */
+
+        uint32_t new_brk = old_brk + (uint32_t)sbrk_inc;
+
+        /* Map into whichever page directory is currently loaded in CR3.
+         * In the exec_setjmp shell path, CR3 is already proc_pd (switched
+         * before usermode_enter).  Using paging_map_page_alloc() would write
+         * into the kernel's global page_directory[] instead — wrong PD.     */
+        uint32_t active_cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(active_cr3));
+        uint32_t *active_pd = (uint32_t *)(uintptr_t)active_cr3;
+
+        /* Allocate and map physical pages for the newly requested range.
+         * Page-align the start so we do not re-map already-covered pages.   */
+        uint32_t page_addr = old_brk & ~(PAGE_SIZE - 1u);
+        while (page_addr < new_brk) {
+            void *phys = pmm_alloc_page();
+            if (!phys) { ret = (uint32_t)-1; goto sbrk_done; }
+
+            if (paging_map_page_alloc_into(active_pd, page_addr,
+                                           (uint32_t)(uintptr_t)phys,
+                                           PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+                pmm_free_page(phys);
+                ret = (uint32_t)-1;
+                goto sbrk_done;
+            }
+            page_addr += PAGE_SIZE;
+        }
+        *break_ptr = new_brk;
+        ret = old_brk;
+        sbrk_done: break;
+#else
+        ret = (uint32_t)-1;
+        break;
+#endif
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_SIGRETURN (11)
+     *   No arguments.
+     *   Called by the signal handler trampoline stub after the user handler
+     *   returns.  Restores the original register context that was saved before
+     *   the signal was delivered.
+     *
+     *   TODO: actual signal stack frame restore.  For now this is a no-op
+     *   stub that satisfies the syscall table without crashing.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_SIGRETURN:
+        ret = 0;
+        break;
+
+    /* ────────────────────────────────────────────────────────────────────────
      * Unknown syscall
      * ──────────────────────────────────────────────────────────────────────── */
     default:
@@ -324,4 +494,12 @@ void syscall_handler(syscall_regs_t *regs)
     }
 
     regs->eax = ret;
+
+    /* Deliver any pending signals after the syscall return value is set.
+     * SYS_EXIT and scheduler_yield() are noreturn, so this only fires for
+     * syscalls that return normally.  signal_dispatch() is a no-op when
+     * current_process is NULL or has no pending signals.                   */
+#ifdef __is_kernel
+    signal_dispatch();
+#endif
 }

@@ -36,14 +36,18 @@ process_t *current_process = NULL;
 void process_init(void)
 {
     for (int i = 0; i < PROCESS_MAX; i++) {
-        process_table[i].state      = PROC_UNUSED;
-        process_table[i].pid        = (uint32_t)i;
-        process_table[i].parent_pid = 0;
-        process_table[i].kernel_esp = 0;
-        process_table[i].cr3        = 0;
-        process_table[i].entry      = 0;
-        process_table[i].exit_code  = 0;
-        process_table[i].name[0]    = '\0';
+        process_table[i].state           = PROC_UNUSED;
+        process_table[i].pid             = (uint32_t)i;
+        process_table[i].parent_pid      = 0;
+        process_table[i].kernel_esp      = 0;
+        process_table[i].cr3             = 0;
+        process_table[i].entry           = 0;
+        process_table[i].exit_code       = 0;
+        process_table[i].heap_end        = 0;
+        process_table[i].pending_signals = 0;
+        process_table[i].name[0]         = '\0';
+        for (int s = 0; s < NSIG; s++)
+            process_table[i].signal_handlers[s] = SIG_DFL;
     }
     current_process = NULL;
 }
@@ -58,12 +62,16 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
 
         process_t *p = &process_table[i];
 
-        p->pid        = (uint32_t)i;
-        p->parent_pid = current_process ? current_process->pid : 0;
-        p->state      = PROC_READY;
-        p->entry      = entry;
-        p->cr3        = cr3;
-        p->exit_code  = 0;
+        p->pid             = (uint32_t)i;
+        p->parent_pid      = current_process ? current_process->pid : 0;
+        p->state           = PROC_READY;
+        p->entry           = entry;
+        p->cr3             = cr3;
+        p->exit_code       = 0;
+        p->heap_end        = 0;
+        p->pending_signals = 0;
+        for (int s = 0; s < NSIG; s++)
+            p->signal_handlers[s] = SIG_DFL;
 
         /* Copy name (bounded, always NUL-terminated) */
         int j;

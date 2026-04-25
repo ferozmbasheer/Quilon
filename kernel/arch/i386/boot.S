@@ -284,6 +284,36 @@ process_first_run:
 1:  hlt
     jmp  1b
 
+/* ── fork() child return trampoline (section 6.2) ───────────────────────── */
+/*
+ * fork_child_return — entered by context_switch when a fork() child is first
+ * scheduled.  At this point, the child's kernel stack contains the full
+ * int80_stub return frame (copied from the parent by SYS_FORK), with EAX
+ * already patched to 0 (fork() returns 0 in the child).
+ *
+ * Stack layout on entry (ESP points at the saved DS word):
+ *   [esp+ 0]  ds          (saved caller segment)
+ *   [esp+ 4]  edi         \
+ *   [esp+ 8]  esi          |
+ *   [esp+12]  ebp          |  pusha save area
+ *   [esp+16]  esp_snap     |  (popa discards this slot)
+ *   [esp+20]  ebx          |
+ *   [esp+24]  edx          |
+ *   [esp+28]  ecx          |
+ *   [esp+32]  eax = 0     /  ← fork() returns 0 to child
+ *   [esp+36]  int_no (0x80)
+ *   [esp+40]  err_code (0)
+ *   [esp+44]  eip          \
+ *   [esp+48]  cs            |  CPU iret frame
+ *   [esp+52]  eflags        |
+ *   [esp+56]  useresp      /
+ *   [esp+60]  ss
+ *
+ * This is identical to the tail of int80_stub, so we expose it as a global
+ * label there rather than duplicating the code.
+ */
+.global fork_child_return
+
 /* ── int $0x80 system call stub ─────────────────────────────────────────── */
 /*
  * Entry point for `int $0x80` system calls.  Registered in the IDT with
@@ -320,6 +350,7 @@ int80_stub:
     push %esp        /* argument: pointer to syscall_regs_t                   */
     call syscall_handler
     add  $4, %esp    /* remove the esp-pointer argument                       */
+fork_child_return:   /* ← fork() child's first scheduling resumes here        */
     pop  %eax        /* pop saved ds value into eax (clobbers, then popa fix) */
     mov  %ax, %ds   /* restore caller's data segment                          */
     mov  %ax, %es

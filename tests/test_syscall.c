@@ -90,28 +90,40 @@ static syscall_regs_t make_regs(uint32_t syscall_no)
 static void test_syscall_numbers(void)
 {
     /* Values must be stable — user-space ABI depends on them */
-    ASSERT_EQ(SYS_WRITE,  1u, "SYS_WRITE  == 1");
-    ASSERT_EQ(SYS_GETPID, 2u, "SYS_GETPID == 2");
-    ASSERT_EQ(SYS_EXIT,   3u, "SYS_EXIT   == 3");
-    ASSERT_EQ(SYS_OPEN,   4u, "SYS_OPEN   == 4");
-    ASSERT_EQ(SYS_READ,   5u, "SYS_READ   == 5");
-    ASSERT_EQ(SYS_CLOSE,  6u, "SYS_CLOSE  == 6");
+    ASSERT_EQ(SYS_WRITE,     1u,  "SYS_WRITE     == 1");
+    ASSERT_EQ(SYS_GETPID,    2u,  "SYS_GETPID    == 2");
+    ASSERT_EQ(SYS_EXIT,      3u,  "SYS_EXIT      == 3");
+    ASSERT_EQ(SYS_OPEN,      4u,  "SYS_OPEN      == 4");
+    ASSERT_EQ(SYS_READ,      5u,  "SYS_READ      == 5");
+    ASSERT_EQ(SYS_CLOSE,     6u,  "SYS_CLOSE     == 6");
+    ASSERT_EQ(SYS_WAIT,      7u,  "SYS_WAIT      == 7");
+    ASSERT_EQ(SYS_EXEC,      8u,  "SYS_EXEC      == 8");
+    ASSERT_EQ(SYS_FORK,      9u,  "SYS_FORK      == 9");
+    ASSERT_EQ(SYS_SBRK,     10u,  "SYS_SBRK      == 10");
+    ASSERT_EQ(SYS_SIGRETURN, 11u, "SYS_SIGRETURN == 11");
 
     /* No two syscall numbers may be equal */
-    ASSERT(SYS_WRITE  != SYS_GETPID, "SYS_WRITE  != SYS_GETPID");
-    ASSERT(SYS_WRITE  != SYS_EXIT,   "SYS_WRITE  != SYS_EXIT");
-    ASSERT(SYS_GETPID != SYS_EXIT,   "SYS_GETPID != SYS_EXIT");
-    ASSERT(SYS_OPEN   != SYS_READ,   "SYS_OPEN   != SYS_READ");
-    ASSERT(SYS_OPEN   != SYS_CLOSE,  "SYS_OPEN   != SYS_CLOSE");
-    ASSERT(SYS_READ   != SYS_CLOSE,  "SYS_READ   != SYS_CLOSE");
+    ASSERT(SYS_WRITE  != SYS_GETPID,    "SYS_WRITE  != SYS_GETPID");
+    ASSERT(SYS_WRITE  != SYS_EXIT,      "SYS_WRITE  != SYS_EXIT");
+    ASSERT(SYS_GETPID != SYS_EXIT,      "SYS_GETPID != SYS_EXIT");
+    ASSERT(SYS_OPEN   != SYS_READ,      "SYS_OPEN   != SYS_READ");
+    ASSERT(SYS_OPEN   != SYS_CLOSE,     "SYS_OPEN   != SYS_CLOSE");
+    ASSERT(SYS_READ   != SYS_CLOSE,     "SYS_READ   != SYS_CLOSE");
+    ASSERT(SYS_FORK   != SYS_SBRK,     "SYS_FORK   != SYS_SBRK");
+    ASSERT(SYS_FORK   != SYS_SIGRETURN,"SYS_FORK   != SYS_SIGRETURN");
+    ASSERT(SYS_SBRK   != SYS_SIGRETURN,"SYS_SBRK   != SYS_SIGRETURN");
+    ASSERT(SYS_WAIT   != SYS_EXEC,     "SYS_WAIT   != SYS_EXEC");
 
     /* All defined syscall numbers must be positive */
-    ASSERT(SYS_WRITE  > 0u, "SYS_WRITE  > 0");
-    ASSERT(SYS_GETPID > 0u, "SYS_GETPID > 0");
-    ASSERT(SYS_EXIT   > 0u, "SYS_EXIT   > 0");
-    ASSERT(SYS_OPEN   > 0u, "SYS_OPEN   > 0");
-    ASSERT(SYS_READ   > 0u, "SYS_READ   > 0");
-    ASSERT(SYS_CLOSE  > 0u, "SYS_CLOSE  > 0");
+    ASSERT(SYS_WRITE     > 0u, "SYS_WRITE     > 0");
+    ASSERT(SYS_GETPID    > 0u, "SYS_GETPID    > 0");
+    ASSERT(SYS_EXIT      > 0u, "SYS_EXIT      > 0");
+    ASSERT(SYS_OPEN      > 0u, "SYS_OPEN      > 0");
+    ASSERT(SYS_READ      > 0u, "SYS_READ      > 0");
+    ASSERT(SYS_CLOSE     > 0u, "SYS_CLOSE     > 0");
+    ASSERT(SYS_FORK      > 0u, "SYS_FORK      > 0");
+    ASSERT(SYS_SBRK      > 0u, "SYS_SBRK      > 0");
+    ASSERT(SYS_SIGRETURN > 0u, "SYS_SIGRETURN > 0");
 }
 
 /* ── File descriptor constants ─────────────────────────────────────────── */
@@ -383,6 +395,39 @@ static void test_sys_close_returns_minus1_in_host(void)
  * 7. regs->eax is always written (no stale caller value)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 6c. Section-6 syscalls (host build — all return -1, no hardware/scheduler)
+ *
+ * SYS_FORK, SYS_SBRK, SYS_SIGRETURN are guarded by #ifdef __is_kernel.
+ * In the host build they return (uint32_t)-1 / ENOSYS equivalents.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_sys_fork_returns_minus1_in_host(void)
+{
+    syscall_regs_t r = make_regs(SYS_FORK);
+    syscall_handler(&r);
+    ASSERT_EQ(r.eax, (uint32_t)-1,
+              "SYS_FORK returns -1 in host build (no scheduler)");
+}
+
+static void test_sys_sbrk_returns_minus1_in_host(void)
+{
+    syscall_regs_t r = make_regs(SYS_SBRK);
+    r.ebx = 4096;   /* increment */
+    syscall_handler(&r);
+    ASSERT_EQ(r.eax, (uint32_t)-1,
+              "SYS_SBRK returns -1 in host build (no PMM/paging)");
+}
+
+static void test_sys_sigreturn_returns_zero(void)
+{
+    /* SYS_SIGRETURN is a no-op stub that returns 0 in both builds. */
+    syscall_regs_t r = make_regs(SYS_SIGRETURN);
+    syscall_handler(&r);
+    ASSERT_EQ(r.eax, 0u,
+              "SYS_SIGRETURN stub returns 0");
+}
+
 static void test_eax_is_always_overwritten(void)
 {
     /* Set eax to a sentinel value before the call.  After the call it must
@@ -436,6 +481,11 @@ int main(void)
     RUN_SUITE(test_sys_open_returns_minus1_in_host);
     RUN_SUITE(test_sys_read_returns_minus1_in_host);
     RUN_SUITE(test_sys_close_returns_minus1_in_host);
+
+    /* Section-6 syscalls (host build) */
+    RUN_SUITE(test_sys_fork_returns_minus1_in_host);
+    RUN_SUITE(test_sys_sbrk_returns_minus1_in_host);
+    RUN_SUITE(test_sys_sigreturn_returns_zero);
 
     /* General correctness */
     RUN_SUITE(test_eax_is_always_overwritten);

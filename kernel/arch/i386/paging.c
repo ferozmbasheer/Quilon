@@ -162,6 +162,48 @@ void paging_switch(uint32_t pd_phys)
  * No TLB flush is performed: the target page directory is not currently
  * loaded in CR3, so there are no stale TLB entries to invalidate.
  */
+int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd)
+{
+    /* Entry 0 is the shared kernel page table — already in child_pd[0].
+     * Walk entries 1-1023 for user pages.                                 */
+    for (int i = 1; i < 1024; i++) {
+        if (!(parent_pd[i] & PAGE_PRESENT))
+            continue;
+
+        /* Obtain a pointer to the parent's page table (identity-mapped). */
+        uint32_t *parent_pt = (uint32_t *)(parent_pd[i] & ~(uint32_t)0xFFF);
+
+        /* Allocate a fresh page table for the child. */
+        uint32_t *child_pt = (uint32_t *)pmm_alloc_page();
+        if (!child_pt) return -1;
+        memset(child_pt, 0, PAGE_SIZE);
+
+        /* Install in child PD with the same flags as the parent PDE. */
+        child_pd[i] = paging_make_entry(
+            (uint32_t)(uintptr_t)child_pt,
+            parent_pd[i] & (uint32_t)0xFFF);
+
+        /* Copy each present page from parent's PT into child's PT. */
+        for (int j = 0; j < 1024; j++) {
+            if (!(parent_pt[j] & PAGE_PRESENT))
+                continue;
+
+            uint32_t src_phys = parent_pt[j] & ~(uint32_t)0xFFF;
+            void *dst_phys = pmm_alloc_page();
+            if (!dst_phys) return -1;
+
+            /* Physical == virtual for identity-mapped first 4 MiB. */
+            memcpy(dst_phys, (const void *)(uintptr_t)src_phys, PAGE_SIZE);
+
+            /* Map in child's page table with same flags. */
+            child_pt[j] = paging_make_entry(
+                (uint32_t)(uintptr_t)dst_phys,
+                parent_pt[j] & (uint32_t)0xFFF);
+        }
+    }
+    return 0;
+}
+
 int paging_map_page_alloc_into(uint32_t *pd, uint32_t virt,
                                 uint32_t phys, uint32_t flags)
 {

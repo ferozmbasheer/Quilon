@@ -22,6 +22,9 @@
 #define SYS_CLOSE   6   /* close(fd) → 0 or -1                               */
 #define SYS_WAIT    7   /* wait(pid, &exit_code) → 0 on success, -1 on error */
 #define SYS_EXEC    8   /* exec(path) → child PID on success, -1 on failure  */
+#define SYS_FORK    9   /* fork() → child PID in parent, 0 in child, -1 err  */
+#define SYS_SBRK    10  /* sbrk(increment) → old break (void*), or -1 on OOM */
+#define SYS_SIGRETURN 11 /* sigreturn() — restore context after signal handler */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

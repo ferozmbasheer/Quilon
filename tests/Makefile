@@ -59,7 +59,7 @@ KERNEL_INCLUDES = -I../kernel/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal
 
 .PHONY: all build run clean help
 
@@ -181,6 +181,19 @@ PROCESS_SRC = ../kernel/kernel/process.c
 $(BINDIR)/test_process: test_process.c framework.h $(PROCESS_SRC) $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_process.c $(PROCESS_SRC) $(LIBC_STRING)
+
+# Signal tests
+# signal.c's send/bitmask logic is pure C (no asm, no scheduler).
+# process.c is needed because signal_send touches process_t.pending_signals.
+# The __is_kernel guard around signal_dispatch's scheduler_yield call is
+# absent in the host build, so only signal_send and the bitmask behaviour
+# are exercised.
+SIGNAL_SRC = ../kernel/kernel/signal.c
+
+$(BINDIR)/test_signal: test_signal.c framework.h \
+                       $(SIGNAL_SRC) $(PROCESS_SRC) $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_signal.c $(SIGNAL_SRC) $(PROCESS_SRC) $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

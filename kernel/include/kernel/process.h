@@ -15,6 +15,7 @@
 #define _KERNEL_PROCESS_H
 
 #include <stdint.h>
+#include <kernel/signal.h>   /* NSIG, SIG_DFL — used in process_t below */
 
 #define PROCESS_MAX        16    /* maximum concurrent processes               */
 #define PROCESS_NAME_LEN   16    /* max process name length (including NUL)    */
@@ -89,6 +90,33 @@ typedef struct process {
 
     /* Exit status, written by SYS_EXIT, read by SYS_WAIT.             */
     int          exit_code;
+
+    /*
+     * User heap (section 6.3 — SYS_SBRK).
+     *
+     * heap_end tracks the current program break (top of the heap).
+     * Initialised to 0; the first SYS_SBRK call sets it to USER_HEAP_START
+     * (0x800000) and then extends it by the requested increment.
+     *
+     * Each page in [old_break, new_break) is allocated by pmm_alloc_page()
+     * and mapped by paging_map_page_alloc() with PAGE_USER | PAGE_WRITABLE.
+     */
+    uint32_t     heap_end;          /* current program break; 0 = uninitialised */
+
+    /*
+     * Signal state (section 6.4).
+     *
+     * pending_signals: bitmask of signals awaiting delivery.
+     *   Bit n is set by signal_send(proc, n).
+     *   Bit n is cleared by signal_dispatch() when the signal is handled.
+     *
+     * signal_handlers[n]: how to handle signal n.
+     *   SIG_DFL (0): default action (usually terminate).
+     *   SIG_IGN (1): ignore.
+     *   other:       ring-3 user handler function pointer (delivery TBD).
+     */
+    uint32_t     pending_signals;
+    void       (*signal_handlers[NSIG])(int);
 
     char         name[PROCESS_NAME_LEN];
 

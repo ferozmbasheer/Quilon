@@ -258,3 +258,141 @@ void user_task_syscall(void)
     /* Unreachable — SYS_EXIT halts the CPU. */
     while (1) asm volatile("pause");
 }
+
+void user_task_sbrk(void)
+{
+    /* ── SYS_SBRK — extend the heap by one page ─────────────────────────────
+     *
+     * sbrk(increment) returns the old program break on success or -1 on OOM.
+     * Here we request one 4-KiB page and verify we can write to the memory. */
+
+    const int PAGE = 4096;
+    uint32_t old_brk;
+
+    asm volatile(
+        "int $0x80"
+        : "=a"(old_brk)
+        : "a"(10u),        /* SYS_SBRK = 10 */
+          "b"((uint32_t)PAGE)
+        : "memory"
+    );
+
+    if (old_brk == (uint32_t)-1) {
+        const char fail[] = "[ring3] sbrk(4096) failed: out of memory\r\n";
+        uint32_t dummy;
+        asm volatile(
+            "int $0x80"
+            : "=a"(dummy)
+            : "a"(1u), "b"(1u),
+              "c"((uint32_t)(uintptr_t)fail),
+              "d"((uint32_t)(sizeof(fail) - 1))
+            : "memory"
+        );
+    } else {
+        /* Write a sentinel value to the first word of the new page and
+         * read it back to confirm the mapping is writable.              */
+        volatile uint32_t *heap = (volatile uint32_t *)(uintptr_t)old_brk;
+        *heap = 0xDEADBEEFu;
+
+        if (*heap == 0xDEADBEEFu) {
+            const char ok[] =
+                "[ring3] sbrk: page allocated and writable (sentinel OK)\r\n";
+            uint32_t dummy;
+            asm volatile(
+                "int $0x80"
+                : "=a"(dummy)
+                : "a"(1u), "b"(1u),
+                  "c"((uint32_t)(uintptr_t)ok),
+                  "d"((uint32_t)(sizeof(ok) - 1))
+                : "memory"
+            );
+        } else {
+            const char bad[] = "[ring3] sbrk: sentinel mismatch!\r\n";
+            uint32_t dummy;
+            asm volatile(
+                "int $0x80"
+                : "=a"(dummy)
+                : "a"(1u), "b"(1u),
+                  "c"((uint32_t)(uintptr_t)bad),
+                  "d"((uint32_t)(sizeof(bad) - 1))
+                : "memory"
+            );
+        }
+    }
+
+    /* SYS_EXIT(0) — return control to the shell via exec_longjmp. */
+    asm volatile(
+        "int $0x80"
+        :: "a"(3u), "b"(0u)
+        : "memory"
+    );
+    while (1) asm volatile("pause");
+}
+
+void user_task_fork(void)
+{
+    /* ── SYS_FORK — create a child process ──────────────────────────────────
+     *
+     * fork() returns:
+     *   > 0 in the parent (child PID)
+     *   = 0 in the child
+     *   < 0 (i.e. (uint32_t)-1) on failure
+     *
+     * If called without a scheduler-managed context (current_process == NULL)
+     * the kernel returns -1; we print an informative message.               */
+
+    uint32_t fork_ret;
+    asm volatile(
+        "int $0x80"
+        : "=a"(fork_ret)
+        : "a"(9u)   /* SYS_FORK = 9 */
+        : "memory"
+    );
+
+    if (fork_ret == (uint32_t)-1) {
+        const char msg[] =
+            "[ring3] fork() returned -1 "
+            "(needs scheduler context; run via exec, not direct ring3)\r\n";
+        uint32_t dummy;
+        asm volatile(
+            "int $0x80"
+            : "=a"(dummy)
+            : "a"(1u), "b"(1u),
+              "c"((uint32_t)(uintptr_t)msg),
+              "d"((uint32_t)(sizeof(msg) - 1))
+            : "memory"
+        );
+    } else if (fork_ret == 0) {
+        /* Child: fork returned 0. */
+        const char msg[] = "[ring3] fork: I am the CHILD (fork returned 0)\r\n";
+        uint32_t dummy;
+        asm volatile(
+            "int $0x80"
+            : "=a"(dummy)
+            : "a"(1u), "b"(1u),
+              "c"((uint32_t)(uintptr_t)msg),
+              "d"((uint32_t)(sizeof(msg) - 1))
+            : "memory"
+        );
+    } else {
+        /* Parent: fork returned child PID. */
+        const char msg[] = "[ring3] fork: I am the PARENT (got child PID)\r\n";
+        uint32_t dummy;
+        asm volatile(
+            "int $0x80"
+            : "=a"(dummy)
+            : "a"(1u), "b"(1u),
+              "c"((uint32_t)(uintptr_t)msg),
+              "d"((uint32_t)(sizeof(msg) - 1))
+            : "memory"
+        );
+    }
+
+    /* SYS_EXIT(0) */
+    asm volatile(
+        "int $0x80"
+        :: "a"(3u), "b"(0u)
+        : "memory"
+    );
+    while (1) asm volatile("pause");
+}

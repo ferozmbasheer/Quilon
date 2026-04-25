@@ -1,6 +1,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef __is_kernel
+#include <kernel/process.h>
+#include <kernel/signal.h>
+#include <kernel/scheduler.h>
+#endif
+
 /* Must mirror exactly what is on the stack when exception_handler is called:
  *   [esp] pushed by us:   pointer to registers (the push %esp before call)
  *   then:  ds (push %eax after mov %ds,%ax)
@@ -52,6 +58,29 @@ static const char *exception_messages[] = {
 
 void exception_handler(registers_t *regs)
 {
+#ifdef __is_kernel
+    /*
+     * Page Fault (vector 14) from ring-3 code → send SIGSEGV.
+     *
+     * (regs->cs & 3) == 3 means the faulting instruction was at CPL=3.
+     * Rather than panicking the entire kernel for a user-space bug, we
+     * post SIGSEGV to the current process and call signal_dispatch() to
+     * terminate it gracefully (zombie → parent woken).
+     *
+     * If there is no current process (kernel-mode page fault), fall through
+     * to the usual panic below.
+     */
+    if (regs->int_no == 14 && (regs->cs & 3) == 3 && current_process) {
+        uint32_t fault_addr;
+        asm volatile("mov %%cr2, %0" : "=r"(fault_addr));
+        printf("\r\n[signal] pid %d: page fault at 0x%x (EIP=0x%x) → SIGSEGV\r\n",
+               (int)current_process->pid, (unsigned)fault_addr, (unsigned)regs->eip);
+        signal_send(current_process, SIGSEGV);
+        signal_dispatch();   /* terminates process; does not return */
+        __builtin_unreachable();
+    }
+#endif
+
     printf("\r\n--- KERNEL PANIC ---\r\n");
     if (regs->int_no < 32)
         printf("Exception: %s (vector %d)\r\n",

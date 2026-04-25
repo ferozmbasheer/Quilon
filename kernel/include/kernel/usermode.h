@@ -114,4 +114,20 @@ void user_task_spin(void);
  * Never returns — SYS_EXIT halts the CPU. */
 void user_task_syscall(void);
 
+/* Demonstrates SYS_SBRK (section 6.3) from ring-3 code.
+ *   1. Calls SYS_SBRK(4096) to extend the heap by one page.
+ *   2. Writes a sentinel value to the newly allocated memory and reads it back.
+ *   3. Reports success or failure via SYS_WRITE.
+ *   4. Calls SYS_EXIT(0) so the shell's exec_setjmp path can reclaim control. */
+void user_task_sbrk(void);
+
+/* Demonstrates SYS_FORK (section 6.2) from ring-3 code.
+ *   Calls SYS_FORK; parent prints the child PID, child prints "child running".
+ *   Both call SYS_EXIT(0).
+ *
+ *   NOTE: fork() only works when called from a scheduler-managed process
+ *   (current_process != NULL).  Called via the shell's exec_setjmp path
+ *   it returns -1.  See shell command `fork` which sets up a proper context. */
+void user_task_fork(void);
+
 #endif /* _KERNEL_USERMODE_H */

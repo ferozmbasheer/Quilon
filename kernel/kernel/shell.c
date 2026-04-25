@@ -91,7 +91,7 @@ static void shell_cmd_exec(const char *path)
     paging_switch((uint32_t)(uintptr_t)paging_get_kernel_pd());
     asm volatile("sti");
     exec_return_active = 0;
-    printf("exec: '%s' exited — back in kernel address space\r\n", path);
+    printf("exec: '%s' exited; back in kernel address space\r\n", path);
 }
 
 static void shell_cmd_cat(const char *path)
@@ -130,10 +130,54 @@ static void shell_cmd_ps(void)
     }
 }
 
+/* Run a ring-3 task via exec_setjmp so the shell regains control when the
+ * task calls SYS_EXIT.  Used by the `sbrk` and `fork` shell commands.     */
+static void shell_run_ring3_task(void (*task)(void), const char *label)
+{
+    printf("Running ring-3 task '%s' via exec_setjmp...\r\n", label);
+
+    /*
+     * Call usermode_initialize() BEFORE paging_create_address_space() so
+     * that page_directory[0] already has PAGE_USER set when it is copied
+     * into proc_pd[0].
+     *
+     * Why this order matters:
+     *   paging_create_address_space() copies page_directory[0] verbatim.
+     *   usermode_initialize() sets PAGE_USER on page_directory[0]'s PDE
+     *   AND on the PTEs in the shared first_page_table[].
+     *   If paging_create_address_space() runs first, proc_pd[0] gets a
+     *   stale PDE without PAGE_USER — ring-3 code in the first 4 MiB
+     *   triggers a protection-violation page fault (err_code 0x5).
+     *
+     * usermode_initialize() is idempotent (static initialized guard), so
+     * calling it here every time is safe.
+     */
+    usermode_initialize();
+
+    uint32_t *proc_pd = paging_create_address_space();
+    if (!proc_pd) {
+        printf("%s: out of memory (cannot allocate page directory)\r\n", label);
+        return;
+    }
+
+    if (exec_setjmp(&exec_return_buf) == 0) {
+        exec_return_active = 1;
+        paging_switch((uint32_t)(uintptr_t)proc_pd);
+        usermode_enter(task);
+    }
+
+    paging_switch((uint32_t)(uintptr_t)paging_get_kernel_pd());
+    asm volatile("sti");
+    exec_return_active = 0;
+    pmm_free_page(proc_pd);
+    printf("%s: task exited; back in kernel\r\n", label);
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
-        printf("          ring3, syscall, ps, ls, cat <file>, exec <file.elf>\r\n");
+        printf("          ring3, syscall, sbrk, fork, ps, ls, cat <file>,\r\n");
+        printf("          exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -159,6 +203,14 @@ static void shell_execute(const char *cmd) {
         usermode_initialize();
         usermode_enter(user_task_syscall);
         /* usermode_enter() never returns; SYS_EXIT halts the CPU. */
+    } else if (strcmp(cmd, "sbrk") == 0) {
+        printf("Demoing SYS_SBRK from ring 3...\r\n");
+        shell_run_ring3_task(user_task_sbrk, "sbrk");
+    } else if (strcmp(cmd, "fork") == 0) {
+        printf("Demoing SYS_FORK from ring 3...\r\n");
+        printf("(fork requires a scheduler-managed process; "
+               "exec_setjmp path returns -1 — expected)\r\n");
+        shell_run_ring3_task(user_task_fork, "fork");
     } else if (strcmp(cmd, "ps") == 0) {
         shell_cmd_ps();
     } else if (strcmp(cmd, "ls") == 0) {

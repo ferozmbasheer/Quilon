@@ -113,6 +113,29 @@ uint32_t *paging_create_address_space(void);
 void paging_switch(uint32_t pd_phys);
 
 /*
+ * paging_fork_address_space — copy all user pages from parent_pd to child_pd.
+ *
+ * Implements the memory-duplication step of fork() (section 6.2).  Walks
+ * every page directory entry in parent_pd EXCEPT entry 0 (the shared kernel
+ * page table, already installed in child_pd by paging_create_address_space).
+ *
+ * For each present PDE in [1, 1023]:
+ *   1. Allocate a new page table for child_pd.
+ *   2. For each present PTE in that page table:
+ *       a. Allocate a fresh physical page.
+ *       b. Copy the 4 KiB content (parent phys addr == parent virt addr
+ *          because all PMM pages are identity-mapped in the first 4 MiB).
+ *       c. Map it in child_pd at the same virtual address with the same flags.
+ *
+ * No TLB flush is needed: child_pd is not yet loaded in CR3.
+ *
+ * Returns 0 on success, -1 if pmm_alloc_page() fails (OOM).
+ * On failure, any pages already copied are leaked (acceptable for now —
+ * a production OS would free them on rollback).
+ */
+int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd);
+
+/*
  * paging_map_page_alloc_into — map a page into an arbitrary page directory.
  *
  * Like paging_map_page_alloc() but operates on an explicit pd[] instead of
