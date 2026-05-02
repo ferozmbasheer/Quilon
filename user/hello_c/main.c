@@ -1,5 +1,5 @@
 /*
- * Quilon OS — hello_c user-space demo (section 7.3)
+ * Quilon OS  - hello_c user-space demo (section 7.3)
  *
  * A minimal C program demonstrating the full user-space workflow:
  *   1. Compiled with i686-elf-gcc against the Quilon user libc.
@@ -9,11 +9,11 @@
  *
  * Features exercised
  * ──────────────────
- *   • printf / puts  — formatted output via SYS_WRITE
- *   • malloc / free  — heap allocator via SYS_SBRK
- *   • strlen / strcmp — user libc string functions
- *   • getpid          — SYS_GETPID syscall
- *   • exit(0)         — SYS_EXIT via crt0 after main() returns
+ *   • printf / puts   - formatted output via SYS_WRITE
+ *   • malloc / free   - heap allocator via SYS_SBRK
+ *   • strlen / strcmp  - user libc string functions
+ *   • getpid           - SYS_GETPID syscall
+ *   • exit(0)          - SYS_EXIT via crt0 after main() returns
  */
 
 #include <stdio.h>
@@ -50,6 +50,6 @@ int main(void)
     printf("strcmp(\"%s\",\"%s\") = %d  (expect <0)\r\n",
            a, b, strcmp(a, b));
 
-    puts("Done — returning to shell.");
+    puts("Done  - returning to shell.");
     return 0;
 }

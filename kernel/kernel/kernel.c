@@ -31,6 +31,11 @@ static int ata_sector_read(void *ctx, uint32_t lba, void *buf)
 	return ata_read_sectors((int)(uintptr_t)ctx, lba, 1, buf);
 }
 
+static int ata_sector_write(void *ctx, uint32_t lba, const void *buf)
+{
+	return ata_write_sectors((int)(uintptr_t)ctx, lba, 1, buf);
+}
+
 static fat16_ctx_t fs_ctx;
 
 void kernel_main(void) {
@@ -41,7 +46,7 @@ void kernel_main(void) {
 	keyboard_initialize();
 	scheduler_initialize();
 	process_init();
-	pit_initialize(100); /* 100 Hz — 10 ms tick */
+	pit_initialize(100); /* 100 Hz  - 10 ms tick */
 	syscall_initialize();
 
 	multiboot_info_t *mbi = (multiboot_info_t *)multiboot_info_ptr;
@@ -51,7 +56,7 @@ void kernel_main(void) {
 
 	/* ── Paging smoke-tests ─────────────────────────────────────────────
 	 * If any of these printf calls appear, the MMU is on and the kernel
-	 * is still executing — the identity mapping is working.             */
+	 * is still executing  - the identity mapping is working.             */
 
 	/* 1. Read CR0 back; bit 31 (0x80000000) must be set. */
 	uint32_t cr0;
@@ -62,13 +67,13 @@ void kernel_main(void) {
 	/* 2. Read back the VGA buffer address (0xB8000) through the MMU.
 	 * virtual 0xB8000 == physical 0xB8000 (identity-mapped in first 4MiB).
 	 * The printf above already wrote 'p' (0x70) to cell (0,0), so reading
-	 * vga[0] back should return 0x70 — proving the MMU round-trip works.  */
+	 * vga[0] back should return 0x70  - proving the MMU round-trip works.  */
 	uint8_t *vga = (uint8_t *)0xB8000;
 	printf("paging: VGA[0]=0x%x (expected 0x70='p' written by prior line)\r\n",
 	       (unsigned int)vga[0]);
 	printf("PMM: %d KB free\r\n", (int)(pmm_free_page_count() * (PAGE_SIZE / 1024)));
 
-	/* Sample allocations — smoke-test the PMM. */
+	/* Sample allocations  - smoke-test the PMM. */
 	void *page_a = pmm_alloc_page();
 	void *page_b = pmm_alloc_page();
 	printf("alloc: 0x%x  0x%x\r\n", (unsigned int)page_a, (unsigned int)page_b);
@@ -111,27 +116,28 @@ void kernel_main(void) {
 	kfree(b);
 	kfree(c);
 
-	/* 5. Dump the heap — should show a single large free block after all
+	/* 5. Dump the heap  - should show a single large free block after all
 	 *    the frees and coalescing above.                                   */
 	kmalloc_dump();
 
 	/* ── Filesystem initialisation ─────────────────────────────────────────
 	 * Probe the primary ATA bus for a disk and attempt to mount it as FAT16.
 	 * If no drive is found, or the first sector is not a valid FAT16 volume,
-	 * the shell still works — ls/cat will report "No filesystem mounted."  */
+	 * the shell still works  - ls/cat will report "No filesystem mounted."  */
 
 	int drives_found = ata_initialize();
 	printf("ata: %d drive(s) detected\r\n", drives_found);
 
-	/* Try master first, then slave — mount whichever has a valid FAT16 volume. */
+	/* Try master first, then slave  - mount whichever has a valid FAT16 volume. */
 	int fs_drive = -1;
 	if (ata_drive_present(ATA_MASTER))      fs_drive = ATA_MASTER;
 	else if (ata_drive_present(ATA_SLAVE))  fs_drive = ATA_SLAVE;
 
 	if (fs_drive >= 0) {
 		const char *drive_name = (fs_drive == ATA_MASTER) ? "master" : "slave";
-		fs_ctx.sector_read = ata_sector_read;
-		fs_ctx.ctx         = (void *)(uintptr_t)fs_drive;
+		fs_ctx.sector_read  = ata_sector_read;
+		fs_ctx.sector_write = ata_sector_write;
+		fs_ctx.ctx          = (void *)(uintptr_t)fs_drive;
 
 		if (fat16_mount(&fs_ctx) == 0) {
 			vfs_mount(&fat16_vfs_ops, &fs_ctx);
@@ -140,10 +146,10 @@ void kernel_main(void) {
 			printf("fs: primary %s is not a FAT16 volume\r\n", drive_name);
 		}
 	} else {
-		printf("fs: no disk detected — filesystem unavailable\r\n");
+		printf("fs: no disk detected  - filesystem unavailable\r\n");
 	}
 
-	/* ── ELF loader — scan for executable files (section 4.12) ───────────────
+	/* ── ELF loader  - scan for executable files (section 4.12) ───────────────
 	 * Walk the root directory and report any .ELF files found.
 	 * The ELF loader itself is invoked interactively with the shell `exec`
 	 * command:  quilon> exec HELLO.ELF
@@ -166,7 +172,7 @@ void kernel_main(void) {
 			    (nm[len - 3] == 'E' || nm[len - 3] == 'e') &&
 			    (nm[len - 2] == 'L' || nm[len - 2] == 'l') &&
 			    (nm[len - 1] == 'F' || nm[len - 1] == 'f')) {
-				printf("elf: found '%s' (%d bytes) — "
+				printf("elf: found '%s' (%d bytes)  - "
 				       "run with: exec %s\r\n",
 				       elf_ent.name, (int)elf_ent.size,
 				       elf_ent.name);
@@ -198,7 +204,7 @@ void kernel_main(void) {
 			pmm_free_page(pd_a);
 			pmm_free_page(pd_b);
 		}
-		printf("process: table initialised — %d slots, "
+		printf("process: table initialised  - %d slots, "
 		       "use 'exec' to run in isolation\r\n", PROCESS_MAX);
 	}
 
@@ -208,8 +214,8 @@ void kernel_main(void) {
 	 * constants that the rest of the kernel now supports.
 	 *
 	 * Interactive demos:
-	 *   quilon> sbrk   — ring-3 SYS_SBRK: allocate one page, write sentinel
-	 *   quilon> fork   — ring-3 SYS_FORK: shows -1 from exec_setjmp path
+	 *   quilon> sbrk    - ring-3 SYS_SBRK: allocate one page, write sentinel
+	 *   quilon> fork    - ring-3 SYS_FORK: shows -1 from exec_setjmp path
 	 *                    (proper fork needs a scheduled ring-3 process)
 	 *
 	 * Signal smoke-test: verify signal_send/dispatch with a synthetic process.
@@ -279,16 +285,16 @@ void kernel_main(void) {
 	 *
 	 * Attempt to load SHELL.ELF from the FAT16 disk and launch it as the
 	 * first ring-3 process.  This replaces the kernel's ring-0 shell_run()
-	 * call — the kernel's role after boot becomes: initialise hardware,
+	 * call  - the kernel's role after boot becomes: initialise hardware,
 	 * mount the disk, spawn SHELL.ELF, and yield to the scheduler.
 	 *
 	 * New in section 7:
-	 *   7.1  user/libc/       — user-space C library (stdio, stdlib, string)
+	 *   7.1  user/libc/        - user-space C library (stdio, stdlib, string)
 	 *                           with int $0x80 syscall stubs
-	 *   7.2  user/shell/      — ring-3 shell built against user libc
-	 *   7.3  user/hello_c/    — example C program using printf/malloc/exit
-	 *   SYS_READDIR (12)      — new syscall: enumerate root directory entries
-	 *   SYS_READ + FD_STDIN   — keyboard read path for ring-3 shell readline
+	 *   7.2  user/shell/       - ring-3 shell built against user libc
+	 *   7.3  user/hello_c/     - example C program using printf/malloc/exit
+	 *   SYS_READDIR (12)       - new syscall: enumerate root directory entries
+	 *   SYS_READ + FD_STDIN    - keyboard read path for ring-3 shell readline
 	 *
 	 * Fallback: if SHELL.ELF is not on disk (first build without section 7
 	 * user binaries), the kernel falls back to the ring-0 shell_run() so the
@@ -296,9 +302,9 @@ void kernel_main(void) {
 	 * ──────────────────────────────────────────────────────────────────────── */
 	printf("\r\n=== Section 7: User Space ===\r\n");
 	printf("user space: SYS_READDIR=%d  (ring-3 ls)\r\n", SYS_READDIR);
-	printf("user space: user/libc  — stdio/stdlib/string/syscall stubs\r\n");
-	printf("user space: user/shell — ring-3 C shell (SHELL.ELF)\r\n");
-	printf("user space: user/hello_c — C demo program (HELLOC.ELF)\r\n");
+	printf("user space: user/libc   - stdio/stdlib/string/syscall stubs\r\n");
+	printf("user space: user/shell  - ring-3 C shell (SHELL.ELF)\r\n");
+	printf("user space: user/hello_c  - C demo program (HELLOC.ELF)\r\n");
 
 	if (vfs_mounted()) {
 		/* Try to find and launch SHELL.ELF as the first ring-3 process. */
@@ -331,11 +337,11 @@ void kernel_main(void) {
 			}
 			pmm_free_page(shell_pd);
 		}
-		printf("user space: SHELL.ELF not found — falling back to "
+		printf("user space: SHELL.ELF not found  - falling back to "
 		       "kernel ring-0 shell\r\n");
 		printf("  (build user programs with: cd user && make)\r\n");
 	} else {
-		printf("user space: no filesystem — cannot load SHELL.ELF\r\n");
+		printf("user space: no filesystem  - cannot load SHELL.ELF\r\n");
 	}
 	printf("=== Section 7 fallback ===\r\n\r\n");
 

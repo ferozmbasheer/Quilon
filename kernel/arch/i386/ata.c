@@ -46,8 +46,9 @@
 #define ATA_SR_ERR   0x01   /* error flag                             */
 
 /* Command codes */
-#define ATA_CMD_READ_SECTORS  0x20   /* read up to 255 sectors, PIO  */
-#define ATA_CMD_IDENTIFY      0xEC   /* identify drive               */
+#define ATA_CMD_READ_SECTORS   0x20   /* read up to 255 sectors, PIO  */
+#define ATA_CMD_WRITE_SECTORS  0x30   /* write up to 255 sectors, PIO */
+#define ATA_CMD_IDENTIFY       0xEC   /* identify drive               */
 
 static int drive_present[2] = {0, 0};
 
@@ -191,6 +192,47 @@ int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf)
 
         ptr += 256;   /* advance buffer pointer by one sector (512 bytes) */
     }
+
+    return 0;
+}
+
+int ata_write_sectors(int drive, uint32_t lba, uint32_t count, const void *buf)
+{
+    if (drive < 0 || drive > 1 || !drive_present[drive])
+        return -1;
+    if (count == 0)
+        return 0;
+
+    const uint16_t *ptr = (const uint16_t *)buf;
+
+    if (ata_wait_not_busy() < 0)
+        return -1;
+
+    ata_outb(ATA_DRIVE_HEAD,
+             (uint8_t)(0xE0 | ((drive & 1) << 4) | ((lba >> 24) & 0x0F)));
+    ata_outb(ATA_SECTOR_COUNT, (uint8_t)(count & 0xFF));
+    ata_outb(ATA_LBA_LO,  (uint8_t)( lba        & 0xFF));
+    ata_outb(ATA_LBA_MID, (uint8_t)((lba >>  8) & 0xFF));
+    ata_outb(ATA_LBA_HI,  (uint8_t)((lba >> 16) & 0xFF));
+    ata_outb(ATA_STATUS,   ATA_CMD_WRITE_SECTORS);
+
+    /* Write each sector: wait for DRQ, then send 256 words (512 bytes).
+     * After the last sector, issue a cache-flush (0xE7) for data integrity. */
+    for (uint32_t s = 0; s < count; s++) {
+        if (ata_wait_drq() < 0)
+            return -1;
+
+        for (int w = 0; w < 256; w++) {
+            asm volatile("outw %w0, %w1"
+                         :: "a"(ptr[w]), "Nd"((uint16_t)ATA_DATA));
+        }
+        ptr += 256;
+    }
+
+    /* Cache flush: wait for BSY to clear, then flush write cache */
+    ata_wait_not_busy();
+    ata_outb(ATA_STATUS, 0xE7);   /* FLUSH CACHE command */
+    ata_wait_not_busy();
 
     return 0;
 }

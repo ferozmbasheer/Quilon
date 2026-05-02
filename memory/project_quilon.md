@@ -4,7 +4,25 @@ description: Current completion status of roadmap sections, next steps, and key 
 type: project
 ---
 
-Completed roadmap sections 4.1–4.12 (first roadmap) plus section 5 of ROADMAP2.md.
+Completed roadmap sections 4.1–4.12 (first roadmap) plus sections 5–8.1 of ROADMAP2.md.
+
+**Section 8.1 — FAT16 Write Support (completed 2026-05-01)**
+
+All write operations implemented and tested:
+
+- `fat16_write()` — writes to existing file clusters via read-modify-write, updates dir entry size
+- `fat16_create()` — allocates cluster, writes new root-dir entry (8.3 name, attr=0x20)
+- `fat16_remove()` — frees FAT cluster chain, marks dir entry deleted (0xE5)
+- `fat16_write_fat_entry()` / `fat16_alloc_cluster()` / `fat16_free_chain()` — helpers
+- `ata_sector_write()` wrapper added to kernel.c; `fs_ctx.sector_write` now wired to ATA
+- VFS layer (`vfs_write`, `vfs_create`, `vfs_remove`) was already plumbed in
+- Syscalls `SYS_CREATE` (13) and `SYS_REMOVE` (14) were already in syscall.c
+- Shell commands added: `touch <file>`, `write <file> <data>`, `rm <file>`, `fstest`
+- 57 fat16 unit tests + 47 VFS unit tests, all passing
+
+Bug fixes in fat16.c:
+- Forward declaration for `fat16_next_cluster` (used before its definition in `fat16_free_chain`)
+- `find_free:` label in `fat16_create` followed by declaration — fixed with `; ` null statement
 
 **Section 5 — Process Isolation (completed 2026-04-22)**
 
@@ -33,14 +51,4 @@ All four subsections implemented:
 - `SYS_WAIT` (syscall 7) blocks caller until child becomes ZOMBIE, then reaps
 - `SYS_EXEC` (syscall 8) creates child address space + PCB via `elf_load_into()`
 
-Additional changes:
-- `elf_load_into(path, target_pd)` in elf.c — loads ELF into arbitrary PD without touching kernel PD
-- `shell_cmd_exec` updated: creates per-process PD, uses `elf_load_into`, switches PD, restores on longjmp
-- Shell `ps` command added — shows process table
-- `kernel_main` initialises process table with `process_init()` and shows isolation demo
-- `gdt_set_kernel_stack()` added to gdt.c/gdt.h
-- 113 host-side unit tests pass (test_process.c + all prior suites)
-
-**Why:** Fixes the critical bug where every ELF was mapped into the global PD at 0x400000, meaning running two programs or re-running one would overwrite each other's memory.
-
-**Next section:** 6 — System Call Expansion (exec as proper syscall, fork, brk/sbrk, signals)
+**Next section:** 8.2 — Pipes

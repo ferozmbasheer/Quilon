@@ -136,3 +136,37 @@ readdir:
     int   $0x80
     popl  %ebx
     ret
+
+/* ── create(const char *path) → int ─────────────────────────────────── */
+.global create
+create:
+    pushl %ebx
+    movl  $13,     %eax     /* SYS_CREATE */
+    movl  8(%esp), %ebx     /* path */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── fremove(const char *path) → int ────────────────────────────────── */
+.global fremove
+fremove:
+    pushl %ebx
+    movl  $14,     %eax     /* SYS_REMOVE */
+    movl  8(%esp), %ebx     /* path */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── getticks(void) → unsigned int ──────────────────────────────────── */
+.global getticks
+getticks:
+    movl  $15, %eax         /* SYS_GETTICKS */
+    int   $0x80
+    ret
+
+/* ── gethz(void) → unsigned int ─────────────────────────────────────── */
+.global gethz
+gethz:
+    movl  $16, %eax         /* SYS_GETHZ */
+    int   $0x80
+    ret

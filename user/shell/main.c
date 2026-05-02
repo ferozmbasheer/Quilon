@@ -1,18 +1,18 @@
 /*
- * Quilon OS — ring-3 user-space shell (section 7.2)
+ * Quilon OS  - ring-3 user-space shell (section 7.2)
  *
  * This shell runs entirely at CPL=3, using only int $0x80 syscalls to
  * communicate with the kernel.  It is the Quilon equivalent of Unix's
- * /bin/sh or init — the first user-space process, PID 1.
+ * /bin/sh or init  - the first user-space process, PID 1.
  *
  * Commands
  * ────────
- *   help             — list available commands
- *   ls               — list files in the root directory (SYS_READDIR)
- *   cat <file>       — print a file to stdout (SYS_OPEN + SYS_READ)
- *   exec <file.elf>  — launch an ELF program as a child process and wait
- *   pid              — print the shell's own PID (SYS_GETPID)
- *   exit             — exit the shell (SYS_EXIT 0)
+ *   help              - list available commands
+ *   ls                - list files in the root directory (SYS_READDIR)
+ *   cat <file>        - print a file to stdout (SYS_OPEN + SYS_READ)
+ *   exec <file.elf>   - launch an ELF program as a child process and wait
+ *   pid               - print the shell's own PID (SYS_GETPID)
+ *   exit              - exit the shell (SYS_EXIT 0)
  *
  * Differences from the kernel ring-0 shell
  * ─────────────────────────────────────────
@@ -20,7 +20,7 @@
  *     Everything goes through syscalls.
  *   • exec spawns a proper child process (SYS_EXEC returns child PID); the
  *     shell waits for it with SYS_WAIT instead of using exec_setjmp.
- *   • A bug in this shell causes a SIGSEGV — not a kernel panic.
+ *   • A bug in this shell causes a SIGSEGV  - not a kernel panic.
  */
 
 #include <stdio.h>
@@ -32,7 +32,7 @@
 /* ── Terminal helpers ─────────────────────────────────────────────────── */
 
 /*
- * readline — read one line of text from stdin, echoing characters back.
+ * readline  - read one line of text from stdin, echoing characters back.
  *
  * Reads characters one-at-a-time via SYS_READ(FD_STDIN) until Enter
  * (\r or \n) is received or the buffer is full.  Supports backspace.
@@ -71,12 +71,21 @@ static int readline(char *buf, int size)
 static void cmd_help(void)
 {
     printf("Quilon ring-3 shell commands:\r\n");
-    printf("  help             — show this message\r\n");
-    printf("  ls               — list files in root directory\r\n");
-    printf("  cat <file>       — print file contents\r\n");
-    printf("  exec <file.elf>  — run an ELF program\r\n");
-    printf("  pid              — print shell PID\r\n");
-    printf("  exit             — exit the shell\r\n");
+    printf("  help                   - show this message\r\n");
+    printf("  ls                     - list files in root directory\r\n");
+    printf("  cat <file>             - print file contents\r\n");
+    printf("  touch <file>           - create an empty file\r\n");
+    printf("  write <file> <data>    - write text to a file\r\n");
+    printf("  rm <file>              - delete a file\r\n");
+    printf("  fstest                 - FAT16 write/read/remove demo\r\n");
+    printf("  exec <file.elf>        - run an ELF program\r\n");
+    printf("  pid                    - print shell PID\r\n");
+    printf("  ticks                  - raw PIT tick count\r\n");
+    printf("  seconds                - uptime in whole seconds\r\n");
+    printf("  clear / cls            - scroll screen\r\n");
+    printf("  sbrk                   - demo heap growth via SYS_SBRK\r\n");
+    printf("  fork                   - demo SYS_FORK with parent/child\r\n");
+    printf("  exit                   - exit the shell\r\n");
 }
 
 static void cmd_ls(void)
@@ -137,6 +146,158 @@ static void cmd_exec(const char *path)
     printf("exec: '%s' exited (code %d)\r\n", path, exit_code);
 }
 
+static void cmd_touch(const char *path)
+{
+    if (!path || path[0] == '\0') { printf("Usage: touch <file>\r\n"); return; }
+    if (create(path) == 0)
+        printf("Created '%s'\r\n", path);
+    else
+        printf("touch: '%s': already exists or disk full\r\n", path);
+}
+
+static void cmd_write(const char *args)
+{
+    /* Split "filename content..." at first space. */
+    if (!args || args[0] == '\0') {
+        printf("Usage: write <file> <data>\r\n");
+        return;
+    }
+    const char *p = args;
+    while (*p && *p != ' ') p++;
+    if (*p == '\0' || *(p + 1) == '\0') {
+        printf("Usage: write <file> <data>\r\n");
+        return;
+    }
+
+    /* Copy filename */
+    char fname[64];
+    int flen = (int)(p - args);
+    if (flen >= (int)sizeof(fname)) flen = (int)sizeof(fname) - 1;
+    int i;
+    for (i = 0; i < flen; i++) fname[i] = args[i];
+    fname[i] = '\0';
+
+    const char *content = p + 1;
+    int clen = strlen(content);
+
+    int fd = open(fname);
+    if (fd < 0) { printf("write: '%s': not found\r\n", fname); return; }
+
+    int n = write(fd, content, clen);
+    close(fd);
+
+    if (n >= 0)
+        printf("Wrote %d bytes to '%s'\r\n", n, fname);
+    else
+        printf("write: '%s': write failed\r\n", fname);
+}
+
+static void cmd_rm(const char *path)
+{
+    if (!path || path[0] == '\0') { printf("Usage: rm <file>\r\n"); return; }
+    if (fremove(path) == 0)
+        printf("Removed '%s'\r\n", path);
+    else
+        printf("rm: '%s': not found\r\n", path);
+}
+
+static void cmd_fstest(void)
+{
+    const char *fname   = "TEST.TXT";
+    const char *message = "Hello from FAT16 write!";
+
+    printf("=== FAT16 write demo ===\r\n");
+
+    printf("1. touch %s ... ", fname);
+    if (create(fname) != 0) { printf("FAILED\r\n"); return; }
+    printf("OK\r\n");
+
+    int fd = open(fname);
+    if (fd < 0) { printf("2. open failed\r\n"); goto cleanup; }
+    {
+        int n = write(fd, message, strlen(message));
+        close(fd);
+        printf("2. wrote %d bytes\r\n", n);
+    }
+
+    fd = open(fname);
+    if (fd < 0) { printf("3. re-open failed\r\n"); goto cleanup; }
+    {
+        char buf[64];
+        int n = read(fd, buf, (int)sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = '\0';
+            printf("3. read back: \"%s\"\r\n", buf);
+            printf("   %s\r\n", strcmp(buf, message) == 0
+                                 ? "content matches" : "MISMATCH");
+        } else {
+            printf("3. read failed\r\n");
+        }
+    }
+
+    printf("4. directory:\r\n");
+    {
+        dirent_t     ent;
+        unsigned int i = 0;
+        while (readdir(i, &ent) == 0) {
+            printf("   %-14s %u bytes\r\n", ent.name, ent.size);
+            i++;
+        }
+    }
+
+cleanup:
+    printf("5. rm %s ... ", fname);
+    printf("%s\r\n", fremove(fname) == 0 ? "OK" : "FAILED");
+    printf("=== done ===\r\n");
+}
+
+static void cmd_clear(void)
+{
+    int i;
+    for (i = 0; i < 25; i++)
+        write(STDOUT_FILENO, "\r\n", 2);
+}
+
+static void cmd_sbrk(void)
+{
+    char *p = (char *)sbrk(4096);
+    if ((int)(long)p == -1) {
+        printf("sbrk: failed\r\n");
+        return;
+    }
+    *p = 0x42;
+    printf("sbrk: got %p, sentinel=0x%x\r\n", (void *)p, (unsigned char)*p);
+}
+
+static void cmd_fork(void)
+{
+    int pid = fork();
+    if (pid < 0) {
+        printf("fork: failed\r\n");
+    } else if (pid == 0) {
+        printf("fork: child (PID=%d)\r\n", getpid());
+        exit(0);
+    } else {
+        int code = 0;
+        printf("fork: parent (PID=%d), child=%d\r\n", getpid(), pid);
+        wait(pid, &code);
+        printf("fork: child exited (code=%d)\r\n", code);
+    }
+}
+
+static void cmd_ticks(void)
+{
+    printf("%u\r\n", getticks());
+}
+
+static void cmd_seconds(void)
+{
+    unsigned int hz = gethz();
+    unsigned int secs = hz ? getticks() / hz : 0;
+    printf("%u\r\n", secs);
+}
+
 static void cmd_pid(void)
 {
     printf("shell PID: %d\r\n", getpid());
@@ -160,12 +321,22 @@ static void dispatch(char *line)
         while (*arg == ' ') arg++;  /* skip spaces before argument */
     }
 
-    if      (strcmp(cmd, "help") == 0) cmd_help();
-    else if (strcmp(cmd, "ls")   == 0) cmd_ls();
-    else if (strcmp(cmd, "cat")  == 0) cmd_cat(arg);
-    else if (strcmp(cmd, "exec") == 0) cmd_exec(arg);
-    else if (strcmp(cmd, "pid")  == 0) cmd_pid();
-    else if (strcmp(cmd, "exit") == 0) {
+    if      (strcmp(cmd, "help")   == 0) cmd_help();
+    else if (strcmp(cmd, "ls")     == 0) cmd_ls();
+    else if (strcmp(cmd, "cat")    == 0) cmd_cat(arg);
+    else if (strcmp(cmd, "touch")  == 0) cmd_touch(arg);
+    else if (strcmp(cmd, "write")  == 0) cmd_write(arg);
+    else if (strcmp(cmd, "rm")     == 0) cmd_rm(arg);
+    else if (strcmp(cmd, "fstest") == 0) cmd_fstest();
+    else if (strcmp(cmd, "exec")   == 0) cmd_exec(arg);
+    else if (strcmp(cmd, "ticks")   == 0) cmd_ticks();
+    else if (strcmp(cmd, "seconds") == 0) cmd_seconds();
+    else if (strcmp(cmd, "pid")    == 0) cmd_pid();
+    else if (strcmp(cmd, "clear")  == 0) cmd_clear();
+    else if (strcmp(cmd, "cls")    == 0) cmd_clear();
+    else if (strcmp(cmd, "sbrk")   == 0) cmd_sbrk();
+    else if (strcmp(cmd, "fork")   == 0) cmd_fork();
+    else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);
     }

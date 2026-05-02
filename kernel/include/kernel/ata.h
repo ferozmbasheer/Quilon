@@ -31,6 +31,14 @@ int ata_initialize(void);
  */
 int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf);
 
+/*
+ * ata_write_sectors — write `count` 512-byte sectors to `drive` at LBA `lba`.
+ *
+ * Uses PIO WRITE SECTORS (0x30) command.  `buf` must hold count × 512 bytes.
+ * Returns 0 on success, -1 on error or if the drive is not present.
+ */
+int ata_write_sectors(int drive, uint32_t lba, uint32_t count, const void *buf);
+
 /* Returns 1 if the given drive was detected during ata_initialize(). */
 int ata_drive_present(int drive);
 

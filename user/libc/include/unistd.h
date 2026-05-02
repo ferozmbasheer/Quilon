@@ -29,6 +29,10 @@
 #define SYS_SBRK      10
 #define SYS_SIGRETURN 11
 #define SYS_READDIR   12
+#define SYS_CREATE    13
+#define SYS_REMOVE    14
+#define SYS_GETTICKS  15
+#define SYS_GETHZ     16
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -54,5 +58,13 @@ void *sbrk(int increment);
 /* ── Directory enumeration ────────────────────────────────────────────── */
 #include <dirent.h>
 int readdir(unsigned int index, dirent_t *out);
+
+/* ── Filesystem write operations ──────────────────────────────────────── */
+int create(const char *path);   /* SYS_CREATE — create empty file, 0/-1 */
+int fremove(const char *path);  /* SYS_REMOVE — delete file, 0/-1       */
+
+/* ── Timer ────────────────────────────────────────────────────────────────── */
+unsigned int getticks(void);    /* SYS_GETTICKS — raw PIT tick counter   */
+unsigned int gethz(void);       /* SYS_GETHZ    — PIT frequency in Hz    */
 
 #endif /* _UNISTD_H */

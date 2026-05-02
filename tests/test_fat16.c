@@ -1,16 +1,17 @@
 /*
  * Quilon OS — FAT16 Driver Unit Tests
  *
- * Tests kernel/kernel/fat16.c using a hand-crafted 5-sector FAT16 image
+ * Tests kernel/kernel/fat16.c using a hand-crafted 10-sector FAT16 image
  * stored in a static byte array.  No hardware, no ATA.
  *
- * Test image layout (5 × 512 = 2560 bytes)
- * ─────────────────────────────────────────
+ * Test image layout (10 × 512 = 5120 bytes)
+ * ──────────────────────────────────────────
  *   Sector 0  Boot sector / BPB
- *   Sector 1  FAT (entries 0-4 populated)
+ *   Sector 1  FAT (entries 0-3 used, 4-9 free)
  *   Sector 2  Root directory (entries: HELLO.TXT, WORLD.TXT, then 0x00 end)
  *   Sector 3  Cluster 2 data  →  "Hello, World!"  (13 bytes)
  *   Sector 4  Cluster 3 data  →  "Hello World!"   (12 bytes)
+ *   Sectors 5-9  Clusters 4-8  (free — used by write tests)
  *
  * BPB values:
  *   bytes_per_sector    = 512
@@ -26,6 +27,7 @@
  *   data_lba     = 3   (2 + 16×32/512 = 2 + 1)
  *   cluster2_lba = 3   (data_lba + (2-2)×1)
  *   cluster3_lba = 4
+ *   cluster4_lba = 5   (first free — allocated by create/write tests)
  *
  * Build & run:  cd tests && make
  */
@@ -41,7 +43,7 @@
 
 /* ── In-memory disk image ────────────────────────────────────────────────── */
 
-#define DISK_SECTORS 5
+#define DISK_SECTORS 10
 static uint8_t disk[DISK_SECTORS * 512];
 
 static void build_image(void)
@@ -65,8 +67,8 @@ static void build_image(void)
     b[0x10] = 0x01;
     /* root_entry_count = 16 */
     b[0x11] = 0x10; b[0x12] = 0x00;
-    /* total_sectors_16 = 5 */
-    b[0x13] = 0x05; b[0x14] = 0x00;
+    /* total_sectors_16 = 10 */
+    b[0x13] = 0x0A; b[0x14] = 0x00;
     /* media_type = 0xF8 (fixed disk) */
     b[0x15] = 0xF8;
     /* sectors_per_fat = 1 */
@@ -135,14 +137,33 @@ static int mock_sector_read(void *ctx, uint32_t lba, void *buf)
     return 0;
 }
 
+static int mock_sector_write(void *ctx, uint32_t lba, const void *buf)
+{
+    (void)ctx;
+    if (lba >= DISK_SECTORS) return -1;
+    memcpy(disk + lba * 512, buf, 512);
+    return 0;
+}
+
 /* ── Shared test context ──────────────────────────────────────────────────── */
 
 static fat16_ctx_t g_fs;
 
 static void setup_fs(void)
 {
-    g_fs.sector_read = mock_sector_read;
-    g_fs.ctx         = (void *)0;
+    g_fs.sector_read  = mock_sector_read;
+    g_fs.sector_write = (void *)0;
+    g_fs.ctx          = (void *)0;
+}
+
+/* Reset disk to a clean state and configure read+write callbacks. */
+static void setup_write_fs(void)
+{
+    build_image();
+    g_fs.sector_read  = mock_sector_read;
+    g_fs.sector_write = mock_sector_write;
+    g_fs.ctx          = (void *)0;
+    fat16_mount(&g_fs);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -387,6 +408,180 @@ static void test_read_past_eof_offset(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * 5. fat16_create
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_create_new_file(void)
+{
+    setup_write_fs();
+    int r = fat16_vfs_ops.create(&g_fs, "TEST.TXT");
+    ASSERT_EQ(r, 0, "create TEST.TXT returns 0");
+}
+
+static void test_create_duplicate_fails(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.create(&g_fs, "TEST.TXT");
+    int r = fat16_vfs_ops.create(&g_fs, "TEST.TXT");
+    ASSERT_EQ(r, -1, "create duplicate name returns -1");
+}
+
+static void test_create_no_write_support(void)
+{
+    setup_write_fs();
+    g_fs.sector_write = (void *)0;   /* simulate read-only mount */
+    int r = fat16_vfs_ops.create(&g_fs, "NEWFILE.TXT");
+    ASSERT_EQ(r, -1, "create returns -1 when sector_write is NULL");
+}
+
+static void test_create_appears_in_readdir(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.create(&g_fs, "THIRD.TXT");
+
+    vfs_dirent_t ent;
+    int found = 0;
+    for (uint32_t i = 0; fat16_vfs_ops.readdir(&g_fs, i, &ent) == 0; i++) {
+        if (fw_streq(ent.name, "THIRD.TXT")) { found = 1; break; }
+    }
+    ASSERT_EQ(found, 1, "created file appears in readdir");
+}
+
+static void test_create_existing_name_blocked(void)
+{
+    /* Existing files in the image must also be blocked. */
+    setup_write_fs();
+    int r = fat16_vfs_ops.create(&g_fs, "HELLO.TXT");
+    ASSERT_EQ(r, -1, "create fails when name matches existing file");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 6. fat16_write
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_write_small_content(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.create(&g_fs, "WR.TXT");
+
+    vfs_node_t node;
+    fat16_vfs_ops.open(&g_fs, "WR.TXT", &node);
+
+    const uint8_t data[] = "hello";
+    int n = fat16_vfs_ops.write(&g_fs, &node, 0, 5, data);
+    ASSERT_EQ(n, 5, "write returns 5 for 5-byte input");
+}
+
+static void test_write_updates_file_size(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.create(&g_fs, "SZ.TXT");
+
+    vfs_node_t node;
+    fat16_vfs_ops.open(&g_fs, "SZ.TXT", &node);
+    ASSERT_EQ(node.size, 0u, "new file size is 0");
+
+    const uint8_t data[] = "size test";
+    fat16_vfs_ops.write(&g_fs, &node, 0, 9, data);
+
+    /* Re-open to read the persisted directory entry */
+    vfs_node_t node2;
+    fat16_vfs_ops.open(&g_fs, "SZ.TXT", &node2);
+    ASSERT_EQ(node2.size, 9u, "file size is 9 after writing 9 bytes");
+}
+
+static void test_write_read_roundtrip(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.create(&g_fs, "RT.TXT");
+
+    /* Write */
+    vfs_node_t node;
+    fat16_vfs_ops.open(&g_fs, "RT.TXT", &node);
+    const uint8_t msg[] = "roundtrip";
+    fat16_vfs_ops.write(&g_fs, &node, 0, 9, msg);
+
+    /* Read back */
+    vfs_node_t node2;
+    fat16_vfs_ops.open(&g_fs, "RT.TXT", &node2);
+    uint8_t buf[16];
+    int n = fat16_vfs_ops.read(&g_fs, &node2, 0, node2.size, buf);
+    ASSERT_EQ(n, 9, "read returns 9 bytes after write");
+    buf[n] = '\0';
+    ASSERT_STR_EQ((char *)buf, "roundtrip", "read-back content matches written data");
+}
+
+static void test_write_no_write_support(void)
+{
+    setup_write_fs();
+    g_fs.sector_write = (void *)0;
+
+    vfs_node_t node;
+    fat16_vfs_ops.open(&g_fs, "HELLO.TXT", &node);
+    const uint8_t d[] = "x";
+    int n = fat16_vfs_ops.write(&g_fs, &node, 0, 1, d);
+    ASSERT_EQ(n, -1, "write returns -1 when sector_write is NULL");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 7. fat16_remove
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_remove_existing_file(void)
+{
+    setup_write_fs();
+    int r = fat16_vfs_ops.remove(&g_fs, "HELLO.TXT");
+    ASSERT_EQ(r, 0, "remove HELLO.TXT returns 0");
+}
+
+static void test_remove_marks_entry_deleted(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.remove(&g_fs, "HELLO.TXT");
+
+    /* After removal, opening the file must fail. */
+    vfs_node_t node;
+    int r = fat16_vfs_ops.open(&g_fs, "HELLO.TXT", &node);
+    ASSERT_EQ(r, -1, "open after remove returns -1");
+}
+
+static void test_remove_frees_fat_entry(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.remove(&g_fs, "HELLO.TXT");
+
+    /* FAT entry 2 (HELLO.TXT's cluster) must now be 0x0000. */
+    uint8_t *fat = disk + 1 * 512;
+    uint16_t entry2 = (uint16_t)(fat[4] | ((uint16_t)fat[5] << 8));
+    ASSERT_EQ(entry2, (uint16_t)0x0000, "FAT entry for removed file is freed (0x0000)");
+}
+
+static void test_remove_nonexistent_fails(void)
+{
+    setup_write_fs();
+    int r = fat16_vfs_ops.remove(&g_fs, "NOFILE.TXT");
+    ASSERT_EQ(r, -1, "remove non-existent file returns -1");
+}
+
+static void test_remove_no_write_support(void)
+{
+    setup_write_fs();
+    g_fs.sector_write = (void *)0;
+    int r = fat16_vfs_ops.remove(&g_fs, "HELLO.TXT");
+    ASSERT_EQ(r, -1, "remove returns -1 when sector_write is NULL");
+}
+
+static void test_remove_then_create_reuses_slot(void)
+{
+    setup_write_fs();
+    fat16_vfs_ops.remove(&g_fs, "HELLO.TXT");
+
+    /* Creating a new file should succeed (free slot exists). */
+    int r = fat16_vfs_ops.create(&g_fs, "NEWFILE.TXT");
+    ASSERT_EQ(r, 0, "create succeeds after remove (slot reused)");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * main
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -419,6 +614,27 @@ int main(void)
     RUN_SUITE(test_read_second_file);
     RUN_SUITE(test_read_zero_len);
     RUN_SUITE(test_read_past_eof_offset);
+
+    /* create */
+    RUN_SUITE(test_create_new_file);
+    RUN_SUITE(test_create_duplicate_fails);
+    RUN_SUITE(test_create_no_write_support);
+    RUN_SUITE(test_create_appears_in_readdir);
+    RUN_SUITE(test_create_existing_name_blocked);
+
+    /* write */
+    RUN_SUITE(test_write_small_content);
+    RUN_SUITE(test_write_updates_file_size);
+    RUN_SUITE(test_write_read_roundtrip);
+    RUN_SUITE(test_write_no_write_support);
+
+    /* remove */
+    RUN_SUITE(test_remove_existing_file);
+    RUN_SUITE(test_remove_marks_entry_deleted);
+    RUN_SUITE(test_remove_frees_fat_entry);
+    RUN_SUITE(test_remove_nonexistent_fails);
+    RUN_SUITE(test_remove_no_write_support);
+    RUN_SUITE(test_remove_then_create_reuses_slot);
 
     TEST_SUMMARY();
 }

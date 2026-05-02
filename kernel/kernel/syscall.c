@@ -49,6 +49,7 @@
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
 #include <kernel/signal.h>
+#include <kernel/pit.h>
 #include <string.h>
 #endif
 
@@ -128,6 +129,11 @@ void syscall_handler(syscall_regs_t *regs)
                 serial_putchar(buf[i]);
 #endif
             ret = len;
+#ifdef __is_kernel
+        } else if ((int)regs->ebx >= VFS_FD_BASE && buf != NULL) {
+            /* Forward file-descriptor writes to the VFS layer (§8.1). */
+            ret = (uint32_t)vfs_write((int)regs->ebx, buf, len);
+#endif
         } else {
             ret = 0;
         }
@@ -522,6 +528,64 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
         break;
     }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_CREATE (13)
+     *   EBX = pointer to null-terminated path string (user-space address).
+     *   Returns: 0 on success, -1 on failure.
+     *
+     * Creates a new empty file in the root directory.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_CREATE: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        ret = (path != (void *)0) ? (uint32_t)vfs_create(path) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_REMOVE (14)
+     *   EBX = pointer to null-terminated path string.
+     *   Returns: 0 on success, -1 on failure.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_REMOVE: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        ret = (path != (void *)0) ? (uint32_t)vfs_remove(path) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_GETTICKS (15)
+     *   No arguments.
+     *   Returns: current PIT tick count as uint32_t.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_GETTICKS:
+#ifdef __is_kernel
+        ret = pit_get_ticks();
+#else
+        ret = 0;
+#endif
+        break;
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_GETHZ (16)
+     *   No arguments.
+     *   Returns: PIT frequency in Hz as uint32_t.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_GETHZ:
+#ifdef __is_kernel
+        ret = pit_get_hz();
+#else
+        ret = 0;
+#endif
+        break;
 
     /* ────────────────────────────────────────────────────────────────────────
      * Unknown syscall

@@ -21,18 +21,23 @@
  * vfs_node_t — open file state.
  *
  * An entry in the global file descriptor table.  The driver fills this in
- * during open(); the driver reads it back on read() and close().
+ * during open(); the driver reads it back on read(), write(), and close().
  *
- * `inode` is opaque to the VFS layer: the driver stores whatever identifier
- * it needs (e.g. a FAT16 starting cluster number).
- * `offset` is maintained by the VFS layer and advanced on each vfs_read().
+ * `inode` is opaque to the VFS layer: the FAT16 driver stores the starting
+ * cluster number here.
+ * `dir_sector` and `dir_entry_idx` let the FAT16 driver update the directory
+ * entry (size, first_cluster) on write without re-scanning.  Other drivers
+ * may leave them zero.
+ * `offset` is maintained by the VFS layer and advanced on each read/write.
  */
 typedef struct {
-    uint32_t  inode;    /* driver-internal node identifier     */
-    uint32_t  size;     /* file size in bytes                  */
-    uint8_t   type;     /* VFS_TYPE_FILE or VFS_TYPE_DIR       */
-    uint8_t   in_use;   /* 1 = slot occupied, 0 = free         */
-    uint32_t  offset;   /* current byte position for reads     */
+    uint32_t  inode;          /* driver-internal node identifier (e.g. cluster) */
+    uint32_t  size;           /* file size in bytes                              */
+    uint8_t   type;           /* VFS_TYPE_FILE or VFS_TYPE_DIR                   */
+    uint8_t   in_use;         /* 1 = slot occupied, 0 = free                     */
+    uint32_t  offset;         /* current byte position for reads/writes          */
+    uint32_t  dir_sector;     /* LBA of the sector holding this file's dir entry */
+    uint8_t   dir_entry_idx;  /* index of the dir entry within that sector       */
 } vfs_node_t;
 
 /*
@@ -54,16 +59,28 @@ typedef struct {
  *            success; return -1 if not found.
  *   read:    Copy `size` bytes starting at byte `offset` of `node` into
  *            `buf`.  Return bytes actually read, or -1 on error.
+ *   write:   Write `size` bytes from `buf` into `node` starting at `offset`.
+ *            Extends the file and updates the directory entry if needed.
+ *            Return bytes written, or -1 on error.  NULL = write unsupported.
  *   readdir: Return the `index`-th directory entry in `*out` (index starts
  *            at 0).  Return 0 on success, -1 at end-of-directory.
  *   close:   Release driver-side resources for this node.  May be a no-op.
+ *   create:  Create a new empty file at `path`.  Return 0 on success, -1 on
+ *            error (name invalid, disk full, already exists).  NULL = unsupported.
+ *   remove:  Delete the file at `path`: free its cluster chain and mark its
+ *            directory entry deleted.  Return 0 on success, -1 on error.
+ *            NULL = unsupported.
  */
 typedef struct {
     int  (*open)   (void *ctx, const char *path, vfs_node_t *out);
     int  (*read)   (void *ctx, vfs_node_t *node, uint32_t offset,
                     uint32_t size, uint8_t *buf);
+    int  (*write)  (void *ctx, vfs_node_t *node, uint32_t offset,
+                    uint32_t size, const uint8_t *buf);           /* NEW */
     int  (*readdir)(void *ctx, uint32_t index, vfs_dirent_t *out);
     void (*close)  (void *ctx, vfs_node_t *node);
+    int  (*create) (void *ctx, const char *path);                 /* NEW */
+    int  (*remove) (void *ctx, const char *path);                 /* NEW */
 } vfs_ops_t;
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
@@ -97,6 +114,29 @@ int  vfs_read(int fd, void *buf, uint32_t len);
 
 /* vfs_close — release a file descriptor.  Returns 0 or -1. */
 int  vfs_close(int fd);
+
+/*
+ * vfs_write — write up to `len` bytes from `buf` into `fd`.
+ *
+ * Advances the internal offset.  Extends the file if writing past EOF.
+ * Returns bytes written, or -1 if the driver does not support writes.
+ */
+int  vfs_write(int fd, const void *buf, uint32_t len);
+
+/*
+ * vfs_create — create a new empty file at `path`.
+ *
+ * Returns 0 on success, -1 on failure (no FS, unsupported, name invalid,
+ * disk full, or the file already exists).
+ */
+int  vfs_create(const char *path);
+
+/*
+ * vfs_remove — delete the file at `path`.
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int  vfs_remove(const char *path);
 
 /*
  * vfs_readdir — read the `index`-th directory entry into `*out`.

@@ -89,15 +89,123 @@ typedef struct __attribute__((packed)) {
 /* FAT entry end-of-chain range */
 #define FAT16_EOC  0xFFF8u
 
-/* ── Shared sector buffer ────────────────────────────────────────────────── */
+/* ── Forward declarations ────────────────────────────────────────────────── */
+static uint16_t fat16_next_cluster(fat16_ctx_t *fs, uint16_t cluster);
+
+/* ── Shared sector buffers ───────────────────────────────────────────────── */
 /*
- * One 512-byte buffer reused across all I/O.  Safe for a single-task kernel;
- * callers must be careful not to hold a pointer into this buffer across
- * another read call.
+ * sector_buf:  metadata I/O — FAT table reads/writes and root-directory
+ *              sector reads/writes.
+ * data_buf:    data-cluster read-modify-write in fat16_write().
+ *
+ * Using two buffers prevents fat16_alloc_cluster() (which reads a FAT sector
+ * into sector_buf) from clobbering an in-progress data-sector modification.
+ * Safe for a single-task, non-preemptive kernel.
  */
 static uint8_t sector_buf[512];
+static uint8_t data_buf[512];
 
 /* ── Internal helpers ────────────────────────────────────────────────────── */
+
+/*
+ * fat16_write_fat_entry — set the FAT entry for `cluster` to `value`.
+ *
+ * Performs a read-modify-write on the FAT sector containing the entry.
+ * Uses sector_buf.  Returns 0 on success, -1 on I/O error.
+ */
+static int fat16_write_fat_entry(fat16_ctx_t *fs,
+                                  uint16_t cluster, uint16_t value)
+{
+    if (!fs->sector_write) return -1;
+
+    uint32_t fat_offset = (uint32_t)cluster * 2;
+    uint32_t fat_sector = fs->fat_lba + fat_offset / 512;
+    uint32_t entry_off  = fat_offset % 512;
+
+    if (fs->sector_read(fs->ctx, fat_sector, sector_buf) < 0) return -1;
+    sector_buf[entry_off]     = (uint8_t)(value & 0xFF);
+    sector_buf[entry_off + 1] = (uint8_t)(value >> 8);
+    if (fs->sector_write(fs->ctx, fat_sector, sector_buf) < 0) return -1;
+    return 0;
+}
+
+/*
+ * fat16_alloc_cluster — find a free FAT entry, mark it end-of-chain (0xFFFF),
+ *                       and return the cluster number.
+ *
+ * Returns a cluster number >= 2 on success, 0 on disk-full or I/O error.
+ * Uses sector_buf.
+ */
+static uint16_t fat16_alloc_cluster(fat16_ctx_t *fs)
+{
+    if (!fs->sector_write) return 0;
+
+    /* Each 512-byte FAT sector holds 256 two-byte entries. */
+    int entries_per_sector = (int)(512 / 2);
+
+    for (uint32_t sec = 0; sec < fs->sectors_per_fat; sec++) {
+        if (fs->sector_read(fs->ctx, fs->fat_lba + sec, sector_buf) < 0)
+            return 0;
+
+        for (int i = 0; i < entries_per_sector; i++) {
+            uint16_t cluster = (uint16_t)(sec * (uint32_t)entries_per_sector + i);
+            if (cluster < 2) continue;   /* entries 0 and 1 are reserved */
+
+            uint16_t entry = (uint16_t)( (uint16_t)sector_buf[i * 2]
+                                       | ((uint16_t)sector_buf[i * 2 + 1] << 8) );
+            if (entry == 0x0000) {
+                /* Mark as end-of-chain and write back */
+                sector_buf[i * 2]     = 0xFF;
+                sector_buf[i * 2 + 1] = 0xFF;
+                if (fs->sector_write(fs->ctx, fs->fat_lba + sec, sector_buf) < 0)
+                    return 0;
+                return cluster;
+            }
+        }
+    }
+    return 0;   /* disk full */
+}
+
+/*
+ * fat16_free_chain — walk the FAT chain from `first_cluster` and mark every
+ *                    entry as free (0x0000).  Used by fat16_remove().
+ *
+ * Uses sector_buf.  Returns 0 on success, -1 on error.
+ */
+static int fat16_free_chain(fat16_ctx_t *fs, uint16_t first_cluster)
+{
+    uint16_t cluster = first_cluster;
+    while (cluster >= 2 && cluster < (uint16_t)FAT16_EOC) {
+        uint16_t next = fat16_next_cluster(fs, cluster);   /* reads sector_buf */
+        if (fat16_write_fat_entry(fs, cluster, 0x0000) < 0)
+            return -1;
+        cluster = next;
+    }
+    return 0;
+}
+
+/*
+ * fat16_update_dirent — update the directory entry at `dir_sector`[`idx`]
+ *                       with the new file size and (optionally) first_cluster.
+ *
+ * Pass first_cluster = 0 to leave the existing cluster field unchanged.
+ * Uses sector_buf.  Returns 0 on success, -1 on error.
+ */
+static int fat16_update_dirent(fat16_ctx_t *fs,
+                                uint32_t dir_sector, uint8_t idx,
+                                uint32_t new_size, uint16_t new_first_cluster)
+{
+    if (!fs->sector_write) return -1;
+    if (fs->sector_read(fs->ctx, dir_sector, sector_buf) < 0) return -1;
+
+    fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+    dir[idx].file_size = new_size;
+    if (new_first_cluster != 0)
+        dir[idx].first_cluster = new_first_cluster;
+
+    if (fs->sector_write(fs->ctx, dir_sector, sector_buf) < 0) return -1;
+    return 0;
+}
 
 /*
  * fat16_next_cluster — look up the FAT entry for `cluster`.
@@ -206,12 +314,14 @@ static int fat16_open(void *ctx, const char *path, vfs_node_t *out)
 
             if (memcmp(dir[i].name, name83, 8) == 0 &&
                 memcmp(dir[i].ext,  ext83,  3) == 0) {
-                out->inode  = dir[i].first_cluster;
-                out->size   = dir[i].file_size;
-                out->type   = (dir[i].attr & FAT_ATTR_DIRECTORY)
-                                ? VFS_TYPE_DIR : VFS_TYPE_FILE;
-                out->in_use = 1;
-                out->offset = 0;
+                out->inode         = dir[i].first_cluster;
+                out->size          = dir[i].file_size;
+                out->type          = (dir[i].attr & FAT_ATTR_DIRECTORY)
+                                       ? VFS_TYPE_DIR : VFS_TYPE_FILE;
+                out->in_use        = 1;
+                out->offset        = 0;
+                out->dir_sector    = fs->root_dir_lba + sec;
+                out->dir_entry_idx = (uint8_t)i;
                 return 0;
             }
         }
@@ -340,6 +450,284 @@ static int fat16_readdir(void *ctx, uint32_t index, vfs_dirent_t *out)
     return -1;
 }
 
+/*
+ * fat16_write — write `size` bytes from `buf` into `node` starting at byte
+ *               `offset`.
+ *
+ * Behaviour:
+ *   • offset must be <= node->size (no sparse-file gaps).
+ *   • Existing clusters are reused; new clusters are allocated and chained
+ *     when the write extends past the last cluster.
+ *   • For a freshly created file with inode == 0, the first cluster is
+ *     allocated here and the directory entry's first_cluster field is updated.
+ *   • The directory entry's file_size is updated whenever the write extends
+ *     the file.
+ *   • Write order: FAT chain first, data second, directory entry last.
+ *     On a crash between these steps the old directory entry still points to
+ *     valid (old) data.
+ *
+ * Returns bytes written, 0 if nothing was written, -1 on error.
+ * Uses sector_buf for FAT/dir-entry operations and data_buf for data sectors.
+ */
+static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
+                       uint32_t size, const uint8_t *buf)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+
+    if (!fs->sector_write) return -1;
+    if (!buf || size == 0) return 0;
+    if (offset > node->size) return -1;   /* gaps not supported */
+
+    uint32_t cluster_size =
+        (uint32_t)fs->sectors_per_cluster * fs->bytes_per_sector;
+
+    /* ── If the file has no clusters yet, allocate the first one ─────────── */
+    if (node->inode == 0) {
+        uint16_t first = fat16_alloc_cluster(fs);
+        if (first == 0) return -1;   /* disk full */
+
+        /* Update the in-memory node and the on-disk directory entry. */
+        node->inode = first;
+        if (fat16_update_dirent(fs, node->dir_sector,
+                                node->dir_entry_idx, 0, first) < 0) {
+            fat16_write_fat_entry(fs, first, 0x0000);   /* rollback */
+            node->inode = 0;
+            return -1;
+        }
+    }
+
+    /* ── Walk the FAT chain to the cluster containing byte `offset` ──────── */
+    uint32_t start_cluster_idx = offset / cluster_size;
+    uint16_t cluster     = (uint16_t)node->inode;
+    uint16_t prev_cluster = 0;
+
+    for (uint32_t i = 0; i < start_cluster_idx; i++) {
+        uint16_t next = fat16_next_cluster(fs, cluster);
+        if (next < 2 || next >= (uint16_t)FAT16_EOC) {
+            /* File ended before reaching `offset` — allocate and chain. */
+            uint16_t nc = fat16_alloc_cluster(fs);
+            if (nc == 0) return 0;   /* disk full, wrote nothing */
+            if (fat16_write_fat_entry(fs, cluster, nc) < 0) {
+                fat16_write_fat_entry(fs, nc, 0x0000);
+                return 0;
+            }
+            cluster = nc;
+        } else {
+            prev_cluster = cluster;
+            cluster = next;
+        }
+        (void)prev_cluster;
+    }
+
+    /* ── Write loop: sector by sector ───────────────────────────────────── */
+    uint32_t bytes_written = 0;
+    uint32_t pos = offset;
+
+    while (bytes_written < size) {
+        /* If we've walked off the end of the chain, extend it. */
+        if (cluster < 2 || cluster >= (uint16_t)FAT16_EOC) {
+            uint16_t nc = fat16_alloc_cluster(fs);
+            if (nc == 0) break;   /* disk full */
+            /* chain: the cluster we just consumed -> new cluster */
+            if (fat16_write_fat_entry(fs,
+                    (uint16_t)(pos > 0 ?
+                        fat16_next_cluster(fs, (uint16_t)node->inode) :
+                        (uint16_t)node->inode),
+                    nc) < 0) {
+                fat16_write_fat_entry(fs, nc, 0x0000);
+                break;
+            }
+            cluster = nc;
+        }
+
+        uint32_t cur_cluster_idx = pos / cluster_size;
+        uint32_t byte_in_cluster = pos - cur_cluster_idx * cluster_size;
+        uint32_t sec_in_cluster  = byte_in_cluster / fs->bytes_per_sector;
+        uint32_t byte_in_sector  = byte_in_cluster % fs->bytes_per_sector;
+
+        uint32_t lba = fat16_cluster_lba(fs, cluster) + sec_in_cluster;
+
+        /* Read-modify-write: preserve bytes not covered by this write. */
+        if (fs->sector_read(fs->ctx, lba, data_buf) < 0) break;
+
+        uint32_t avail   = fs->bytes_per_sector - byte_in_sector;
+        uint32_t to_copy = size - bytes_written;
+        if (to_copy > avail) to_copy = avail;
+
+        memcpy(data_buf + byte_in_sector, buf + bytes_written, to_copy);
+
+        if (fs->sector_write(fs->ctx, lba, data_buf) < 0) break;
+
+        bytes_written += to_copy;
+        pos           += to_copy;
+
+        /* Advance to the next cluster when we cross a cluster boundary. */
+        if (pos / cluster_size != cur_cluster_idx) {
+            uint16_t next = fat16_next_cluster(fs, cluster);
+            cluster = next;   /* may be EOC; the loop guard handles that */
+        }
+    }
+
+    /* ── Update file size in the directory entry if the file grew ─────────── */
+    uint32_t new_end = offset + bytes_written;
+    if (new_end > node->size) {
+        node->size = new_end;
+        fat16_update_dirent(fs, node->dir_sector,
+                            node->dir_entry_idx, new_end, 0);
+    }
+
+    return (int)bytes_written;
+}
+
+/*
+ * fat16_create — create a new empty file at `path` in the root directory.
+ *
+ * Steps:
+ *   1. Convert path to 8.3 name.
+ *   2. Verify the name does not already exist.
+ *   3. Allocate one cluster (the file's initial first_cluster; size = 0).
+ *   4. Find a free root directory entry (first byte 0x00 or 0xE5).
+ *   5. Write the entry: name, ext, attr = 0x20 (archive), first_cluster, size=0.
+ *
+ * Returns 0 on success, -1 on error.
+ * Uses sector_buf.
+ */
+static int fat16_create(void *ctx, const char *path)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+    if (!fs->sector_write) return -1;
+
+    char name83[8], ext83[3];
+    if (path_to_83(path, name83, ext83) < 0) return -1;
+
+    uint32_t root_sectors =
+        ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
+
+    /* ── Pass 1: check for duplicate name ───────────────────────────────── */
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first == 0x00) goto find_free;   /* end of directory */
+            if (first == 0xE5) continue;
+            if (dir[i].attr == FAT_ATTR_LFN) continue;
+            if (dir[i].attr & FAT_ATTR_VOLUME_ID) continue;
+
+            if (memcmp(dir[i].name, name83, 8) == 0 &&
+                memcmp(dir[i].ext,  ext83,  3) == 0)
+                return -1;   /* already exists */
+        }
+    }
+
+find_free: ;
+    /* ── Allocate the first cluster ─────────────────────────────────────── */
+    uint16_t first_cluster = fat16_alloc_cluster(fs);
+    if (first_cluster == 0) return -1;   /* disk full */
+
+    /* ── Pass 2: find a free directory entry and write it ───────────────── */
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            goto create_fail;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first != 0x00 && first != 0xE5) continue;
+
+            /* Found a free slot — fill it in. */
+            memset(&dir[i], 0, sizeof(fat16_dirent_t));
+            memcpy(dir[i].name, name83, 8);
+            memcpy(dir[i].ext,  ext83,  3);
+            dir[i].attr          = 0x20;           /* archive */
+            dir[i].first_cluster = first_cluster;
+            dir[i].file_size     = 0;
+
+            if (fs->sector_write(fs->ctx, fs->root_dir_lba + sec,
+                                  sector_buf) < 0)
+                goto create_fail;
+
+            return 0;
+        }
+    }
+
+create_fail:
+    /* Rollback the cluster allocation. */
+    fat16_write_fat_entry(fs, first_cluster, 0x0000);
+    return -1;   /* root directory full or I/O error */
+}
+
+/*
+ * fat16_remove — delete the file at `path`.
+ *
+ * Steps:
+ *   1. Find the directory entry.
+ *   2. Walk and free the entire FAT cluster chain.
+ *   3. Mark the directory entry as deleted (first byte = 0xE5).
+ *
+ * Returns 0 on success, -1 if the file is not found or I/O fails.
+ * Uses sector_buf.
+ */
+static int fat16_remove(void *ctx, const char *path)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+    if (!fs->sector_write) return -1;
+
+    char name83[8], ext83[3];
+    if (path_to_83(path, name83, ext83) < 0) return -1;
+
+    uint32_t root_sectors =
+        ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
+
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first == 0x00) return -1;   /* end of directory */
+            if (first == 0xE5) continue;
+            if (dir[i].attr == FAT_ATTR_LFN) continue;
+            if (dir[i].attr & FAT_ATTR_VOLUME_ID) continue;
+
+            if (memcmp(dir[i].name, name83, 8) != 0 ||
+                memcmp(dir[i].ext,  ext83,  3) != 0)
+                continue;
+
+            /* Found — free the cluster chain first, then delete the entry. */
+            uint16_t first_cluster = dir[i].first_cluster;
+            fat16_free_chain(fs, first_cluster);   /* uses sector_buf */
+
+            /* Re-read the directory sector (free_chain may have clobbered it
+             * via sector_buf if the FAT and root dir share no sectors, but
+             * reading it again is safe and cheap).                           */
+            if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec,
+                                  sector_buf) < 0)
+                return -1;
+
+            dir = (fat16_dirent_t *)(void *)sector_buf;
+            dir[i].name[0] = (char)0xE5;   /* mark deleted */
+
+            if (fs->sector_write(fs->ctx, fs->root_dir_lba + sec,
+                                  sector_buf) < 0)
+                return -1;
+
+            return 0;
+        }
+    }
+
+    return -1;   /* not found */
+}
+
 static void fat16_close(void *ctx, vfs_node_t *node)
 {
     (void)ctx;
@@ -352,8 +740,11 @@ static void fat16_close(void *ctx, vfs_node_t *node)
 const vfs_ops_t fat16_vfs_ops = {
     .open    = fat16_open,
     .read    = fat16_read,
+    .write   = fat16_write,
     .readdir = fat16_readdir,
     .close   = fat16_close,
+    .create  = fat16_create,
+    .remove  = fat16_remove,
 };
 
 /* ── Public API ──────────────────────────────────────────────────────────── */

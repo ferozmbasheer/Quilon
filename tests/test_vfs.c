@@ -93,6 +93,50 @@ static const vfs_ops_t mock_ops = {
     .read    = mock_read,
     .readdir = mock_readdir,
     .close   = mock_close,
+    /* write / create / remove intentionally absent (NULL) */
+};
+
+/* ── Write-capable mock ──────────────────────────────────────────────────── */
+
+static uint8_t  mock_wbuf[256];
+static uint32_t mock_wbuf_len;
+
+static int mock_write_fn(void *ctx, vfs_node_t *node, uint32_t offset,
+                          uint32_t size, const uint8_t *buf)
+{
+    (void)ctx;
+    if (!buf || size == 0) return 0;
+    if (offset + size > sizeof(mock_wbuf)) return -1;
+    int i;
+    for (i = 0; i < (int)size; i++) mock_wbuf[offset + i] = buf[i];
+    if (offset + size > mock_wbuf_len) {
+        mock_wbuf_len = offset + size;
+        node->size    = mock_wbuf_len;
+    }
+    return (int)size;
+}
+
+static int mock_create_fn(void *ctx, const char *path)
+{
+    (void)ctx; (void)path;
+    return 0;   /* always succeed in mock */
+}
+
+static int mock_remove_fn(void *ctx, const char *path)
+{
+    (void)ctx;
+    const char *name = (*path == '/') ? path + 1 : path;
+    return (fw_streq(name, "README.TXT") || fw_streq(name, "NOTES.TXT")) ? 0 : -1;
+}
+
+static const vfs_ops_t mock_rw_ops = {
+    .open    = mock_open,
+    .read    = mock_read,
+    .write   = mock_write_fn,
+    .readdir = mock_readdir,
+    .close   = mock_close,
+    .create  = mock_create_fn,
+    .remove  = mock_remove_fn,
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -300,7 +344,122 @@ static void test_readdir_not_mounted(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * 6. fd table limits
+ * 6. vfs_write
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_write_basic(void)
+{
+    mock_wbuf_len = 0;
+    vfs_mount(&mock_rw_ops, (void *)0);
+    int fd = vfs_open("README.TXT");
+    ASSERT(fd >= VFS_FD_BASE, "open for write returns valid fd");
+
+    const char msg[] = "Updated";
+    int n = vfs_write(fd, msg, (uint32_t)(sizeof(msg) - 1));
+    ASSERT_EQ(n, (int)(sizeof(msg) - 1), "write returns bytes written");
+    vfs_close(fd);
+}
+
+static void test_write_advances_offset(void)
+{
+    mock_wbuf_len = 0;
+    int i;
+    for (i = 0; i < (int)sizeof(mock_wbuf); i++) mock_wbuf[i] = 0;
+
+    vfs_mount(&mock_rw_ops, (void *)0);
+    int fd = vfs_open("README.TXT");
+
+    vfs_write(fd, (const uint8_t *)"AB", 2);
+    vfs_write(fd, (const uint8_t *)"CD", 2);
+
+    ASSERT_EQ((char)mock_wbuf[0], 'A', "byte 0 after sequential writes = 'A'");
+    ASSERT_EQ((char)mock_wbuf[1], 'B', "byte 1 after sequential writes = 'B'");
+    ASSERT_EQ((char)mock_wbuf[2], 'C', "byte 2 after sequential writes = 'C'");
+    ASSERT_EQ((char)mock_wbuf[3], 'D', "byte 3 after sequential writes = 'D'");
+    vfs_close(fd);
+}
+
+static void test_write_no_driver_support(void)
+{
+    vfs_mount(&mock_ops, (void *)0);   /* mock_ops has no .write */
+    int fd = vfs_open("README.TXT");
+    int n = vfs_write(fd, (const uint8_t *)"test", 4);
+    ASSERT_EQ(n, -1, "write returns -1 when driver has no write support");
+    vfs_close(fd);
+}
+
+static void test_write_invalid_fd(void)
+{
+    vfs_mount(&mock_rw_ops, (void *)0);
+    int n = vfs_write(99, (const uint8_t *)"test", 4);
+    ASSERT_EQ(n, -1, "write with invalid fd returns -1");
+}
+
+static void test_write_not_mounted(void)
+{
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    int n = vfs_write(VFS_FD_BASE, (const uint8_t *)"x", 1);
+    ASSERT_EQ(n, -1, "write returns -1 when not mounted");
+    vfs_mount(&mock_rw_ops, (void *)0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 7. vfs_create / vfs_remove
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_create_succeeds(void)
+{
+    vfs_mount(&mock_rw_ops, (void *)0);
+    int r = vfs_create("NEWFILE.TXT");
+    ASSERT_EQ(r, 0, "vfs_create returns 0 on success");
+}
+
+static void test_create_no_driver_support(void)
+{
+    vfs_mount(&mock_ops, (void *)0);   /* mock_ops has no .create */
+    int r = vfs_create("NEWFILE.TXT");
+    ASSERT_EQ(r, -1, "vfs_create returns -1 when driver has no create support");
+}
+
+static void test_create_not_mounted(void)
+{
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    int r = vfs_create("X.TXT");
+    ASSERT_EQ(r, -1, "vfs_create returns -1 when not mounted");
+    vfs_mount(&mock_rw_ops, (void *)0);
+}
+
+static void test_remove_succeeds(void)
+{
+    vfs_mount(&mock_rw_ops, (void *)0);
+    int r = vfs_remove("README.TXT");
+    ASSERT_EQ(r, 0, "vfs_remove returns 0 for existing file");
+}
+
+static void test_remove_fails_for_missing(void)
+{
+    vfs_mount(&mock_rw_ops, (void *)0);
+    int r = vfs_remove("NONEXISTENT.TXT");
+    ASSERT_EQ(r, -1, "vfs_remove returns -1 for non-existent file");
+}
+
+static void test_remove_no_driver_support(void)
+{
+    vfs_mount(&mock_ops, (void *)0);   /* mock_ops has no .remove */
+    int r = vfs_remove("README.TXT");
+    ASSERT_EQ(r, -1, "vfs_remove returns -1 when driver has no remove support");
+}
+
+static void test_remove_not_mounted(void)
+{
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    int r = vfs_remove("README.TXT");
+    ASSERT_EQ(r, -1, "vfs_remove returns -1 when not mounted");
+    vfs_mount(&mock_rw_ops, (void *)0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 8. fd table limits
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void test_fd_table_full(void)
@@ -359,6 +518,22 @@ int main(void)
     RUN_SUITE(test_readdir_second_entry);
     RUN_SUITE(test_readdir_past_end);
     RUN_SUITE(test_readdir_not_mounted);
+
+    /* vfs_write */
+    RUN_SUITE(test_write_basic);
+    RUN_SUITE(test_write_advances_offset);
+    RUN_SUITE(test_write_no_driver_support);
+    RUN_SUITE(test_write_invalid_fd);
+    RUN_SUITE(test_write_not_mounted);
+
+    /* vfs_create / vfs_remove */
+    RUN_SUITE(test_create_succeeds);
+    RUN_SUITE(test_create_no_driver_support);
+    RUN_SUITE(test_create_not_mounted);
+    RUN_SUITE(test_remove_succeeds);
+    RUN_SUITE(test_remove_fails_for_missing);
+    RUN_SUITE(test_remove_no_driver_support);
+    RUN_SUITE(test_remove_not_mounted);
 
     /* fd table limits */
     RUN_SUITE(test_fd_table_full);

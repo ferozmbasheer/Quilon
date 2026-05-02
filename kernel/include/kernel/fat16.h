@@ -23,7 +23,8 @@
  */
 typedef struct {
     /* ── Caller-supplied I/O back-end ───────────────────────────────────── */
-    int   (*sector_read)(void *ctx, uint32_t lba, void *buf);
+    int   (*sector_read) (void *ctx, uint32_t lba, void *buf);
+    int   (*sector_write)(void *ctx, uint32_t lba, const void *buf);  /* NEW */
     void  *ctx;
 
     /* ── Populated by fat16_mount() from the BPB ────────────────────────── */

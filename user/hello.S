@@ -1,5 +1,5 @@
 /*
- * Quilon OS — hello.S
+ * Quilon OS  - hello.S
  *
  * A minimal freestanding i386 user-mode program that communicates with the
  * Quilon kernel entirely through the int $0x80 system-call interface.
@@ -34,7 +34,7 @@
  *   return value in eax
  *
  * Syscalls used here:
- *   SYS_WRITE  = 1   write(fd=1, buf, len) — fd 1 is FD_STDOUT
+ *   SYS_WRITE  = 1   write(fd=1, buf, len)  - fd 1 is FD_STDOUT
  *   SYS_EXIT   = 3   exit(code)
  *
  * Build
@@ -80,7 +80,7 @@ _start:
     movl  $0,     %ebx        /* exit code */
     int   $0x80
 
-    /* SYS_EXIT never returns — the kernel halts after printing an exit
+    /* SYS_EXIT never returns  - the kernel halts after printing an exit
      * message.  This spin is here only as a safety net.                   */
 .Lhang:
     pause
@@ -107,6 +107,6 @@ line3_end:
 .set line3_len, line3_end - line3
 
 line4:
-    .ascii "[elf] Running at ring 3 (CPL=3) — calling SYS_EXIT now.\r\n"
+    .ascii "[elf] Running at ring 3 (CPL=3)  - calling SYS_EXIT now.\r\n"
 line4_end:
 .set line4_len, line4_end - line4

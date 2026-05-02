@@ -26,6 +26,10 @@
 #define SYS_SBRK    10  /* sbrk(increment) → old break (void*), or -1 on OOM */
 #define SYS_SIGRETURN 11 /* sigreturn() — restore context after signal handler */
 #define SYS_READDIR  12  /* readdir(index, dirent_buf) → 0 on success, -1 at end */
+#define SYS_CREATE   13  /* create(path) → 0 on success, -1 on failure           */
+#define SYS_REMOVE   14  /* remove(path) → 0 on success, -1 on failure           */
+#define SYS_GETTICKS 15  /* getticks() → current PIT tick count (uint32_t)       */
+#define SYS_GETHZ    16  /* gethz() → PIT frequency in Hz (uint32_t)             */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

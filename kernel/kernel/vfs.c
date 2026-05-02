@@ -110,6 +110,35 @@ int vfs_close(int fd)
     return 0;
 }
 
+int vfs_write(int fd, const void *buf, uint32_t len)
+{
+    int idx = fd_to_idx(fd);
+    if (idx < 0 || !vfs_mounted()) return -1;
+    if (!mounted_ops->write) return -1;   /* driver has no write support */
+    if (!buf || len == 0) return 0;
+
+    vfs_node_t *node = &fd_table[idx];
+    int n = mounted_ops->write(mounted_ctx, node, node->offset,
+                               len, (const uint8_t *)buf);
+    if (n > 0)
+        node->offset += (uint32_t)n;
+    return n;
+}
+
+int vfs_create(const char *path)
+{
+    if (!vfs_mounted() || !path) return -1;
+    if (!mounted_ops->create) return -1;
+    return mounted_ops->create(mounted_ctx, path);
+}
+
+int vfs_remove(const char *path)
+{
+    if (!vfs_mounted() || !path) return -1;
+    if (!mounted_ops->remove) return -1;
+    return mounted_ops->remove(mounted_ctx, path);
+}
+
 int vfs_readdir(uint32_t index, vfs_dirent_t *out)
 {
     if (!vfs_mounted()) return -1;

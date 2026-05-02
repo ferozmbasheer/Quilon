@@ -54,7 +54,7 @@ static void shell_cmd_exec(const char *path)
     /*
      * Load the ELF segments into the process's own page directory.
      * Physical pages are allocated from the PMM and mapped only in proc_pd
-     * — the global kernel PD is untouched, so a second exec of the same
+     *  - the global kernel PD is untouched, so a second exec of the same
      * binary will not collide with the first.
      */
     uint32_t entry = elf_load_into(path, proc_pd);
@@ -117,6 +117,124 @@ static void shell_cmd_cat(const char *path)
     vfs_close(fd);
 }
 
+static void shell_cmd_touch(const char *path)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+    if (path[0] == '\0') { printf("Usage: touch <file>\r\n"); return; }
+    if (vfs_create(path) == 0)
+        printf("Created '%s'\r\n", path);
+    else
+        printf("touch: '%s': already exists or disk full\r\n", path);
+}
+
+static void shell_cmd_write_file(const char *args)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+
+    /* Split "filename content..." at first space. */
+    const char *p = args;
+    while (*p && *p != ' ') p++;
+    if (*p == '\0' || *(p + 1) == '\0') {
+        printf("Usage: write <file> <content>\r\n");
+        return;
+    }
+
+    char fname[VFS_PATH_MAX];
+    int flen = (int)(p - args);
+    if (flen >= VFS_PATH_MAX) flen = VFS_PATH_MAX - 1;
+    int i;
+    for (i = 0; i < flen; i++) fname[i] = args[i];
+    fname[i] = '\0';
+
+    const char *content = p + 1;
+    int clen = 0;
+    while (content[clen]) clen++;
+
+    int fd = vfs_open(fname);
+    if (fd < 0) { printf("write: '%s': not found\r\n", fname); return; }
+
+    int n = vfs_write(fd, content, (uint32_t)clen);
+    vfs_close(fd);
+
+    if (n >= 0)
+        printf("Wrote %d bytes to '%s'\r\n", n, fname);
+    else
+        printf("write: '%s': write failed\r\n", fname);
+}
+
+static void shell_cmd_rm(const char *path)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+    if (path[0] == '\0') { printf("Usage: rm <file>\r\n"); return; }
+    if (vfs_remove(path) == 0)
+        printf("Removed '%s'\r\n", path);
+    else
+        printf("rm: '%s': not found\r\n", path);
+}
+
+static void shell_cmd_fstest(void)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+
+    const char *fname   = "TEST.TXT";
+    const char *message = "Hello from FAT16 write!";
+
+    printf("=== FAT16 write demo ===\r\n");
+
+    /* 1. Create */
+    printf("1. touch %s ... ", fname);
+    if (vfs_create(fname) != 0) { printf("FAILED\r\n"); return; }
+    printf("OK\r\n");
+
+    /* 2. Write */
+    int fd = vfs_open(fname);
+    if (fd < 0) { printf("2. open failed\r\n"); goto cleanup; }
+    {
+        int msglen = 0;
+        while (message[msglen]) msglen++;
+        int n = vfs_write(fd, message, (uint32_t)msglen);
+        vfs_close(fd);
+        printf("2. wrote %d bytes\r\n", n);
+        if (n != msglen) goto cleanup;
+    }
+
+    /* 3. Read back */
+    fd = vfs_open(fname);
+    if (fd < 0) { printf("3. re-open failed\r\n"); goto cleanup; }
+    {
+        char buf[64];
+        int n = vfs_read(fd, buf, sizeof(buf) - 1);
+        vfs_close(fd);
+        if (n > 0) {
+            buf[n] = '\0';
+            printf("3. read \"%s\"\r\n", buf);
+            if (strcmp(buf, message) == 0)
+                printf("   content matches\r\n");
+            else
+                printf("   content MISMATCH\r\n");
+        } else {
+            printf("3. read failed\r\n");
+        }
+    }
+
+    /* 4. ls */
+    printf("4. directory:\r\n");
+    {
+        vfs_dirent_t ent;
+        uint32_t idx = 0;
+        while (vfs_readdir(idx, &ent) == 0) {
+            printf("   %s (%d bytes)\r\n", ent.name, (int)ent.size);
+            idx++;
+        }
+    }
+
+cleanup:
+    /* 5. Remove */
+    printf("5. rm %s ... ", fname);
+    printf("%s\r\n", vfs_remove(fname) == 0 ? "OK" : "FAILED");
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_ps(void)
 {
     static const char *state_names[] = {
@@ -148,7 +266,7 @@ static void shell_run_ring3_task(void (*task)(void), const char *label)
      *   usermode_initialize() sets PAGE_USER on page_directory[0]'s PDE
      *   AND on the PTEs in the shared first_page_table[].
      *   If paging_create_address_space() runs first, proc_pd[0] gets a
-     *   stale PDE without PAGE_USER — ring-3 code in the first 4 MiB
+     *   stale PDE without PAGE_USER  - ring-3 code in the first 4 MiB
      *   triggers a protection-violation page fault (err_code 0x5).
      *
      * usermode_initialize() is idempotent (static initialized guard), so
@@ -179,7 +297,8 @@ static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, ps, ls, cat <file>,\r\n");
-        printf("          exec <file.elf>\r\n");
+        printf("          touch <file>, write <file> <data>, rm <file>,\r\n");
+        printf("          fstest, exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -211,7 +330,7 @@ static void shell_execute(const char *cmd) {
     } else if (strcmp(cmd, "fork") == 0) {
         printf("Demoing SYS_FORK from ring 3...\r\n");
         printf("(fork requires a scheduler-managed process; "
-               "exec_setjmp path returns -1 — expected)\r\n");
+               "exec_setjmp path returns -1  - expected)\r\n");
         shell_run_ring3_task(user_task_fork, "fork");
     } else if (strcmp(cmd, "ps") == 0) {
         shell_cmd_ps();
@@ -221,6 +340,14 @@ static void shell_execute(const char *cmd) {
         shell_cmd_cat(cmd + 4);
     } else if (strncmp(cmd, "exec ", 5) == 0) {
         shell_cmd_exec(cmd + 5);
+    } else if (strncmp(cmd, "touch ", 6) == 0) {
+        shell_cmd_touch(cmd + 6);
+    } else if (strncmp(cmd, "write ", 6) == 0) {
+        shell_cmd_write_file(cmd + 6);
+    } else if (strncmp(cmd, "rm ", 3) == 0) {
+        shell_cmd_rm(cmd + 3);
+    } else if (strcmp(cmd, "fstest") == 0) {
+        shell_cmd_fstest();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }
