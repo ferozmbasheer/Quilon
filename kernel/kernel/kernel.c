@@ -21,6 +21,7 @@
 #include <kernel/elf.h>
 #include <kernel/process.h>
 #include <kernel/signal.h>
+#include <kernel/initrd.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -119,6 +120,84 @@ void kernel_main(void) {
 	/* 5. Dump the heap  - should show a single large free block after all
 	 *    the frees and coalescing above.                                   */
 	kmalloc_dump();
+
+	/* ── Section 8.3: initrd — RAM-Based Initial Filesystem ────────────────
+	 *
+	 * An initrd is a small filesystem embedded in RAM, available at boot
+	 * before any disk drivers are initialised.  GRUB passes it as a
+	 * Multiboot module (add  --module /path/to/initrd.img  in grub.cfg).
+	 *
+	 * VFS is single-mount: if a FAT16 disk is found below, it replaces
+	 * the initrd.  If there is no disk the initrd remains the active FS.
+	 *
+	 * Interactive demo:  quilon> initrd
+	 * ─────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 8.3: initrd RAM filesystem ===\r\n");
+	{
+		static initrd_ctx_t grub_initrd_ctx;
+
+		/* Check for a GRUB Multiboot module and mount it as the initrd. */
+		if ((mbi->flags & MULTIBOOT_FLAG_MODS) && mbi->mods_count > 0) {
+			multiboot_module_t *mod =
+			    (multiboot_module_t *)(uintptr_t)mbi->mods_addr;
+			void    *mod_addr = (void *)(uintptr_t)mod->mod_start;
+			uint32_t mod_size = mod->mod_end - mod->mod_start;
+			printf("initrd: GRUB module at 0x%x  (%d bytes)\r\n",
+			       (unsigned)mod->mod_start, (int)mod_size);
+			if (initrd_mount(&grub_initrd_ctx, mod_addr, mod_size) == 0) {
+				vfs_mount(&initrd_vfs_ops, &grub_initrd_ctx);
+				printf("initrd: mounted %d file(s) from Multiboot module\r\n",
+				       (int)grub_initrd_ctx.file_count);
+			} else {
+				printf("initrd: module is not a valid initrd image\r\n");
+			}
+		} else {
+			printf("initrd: no GRUB module  "
+			       "(add --module in grub.cfg to load a real initrd)\r\n");
+		}
+
+		/* Build a synthetic 3-file image to demonstrate the driver.
+		 * If no GRUB module was provided, also mount it so the kernel has
+		 * a working filesystem before ATA initialisation completes.       */
+		static uint8_t    demo_img[256];
+		static initrd_ctx_t demo_ctx;
+		uint32_t demo_size = initrd_build_demo(demo_img, sizeof(demo_img));
+
+		if (demo_size > 0 &&
+		    initrd_mount(&demo_ctx, demo_img, demo_size) == 0) {
+			printf("initrd: synthetic demo: %d files\r\n",
+			       (int)demo_ctx.file_count);
+
+			/* List all entries. */
+			vfs_dirent_t ent;
+			for (uint32_t i = 0; i < demo_ctx.file_count; i++) {
+				if (initrd_vfs_ops.readdir(&demo_ctx, i, &ent) == 0)
+					printf("  [%d] %s  (%d bytes)\r\n",
+					       (int)i, ent.name,
+					       (int)ent.size);
+			}
+
+			/* Read MOTD.TXT through the driver ops to prove data access. */
+			vfs_node_t nd = {0};
+			if (initrd_vfs_ops.open(&demo_ctx, "MOTD.TXT", &nd) == 0) {
+				char buf[64];
+				int nr = initrd_vfs_ops.read(&demo_ctx, &nd, 0,
+				                             sizeof(buf) - 1,
+				                             (uint8_t *)buf);
+				if (nr > 0) {
+					buf[nr] = '\0';
+					printf("  MOTD.TXT: \"%s\"\r\n", buf);
+				}
+			}
+
+			/* Fall back to synthetic mount only if no GRUB initrd loaded. */
+			if (!vfs_mounted()) {
+				vfs_mount(&initrd_vfs_ops, &demo_ctx);
+				printf("initrd: synthetic image active as VFS fallback\r\n");
+			}
+		}
+	}
+	printf("=== Section 8.3 ready ===\r\n\r\n");
 
 	/* ── Filesystem initialisation ─────────────────────────────────────────
 	 * Probe the primary ATA bus for a disk and attempt to mount it as FAT16.

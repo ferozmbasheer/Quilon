@@ -10,6 +10,7 @@
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
 #include <kernel/process.h>
+#include <kernel/initrd.h>
 
 static void shell_cmd_ls(void)
 {
@@ -293,6 +294,52 @@ static void shell_run_ring3_task(void (*task)(void), const char *label)
     printf("%s: task exited; back in kernel\r\n", label);
 }
 
+static void shell_cmd_initrd(void)
+{
+    /* Build a tiny 3-file initrd image in kernel memory and demonstrate
+     * mount, readdir, and open+read through the driver API directly.
+     * Using the ops vtable avoids replacing the current VFS mount.     */
+    static uint8_t    img[256];
+    static initrd_ctx_t ctx;
+
+    printf("=== initrd demo (section 8.3) ===\r\n");
+
+    uint32_t img_size = initrd_build_demo(img, sizeof(img));
+    if (img_size == 0 || initrd_mount(&ctx, img, img_size) != 0) {
+        printf("initrd: demo build failed\r\n");
+        return;
+    }
+    printf("1. mounted: %d files\r\n", (int)ctx.file_count);
+
+    /* List all entries via readdir. */
+    vfs_dirent_t ent;
+    uint32_t idx = 0;
+    while (initrd_vfs_ops.readdir(&ctx, idx, &ent) == 0) {
+        printf("   [%d] %s  (%d bytes)\r\n", (int)idx,
+               ent.name, (int)ent.size);
+        idx++;
+    }
+
+    /* Open and read MOTD.TXT. */
+    vfs_node_t nd = {0};
+    if (initrd_vfs_ops.open(&ctx, "MOTD.TXT", &nd) == 0) {
+        char buf[64];
+        int n = initrd_vfs_ops.read(&ctx, &nd, 0,
+                                    sizeof(buf) - 1, (uint8_t *)buf);
+        if (n > 0) { buf[n] = '\0'; printf("2. MOTD.TXT: \"%s\"\r\n", buf); }
+    } else {
+        printf("2. MOTD.TXT: not found\r\n");
+    }
+
+    /* Verify write/create/remove are not supported (read-only FS). */
+    printf("3. write=%-3s  create=%-3s  remove=%s  (read-only)\r\n",
+           initrd_vfs_ops.write  ? "yes" : "no",
+           initrd_vfs_ops.create ? "yes" : "no",
+           initrd_vfs_ops.remove ? "yes" : "no");
+
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_pipetest(void)
 {
     const char *msg = "Hello through the pipe!";
@@ -341,7 +388,7 @@ static void shell_execute(const char *cmd) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, ps, ls, cat <file>,\r\n");
         printf("          touch <file>, write <file> <data>, rm <file>,\r\n");
-        printf("          fstest, pipetest, exec <file.elf>\r\n");
+        printf("          fstest, pipetest, initrd, exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -393,6 +440,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_fstest();
     } else if (strcmp(cmd, "pipetest") == 0) {
         shell_cmd_pipetest();
+    } else if (strcmp(cmd, "initrd") == 0) {
+        shell_cmd_initrd();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

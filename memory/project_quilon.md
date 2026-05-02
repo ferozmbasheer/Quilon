@@ -70,4 +70,19 @@ Anonymous in-kernel ring-buffer pipes implemented:
 
 **Known limitation:** Global VFS FD table (not per-process) means fork+pipe requires care — close in one process affects all. Shell `pipe` demo uses single-process write/read to show the mechanism cleanly.
 
-**Next section:** 8.3 — initrd (RAM-Based Initial Filesystem)
+**Section 8.3 — initrd RAM-Based Initial Filesystem (completed 2026-05-02)**
+
+Read-only VFS driver backed by an in-memory image, available before any disk driver initialises:
+
+- `kernel/include/kernel/initrd.h` — `initrd_ctx_t`, `initrd_entry_t`, `initrd_vfs_ops`, `initrd_mount()`, `initrd_build_demo()`
+- `kernel/kernel/initrd.c` — `initrd_mount()` parses the flat image format; VFS ops (open/read/readdir/close); write/create/remove are NULL (read-only); `initrd_build_demo()` writes a 3-file demo image (MOTD.TXT, VERSION.TXT, INIT.SH)
+- `kernel/include/kernel/multiboot.h` — added `MULTIBOOT_FLAG_MODS` and `multiboot_module_t` struct
+- `kernel/kernel/kernel.c` — Section 8.3 block before ATA init: checks for GRUB module → mounts if valid; always builds synthetic demo image and reads it; mounts synthetic as VFS fallback if no disk/GRUB module
+- Shell commands added: `initrd` in both kernel shell.c and user/shell/main.c
+- `tests/test_initrd.c` — 68 tests: mount validation, open, read, readdir, read-only enforcement, `initrd_build_demo`, VFS integration
+- All 15 test suites pass (713+ total assertions)
+
+**Image format:** `[uint32_t N] [N × {char name[16]; uint32_t size; uint8_t data[size]}]`
+**Boot order:** initrd mounted first → ATA/FAT16 mounts and replaces it if a disk is found.
+
+**Next section:** Section 9 — Memory Management (Higher-Half Kernel, Demand Paging, CoW fork)

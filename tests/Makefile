@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd
 
 .PHONY: all build run clean help
 
@@ -225,6 +225,20 @@ $(BINDIR)/test_pipe: test_pipe.c framework.h \
                      $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_pipe.c $(PIPE_SRC) \
+	    ../kernel/kernel/vfs.c \
+	    $(LIBC_STRING)
+
+# initrd tests (section 8.3)
+# initrd.c is pure C (no asm, no hardware).  vfs.c is also linked so the
+# VFS integration tests can call vfs_mount / vfs_open / vfs_read etc.
+INITRD_SRC = ../kernel/kernel/initrd.c
+
+$(BINDIR)/test_initrd: test_initrd.c framework.h \
+                       $(INITRD_SRC) \
+                       ../kernel/kernel/vfs.c \
+                       $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_initrd.c $(INITRD_SRC) \
 	    ../kernel/kernel/vfs.c \
 	    $(LIBC_STRING)
 

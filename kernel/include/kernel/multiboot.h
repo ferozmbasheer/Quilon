@@ -5,6 +5,7 @@
 
 /* Bits in the multiboot_info_t.flags field */
 #define MULTIBOOT_FLAG_MEM      (1 << 0)   /* mem_lower / mem_upper are valid  */
+#define MULTIBOOT_FLAG_MODS     (1 << 3)   /* mods_count / mods_addr are valid */
 #define MULTIBOOT_FLAG_MMAP     (1 << 6)   /* mmap_length / mmap_addr are valid */
 
 /* Values for multiboot_mmap_entry_t.type */
@@ -18,6 +19,17 @@ typedef struct {
     uint64_t len;
     uint32_t type;
 } __attribute__((packed)) multiboot_mmap_entry_t;
+
+/*
+ * Multiboot module descriptor — one entry in the array at mods_addr.
+ * Only valid when multiboot_info_t.flags has MULTIBOOT_FLAG_MODS set.
+ */
+typedef struct {
+    uint32_t mod_start;   /* physical address of module data (inclusive) */
+    uint32_t mod_end;     /* physical address of module data end (exclusive) */
+    uint32_t string;      /* module name / command line (physical addr, may be 0) */
+    uint32_t reserved;
+} __attribute__((packed)) multiboot_module_t;
 
 /* The info struct that GRUB places in memory and whose address is in %ebx. */
 typedef struct {

@@ -78,6 +78,7 @@ static void cmd_help(void)
     printf("  write <file> <data>    - write text to a file\r\n");
     printf("  rm <file>              - delete a file\r\n");
     printf("  fstest                 - FAT16 write/read/remove demo\r\n");
+    printf("  initrd                 - list initrd/RAM filesystem contents\r\n");
     printf("  exec <file.elf>        - run an ELF program\r\n");
     printf("  pid                    - print shell PID\r\n");
     printf("  ticks                  - raw PIT tick count\r\n");
@@ -253,6 +254,39 @@ cleanup:
     printf("=== done ===\r\n");
 }
 
+static void cmd_initrd(void)
+{
+    /* List all files in the currently mounted filesystem and, if MOTD.TXT
+     * exists, print its contents.  When the kernel mounted an initrd before
+     * FAT16, this shows the RAM filesystem's files.                        */
+    printf("=== initrd demo (section 8.3) ===\r\n");
+    printf("(reads from whatever filesystem is currently mounted)\r\n");
+
+    dirent_t     ent;
+    unsigned int i     = 0;
+    int          count = 0;
+    while (readdir(i, &ent) == 0) {
+        printf("  [%u] %-16s  %u bytes\r\n", i, ent.name, ent.size);
+        i++;
+        count++;
+    }
+    if (count == 0)
+        printf("  (empty)\r\n");
+
+    /* Try to read MOTD.TXT — present in demo initrd images. */
+    int fd = open("MOTD.TXT");
+    if (fd >= 0) {
+        char buf[64];
+        int n = read(fd, buf, (int)sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = '\0';
+            printf("MOTD.TXT: \"%s\"\r\n", buf);
+        }
+    }
+    printf("=== done ===\r\n");
+}
+
 static void cmd_clear(void)
 {
     int i;
@@ -380,6 +414,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "sbrk")   == 0) cmd_sbrk();
     else if (strcmp(cmd, "fork")   == 0) cmd_fork();
     else if (strcmp(cmd, "pipe")   == 0) cmd_pipe();
+    else if (strcmp(cmd, "initrd") == 0) cmd_initrd();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);
