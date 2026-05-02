@@ -38,6 +38,10 @@ typedef struct {
     uint32_t  offset;         /* current byte position for reads/writes          */
     uint32_t  dir_sector;     /* LBA of the sector holding this file's dir entry */
     uint8_t   dir_entry_idx;  /* index of the dir entry within that sector       */
+    /* Pipe support (section 8.2) */
+    uint8_t   is_pipe;        /* 1 = pipe fd, 0 = regular file fd                */
+    uint8_t   pipe_write_end; /* 1 = write end, 0 = read end (when is_pipe = 1)  */
+    uint8_t   pipe_idx;       /* index into pipe_pool[] (when is_pipe = 1)       */
 } vfs_node_t;
 
 /*
@@ -145,5 +149,15 @@ int  vfs_remove(const char *path);
  * index = 0 is the first entry.
  */
 int  vfs_readdir(uint32_t index, vfs_dirent_t *out);
+
+/*
+ * vfs_pipe — create an anonymous pipe and return two file descriptors.
+ *
+ * fds[0] is the read end; fds[1] is the write end.
+ * Returns 0 on success, -1 on failure (fd table full or pipe pool full).
+ *
+ * Kernel build only: returns -1 in the host build.
+ */
+int  vfs_pipe(int fds[2]);
 
 #endif /* _KERNEL_VFS_H */

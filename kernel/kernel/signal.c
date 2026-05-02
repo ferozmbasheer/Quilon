@@ -99,7 +99,7 @@ void signal_dispatch(void)
      * For now, treat any non-DFL, non-IGN handler like SIG_DFL so we
      * do not silently drop the signal.                                    */
     printf("[signal] pid %d: user handler for signal %d not yet supported"
-           " — applying SIG_DFL\r\n",
+           " - applying SIG_DFL\r\n",
            (int)current_process->pid, signum);
 
     current_process->exit_code = -signum;

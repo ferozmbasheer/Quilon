@@ -170,3 +170,13 @@ gethz:
     movl  $16, %eax         /* SYS_GETHZ */
     int   $0x80
     ret
+
+/* ── pipe(int fds[2]) → int ──────────────────────────────────────────────── */
+.global pipe
+pipe:
+    pushl %ebx
+    movl  $17,      %eax    /* SYS_PIPE */
+    movl  8(%esp),  %ebx    /* fds pointer */
+    int   $0x80
+    popl  %ebx
+    ret

@@ -33,6 +33,7 @@
 #define SYS_REMOVE    14
 #define SYS_GETTICKS  15
 #define SYS_GETHZ     16
+#define SYS_PIPE      17
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -62,6 +63,9 @@ int readdir(unsigned int index, dirent_t *out);
 /* ── Filesystem write operations ──────────────────────────────────────── */
 int create(const char *path);   /* SYS_CREATE — create empty file, 0/-1 */
 int fremove(const char *path);  /* SYS_REMOVE — delete file, 0/-1       */
+
+/* ── Pipe (section 8.2) ──────────────────────────────────────────────────── */
+int pipe(int fds[2]);           /* SYS_PIPE — create anonymous pipe, 0/-1 */
 
 /* ── Timer ────────────────────────────────────────────────────────────────── */
 unsigned int getticks(void);    /* SYS_GETTICKS — raw PIT tick counter   */

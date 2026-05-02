@@ -85,6 +85,7 @@ static void cmd_help(void)
     printf("  clear / cls            - scroll screen\r\n");
     printf("  sbrk                   - demo heap growth via SYS_SBRK\r\n");
     printf("  fork                   - demo SYS_FORK with parent/child\r\n");
+    printf("  pipe                   - demo anonymous pipe (SYS_PIPE)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -286,6 +287,48 @@ static void cmd_fork(void)
     }
 }
 
+static void cmd_pipe(void)
+{
+    const char *msg = "Hello through the pipe!";
+    int         msglen = strlen(msg);
+
+    printf("=== Pipe demo (section 8.2) ===\r\n");
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        printf("pipe: syscall failed\r\n");
+        return;
+    }
+    printf("1. pipe created: read_fd=%d  write_fd=%d\r\n", fds[0], fds[1]);
+
+    /* Write into the write end. */
+    int n = write(fds[1], msg, msglen);
+    printf("2. wrote %d bytes to write_fd\r\n", n);
+
+    /* Close the write end so the read end sees EOF after draining. */
+    close(fds[1]);
+    printf("3. write end closed\r\n");
+
+    /* Read from the read end. */
+    char buf[64];
+    int r = read(fds[0], buf, (int)sizeof(buf) - 1);
+    if (r > 0) {
+        buf[r] = '\0';
+        printf("4. read %d bytes: \"%s\"\r\n", r, buf);
+        printf("   %s\r\n",
+               strcmp(buf, msg) == 0 ? "content matches" : "MISMATCH");
+    } else {
+        printf("4. read returned %d\r\n", r);
+    }
+
+    /* Second read should return 0 (EOF). */
+    int eof = read(fds[0], buf, (int)sizeof(buf));
+    printf("5. second read (EOF expected): %d\r\n", eof);
+
+    close(fds[0]);
+    printf("=== done ===\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -336,6 +379,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "cls")    == 0) cmd_clear();
     else if (strcmp(cmd, "sbrk")   == 0) cmd_sbrk();
     else if (strcmp(cmd, "fork")   == 0) cmd_fork();
+    else if (strcmp(cmd, "pipe")   == 0) cmd_pipe();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

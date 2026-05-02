@@ -1,5 +1,5 @@
 /*
- * Quilon OS — ELF32 Loader (section 4.12)
+ * Quilon OS - ELF32 Loader (section 4.12)
  *
  * Loads an ELF32 i386 executable from the VFS into virtual memory and
  * returns the program's entry-point address.
@@ -15,7 +15,7 @@
  *     the loader where to find the program header table.
  *
  *   Program header table (array of 32-byte entries)
- *     Each entry describes one "segment" — a contiguous region of the file
+ *     Each entry describes one "segment" - a contiguous region of the file
  *     that must be placed somewhere in virtual memory before the program runs.
  *     The loader only cares about PT_LOAD entries; all others are ignored.
  *
@@ -38,7 +38,7 @@
  *         paging_map_page_alloc() with PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER.
  *      c. Copy p_filesz bytes from the heap buffer to the virtual address.
  *
- * 3. Return e_entry — the first virtual address the CPU should execute.
+ * 3. Return e_entry - the first virtual address the CPU should execute.
  *    The caller does:  usermode_enter((void(*)(void))(uintptr_t)entry);
  *
  * Why PAGE_USER on segment pages?
@@ -75,7 +75,7 @@
 #define ELF_MAX_SIZE (256u * 1024u)
 
 /* ── Pure parsing helpers ────────────────────────────────────────────────────
- * These functions depend only on the buffer pointer and arithmetic — no
+ * These functions depend only on the buffer pointer and arithmetic - no
  * kernel services.  They compile and run identically on the host for tests.
  * ─────────────────────────────────────────────────────────────────────────── */
 
@@ -95,13 +95,13 @@ int elf_validate(const uint8_t *buf, uint32_t size)
         h->e_ident[3] != 'F')
         return -1;
 
-    /* Byte 4: EI_CLASS — must be 32-bit */
+    /* Byte 4: EI_CLASS - must be 32-bit */
     if (h->e_ident[4] != ELFCLASS32)  return -1;
 
-    /* Byte 5: EI_DATA — must be little-endian */
+    /* Byte 5: EI_DATA - must be little-endian */
     if (h->e_ident[5] != ELFDATA2LSB) return -1;
 
-    /* Byte 6: EI_VERSION — must equal EV_CURRENT */
+    /* Byte 6: EI_VERSION - must equal EV_CURRENT */
     if (h->e_ident[6] != EV_CURRENT)  return -1;
 
     /* ── Header field checks ─────────────────────────────────────────────── */
@@ -197,8 +197,8 @@ uint32_t elf_load(const char *path)
 
         /* Page-align the virtual range.
          *
-         * virt_start — round p_vaddr DOWN to the nearest page boundary.
-         * virt_end   — round p_vaddr+p_memsz UP to the nearest page boundary.
+         * virt_start - round p_vaddr DOWN to the nearest page boundary.
+         * virt_end   - round p_vaddr+p_memsz UP to the nearest page boundary.
          *
          * Example: p_vaddr=0x401010, p_memsz=20
          *   virt_start = 0x401000 (page containing the segment start)
@@ -257,12 +257,12 @@ uint32_t elf_load(const char *path)
     uint32_t entry = ehdr->e_entry;
     kfree(buf);
 
-    printf("[elf] loaded '%s' — entry=0x%x\r\n", path, (unsigned)entry);
+    printf("[elf] loaded '%s' - entry=0x%x\r\n", path, (unsigned)entry);
     return entry;
 }
 
 /*
- * elf_load_into — load an ELF32 executable into a specific page directory.
+ * elf_load_into - load an ELF32 executable into a specific page directory.
  *
  * This is the process-isolation version of elf_load().  Instead of mapping
  * segments into the global (kernel) page directory, it maps them into the
@@ -369,7 +369,7 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
              * File data covers [p_vaddr, p_vaddr + p_filesz).
              * Intersection: [copy_start, copy_end).
              *
-             * We write to phys_page (identity-mapped), not to virt —
+             * We write to phys_page (identity-mapped), not to virt -
              * because virt lives in target_pd which is not currently
              * active in CR3.
              */
@@ -423,7 +423,7 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
 
     uint32_t entry = ehdr->e_entry;
     kfree(buf);
-    printf("[elf] '%s' ready in pd=0x%x — entry=0x%x  stack=0x%x\r\n",
+    printf("[elf] '%s' ready in pd=0x%x - entry=0x%x  stack=0x%x\r\n",
            path, (unsigned)(uintptr_t)target_pd,
            (unsigned)entry, (unsigned)USER_STACK_TOP);
     return entry;

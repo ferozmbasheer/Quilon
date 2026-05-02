@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe
 
 .PHONY: all build run clean help
 
@@ -212,6 +212,21 @@ $(BINDIR)/test_libc: test_libc.c framework.h \
                      $(USER_LIBC_STRING) $(USER_LIBC_STDIO) $(USER_LIBC_STDLIB)
 	$(CC) $(USER_LIBC_INCLUDES) $(CFLAGS) -o $@ \
 	    test_libc.c $(USER_LIBC_STRING) $(USER_LIBC_STDIO) $(USER_LIBC_STDLIB)
+
+# Pipe tests (section 8.2)
+# pipe.c is pure C — the scheduler yield paths are guarded by #ifdef __is_kernel
+# and absent in the host build.  Only the ring-buffer logic is exercised.
+# vfs.c is also linked so vfs_pipe() can be tested (returns -1 in host build).
+PIPE_SRC = ../kernel/kernel/pipe.c
+
+$(BINDIR)/test_pipe: test_pipe.c framework.h \
+                     $(PIPE_SRC) \
+                     ../kernel/kernel/vfs.c \
+                     $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_pipe.c $(PIPE_SRC) \
+	    ../kernel/kernel/vfs.c \
+	    $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

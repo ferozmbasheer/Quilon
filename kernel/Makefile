@@ -39,6 +39,7 @@ kernel/usermode.o \
 kernel/syscall.o \
 kernel/signal.o \
 kernel/vfs.o \
+kernel/pipe.o \
 kernel/fat16.o \
 kernel/elf.o \
 

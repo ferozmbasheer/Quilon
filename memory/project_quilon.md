@@ -51,4 +51,23 @@ All four subsections implemented:
 - `SYS_WAIT` (syscall 7) blocks caller until child becomes ZOMBIE, then reaps
 - `SYS_EXEC` (syscall 8) creates child address space + PCB via `elf_load_into()`
 
-**Next section:** 8.2 — Pipes
+**Section 8.2 — Pipes (completed 2026-05-02)**
+
+Anonymous in-kernel ring-buffer pipes implemented:
+
+- `kernel/include/kernel/pipe.h` — `pipe_t` struct, `PIPE_MAX=8`, `PIPE_BUF_SIZE=4096`, full API
+- `kernel/kernel/pipe.c` — ring-buffer, blocking read/write (yield loop), `wake_blocked()` wake-all helper
+- `vfs_node_t` extended: `is_pipe`, `pipe_write_end`, `pipe_idx` fields
+- `vfs_read`/`vfs_write`/`vfs_close` dispatch to pipe functions when `is_pipe=1`
+- `vfs_pipe(fds[2])` allocates a pipe slot and two VFS FDs (read/write ends)
+- `SYS_PIPE = 17` — `pipe(int fds[2])` syscall added to syscall.h + syscall.c
+- `pipe()` asm stub added to user/libc/syscall.S; declared in unistd.h
+- Kernel shell: `pipetest` command; User shell: `pipe` command
+- `tests/test_pipe.c` — 55 tests covering alloc, ring-buffer, wrap-around, ref counting, error handling
+- All 14 test suites pass (645 total assertions)
+
+**Blocking design:** `pipe_read` yields when empty (writers > 0); `pipe_write` yields when full. `wake_blocked()` wakes all PROC_BLOCKED processes after writes/close (safe: callers recheck predicate on resume). Works with preemptive PIT timer because int 0x80 is a trap gate (IF not cleared).
+
+**Known limitation:** Global VFS FD table (not per-process) means fork+pipe requires care — close in one process affects all. Shell `pipe` demo uses single-process write/read to show the mechanism cleanly.
+
+**Next section:** 8.3 — initrd (RAM-Based Initial Filesystem)

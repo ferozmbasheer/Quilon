@@ -588,6 +588,26 @@ void syscall_handler(syscall_regs_t *regs)
         break;
 
     /* ────────────────────────────────────────────────────────────────────────
+     * SYS_PIPE (17)
+     *   EBX = pointer to int[2] array in user space.
+     *         fds[0] = read end, fds[1] = write end.
+     *   Returns: 0 on success, -1 on failure (pool full or fd table full).
+     *
+     * Creates an anonymous in-memory channel between two file descriptors.
+     * The write end is written to with SYS_WRITE; the read end is read with
+     * SYS_READ.  Data flows through a PIPE_BUF_SIZE kernel ring buffer.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_PIPE: {
+#ifdef __is_kernel
+        int *fds = (int *)(uintptr_t)regs->ebx;
+        ret = (fds != (void *)0) ? (uint32_t)vfs_pipe(fds) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
      * Unknown syscall
      * ──────────────────────────────────────────────────────────────────────── */
     default:

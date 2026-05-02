@@ -293,12 +293,55 @@ static void shell_run_ring3_task(void (*task)(void), const char *label)
     printf("%s: task exited; back in kernel\r\n", label);
 }
 
+static void shell_cmd_pipetest(void)
+{
+    const char *msg = "Hello through the pipe!";
+    int  msglen = 0;
+    while (msg[msglen]) msglen++;
+
+    printf("=== Pipe demo (section 8.2) ===\r\n");
+
+    /* Create a pipe: fds[0] = read end, fds[1] = write end. */
+    int fds[2];
+    if (vfs_pipe(fds) != 0) {
+        printf("pipetest: vfs_pipe() failed\r\n");
+        return;
+    }
+    printf("1. pipe created: read_fd=%d  write_fd=%d\r\n", fds[0], fds[1]);
+
+    /* Write into the write end. */
+    int n = vfs_write(fds[1], msg, (uint32_t)msglen);
+    printf("2. wrote %d bytes to write_fd\r\n", n);
+
+    /* Close the write end so the read end sees EOF after draining. */
+    vfs_close(fds[1]);
+    printf("3. write end closed\r\n");
+
+    /* Read from the read end. */
+    char buf[64];
+    int r = vfs_read(fds[0], buf, sizeof(buf) - 1);
+    if (r > 0) {
+        buf[r] = '\0';
+        printf("4. read %d bytes: \"%s\"\r\n", r, buf);
+        printf("   %s\r\n", strcmp(buf, msg) == 0 ? "content matches" : "MISMATCH");
+    } else {
+        printf("4. read returned %d\r\n", r);
+    }
+
+    /* Second read should return 0 (EOF). */
+    int eof = vfs_read(fds[0], buf, sizeof(buf));
+    printf("5. second read (EOF expected): %d\r\n", eof);
+
+    vfs_close(fds[0]);
+    printf("=== done ===\r\n");
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, ps, ls, cat <file>,\r\n");
         printf("          touch <file>, write <file> <data>, rm <file>,\r\n");
-        printf("          fstest, exec <file.elf>\r\n");
+        printf("          fstest, pipetest, exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -348,6 +391,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_rm(cmd + 3);
     } else if (strcmp(cmd, "fstest") == 0) {
         shell_cmd_fstest();
+    } else if (strcmp(cmd, "pipetest") == 0) {
+        shell_cmd_pipetest();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }
