@@ -31,7 +31,10 @@
 #define SYS_GETTICKS 15  /* getticks() → current PIT tick count (uint32_t)       */
 #define SYS_GETHZ    16  /* gethz() → PIT frequency in Hz (uint32_t)             */
 #define SYS_PIPE     17  /* pipe(int fds[2]) → 0 on success, -1 on failure       */
-#define SYS_PCI_READ 18  /* pci_read(bus, (slot<<8)|func, offset) → 32-bit dword */
+#define SYS_PCI_READ   18  /* pci_read(bus, (slot<<8)|func, offset) → 32-bit dword */
+#define SYS_NET_SEND   19  /* net_send(buf, len) → 0 ok, -1 err                    */
+#define SYS_NET_RECV   20  /* net_recv(buf, maxlen) → bytes copied, 0=none, -1=err */
+#define SYS_NET_STATUS 21  /* net_status(mac6_buf) → 1=NIC ready, 0=not ready      */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

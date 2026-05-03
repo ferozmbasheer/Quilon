@@ -13,6 +13,7 @@
 #include <kernel/process.h>
 #include <kernel/initrd.h>
 #include <kernel/pci.h>
+#include <kernel/rtl8139.h>
 
 static void shell_cmd_ls(void)
 {
@@ -453,6 +454,94 @@ static void shell_cmd_pipetest(void)
     printf("=== done ===\r\n");
 }
 
+static void shell_cmd_net(void)
+{
+    printf("=== RTL8139 Network Card Driver (section 10.2) ===\r\n");
+
+    if (!rtl8139_is_ready()) {
+        if (rtl8139_init() != 0) {
+            printf("rtl8139: not present\r\n");
+            printf("  (add -device rtl8139,netdev=net0"
+                   " -netdev user,id=net0 to qemu.sh)\r\n");
+            printf("=== done ===\r\n");
+            return;
+        }
+    }
+
+    printf("rtl8139: status: ready\r\n");
+
+    uint8_t mac[RTL8139_MAC_LEN];
+    rtl8139_get_mac(mac);
+    printf("rtl8139: MAC = %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+           (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
+           (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
+
+    printf("rtl8139: RX buffer: %u bytes  TX slots: %u\r\n",
+           (unsigned)RTL8139_RX_BUF_SIZE, (unsigned)RTL8139_TX_SLOTS);
+    printf("rtl8139: max frame: %u bytes\r\n", (unsigned)RTL8139_MAX_ETH_FRAME);
+    printf("=== done ===\r\n");
+}
+
+static void shell_cmd_netsend(void)
+{
+    printf("=== RTL8139 TX/RX demo (section 10.2) ===\r\n");
+
+    if (!rtl8139_is_ready()) {
+        printf("netsend: NIC not initialized — run 'net' first\r\n");
+        printf("=== done ===\r\n");
+        return;
+    }
+
+    uint8_t mac[RTL8139_MAC_LEN];
+    rtl8139_get_mac(mac);
+
+    /* Transmit an ARP Who-has broadcast for 10.0.2.2 (QEMU gateway). */
+    static uint8_t frame[42];
+    int i;
+    for (i = 0; i < 6; i++) frame[i]      = 0xFFu; /* dst: broadcast */
+    for (i = 0; i < 6; i++) frame[6 + i]  = mac[i]; /* src: our MAC  */
+    frame[12] = 0x08; frame[13] = 0x06;              /* EtherType ARP */
+    frame[14] = 0x00; frame[15] = 0x01;              /* hw: Ethernet  */
+    frame[16] = 0x08; frame[17] = 0x00;              /* proto: IPv4   */
+    frame[18] = 6;    frame[19] = 4;
+    frame[20] = 0x00; frame[21] = 0x01;              /* opcode: req   */
+    for (i = 0; i < 6; i++) frame[22 + i] = mac[i]; /* sender MAC    */
+    frame[28] = 0; frame[29] = 0; frame[30] = 0; frame[31] = 0;
+    for (i = 0; i < 6; i++) frame[32 + i] = 0;      /* target MAC: 0 */
+    frame[38] = 10; frame[39] = 0;
+    frame[40] = 2;  frame[41] = 2;                   /* 10.0.2.2      */
+
+    printf("1. TX: ARP Who-has 10.0.2.2 (broadcast)...\r\n");
+    int tx = rtl8139_send(frame, (uint16_t)sizeof(frame));
+    printf("   %s\r\n", tx == 0 ? "OK" : "FAILED");
+
+    /* Poll for a received frame (may be our own loopback on some configs). */
+    static uint8_t rx_buf[RTL8139_MAX_ETH_FRAME + 4];
+    int received = 0;
+    for (int attempt = 0; attempt < 2000000; attempt++) {
+        int n = rtl8139_recv(rx_buf, (uint16_t)sizeof(rx_buf));
+        if (n > 14) {
+            printf("2. RX: %d bytes\r\n", n);
+            printf("   src  %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+                   (unsigned)rx_buf[6],  (unsigned)rx_buf[7],
+                   (unsigned)rx_buf[8],  (unsigned)rx_buf[9],
+                   (unsigned)rx_buf[10], (unsigned)rx_buf[11]);
+            printf("   dst  %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+                   (unsigned)rx_buf[0],  (unsigned)rx_buf[1],
+                   (unsigned)rx_buf[2],  (unsigned)rx_buf[3],
+                   (unsigned)rx_buf[4],  (unsigned)rx_buf[5]);
+            printf("   etype 0x%02x%02x\r\n",
+                   (unsigned)rx_buf[12], (unsigned)rx_buf[13]);
+            received = 1;
+            break;
+        }
+    }
+    if (!received)
+        printf("2. RX: no reply (normal without a full TCP/IP stack)\r\n");
+
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_pci(void)
 {
     printf("=== PCI Bus Enumeration (section 10.1) ===\r\n");
@@ -490,7 +579,7 @@ static void shell_execute(const char *cmd) {
         printf("          ring3, syscall, sbrk, fork, cow, ps, ls,\r\n");
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
         printf("          rm <file>, fstest, pipetest, initrd, pci,\r\n");
-        printf("          exec <file.elf>\r\n");
+        printf("          net, netsend, exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -548,6 +637,10 @@ static void shell_execute(const char *cmd) {
         shell_cmd_initrd();
     } else if (strcmp(cmd, "pci") == 0) {
         shell_cmd_pci();
+    } else if (strcmp(cmd, "net") == 0) {
+        shell_cmd_net();
+    } else if (strcmp(cmd, "netsend") == 0) {
+        shell_cmd_netsend();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

@@ -23,6 +23,7 @@
 #include <kernel/signal.h>
 #include <kernel/initrd.h>
 #include <kernel/pci.h>
+#include <kernel/rtl8139.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -526,6 +527,74 @@ void kernel_main(void) {
 		printf("pci: use 'pci' at the shell prompt for interactive listing\r\n");
 	}
 	printf("=== Section 10.1 ready ===\r\n\r\n");
+
+	/* ── Section 10.2: RTL8139 Network Card Driver ───────────────────────────
+	 *
+	 * Detects the RTL8139 via PCI, initialises it, prints the MAC address,
+	 * and transmits one ARP broadcast frame to prove the TX path works.
+	 *
+	 * QEMU must be launched with:
+	 *   -device rtl8139,netdev=net0 -netdev user,id=net0
+	 * (qemu.sh already includes these flags after this section was added.)
+	 *
+	 * Interactive demo:  quilon> net       — show NIC status and MAC address
+	 *                    quilon> netsend   — transmit a test ARP frame + poll RX
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 10.2: RTL8139 Network Card Driver ===\r\n");
+	{
+		int nic_ok = rtl8139_init();
+		if (nic_ok == 0) {
+			uint8_t mac[RTL8139_MAC_LEN];
+			rtl8139_get_mac(mac);
+			printf("rtl8139: initialized OK\r\n");
+			printf("rtl8139: MAC = %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+			       (unsigned)mac[0], (unsigned)mac[1],
+			       (unsigned)mac[2], (unsigned)mac[3],
+			       (unsigned)mac[4], (unsigned)mac[5]);
+
+			/* Build and transmit a minimal ARP Who-has request broadcast.
+			 *
+			 * Frame layout (42 bytes):
+			 *   [0–5]   Destination MAC  : FF:FF:FF:FF:FF:FF (broadcast)
+			 *   [6–11]  Source MAC       : our hardware MAC
+			 *   [12–13] EtherType        : 0x0806 (ARP)
+			 *   [14–15] Hardware type    : 0x0001 (Ethernet)
+			 *   [16–17] Protocol type    : 0x0800 (IPv4)
+			 *   [18]    HW addr length   : 6
+			 *   [19]    Proto addr length: 4
+			 *   [20–21] ARP opcode       : 0x0001 (request)
+			 *   [22–27] Sender MAC       : our MAC
+			 *   [28–31] Sender IP        : 0.0.0.0 (unknown)
+			 *   [32–37] Target MAC       : 00:00:00:00:00:00
+			 *   [38–41] Target IP        : 10.0.2.2 (QEMU default gateway)
+			 */
+			static uint8_t arp_frame[42];
+			int i;
+			for (i = 0; i < 6; i++)  arp_frame[i]      = 0xFFu; /* dst: broadcast */
+			for (i = 0; i < 6; i++)  arp_frame[6 + i]  = mac[i]; /* src: our MAC   */
+			arp_frame[12] = 0x08; arp_frame[13] = 0x06;          /* EtherType: ARP */
+			arp_frame[14] = 0x00; arp_frame[15] = 0x01;          /* HW: Ethernet   */
+			arp_frame[16] = 0x08; arp_frame[17] = 0x00;          /* Proto: IPv4    */
+			arp_frame[18] = 6;    arp_frame[19] = 4;              /* addr lengths   */
+			arp_frame[20] = 0x00; arp_frame[21] = 0x01;          /* opcode: request*/
+			for (i = 0; i < 6; i++)  arp_frame[22 + i] = mac[i]; /* sender MAC     */
+			arp_frame[28] = 0; arp_frame[29] = 0;
+			arp_frame[30] = 0; arp_frame[31] = 0;                 /* sender IP: 0   */
+			for (i = 0; i < 6; i++)  arp_frame[32 + i] = 0;      /* target MAC: 0  */
+			arp_frame[38] = 10; arp_frame[39] = 0;
+			arp_frame[40] = 2;  arp_frame[41] = 2;                /* target: 10.0.2.2 */
+
+			int tx_ok = rtl8139_send(arp_frame, (uint16_t)sizeof(arp_frame));
+			printf("rtl8139: ARP broadcast %s\r\n",
+			       tx_ok == 0 ? "transmitted OK" : "transmit FAILED");
+
+			printf("rtl8139: use 'net' for status, 'netsend' for TX+RX demo\r\n");
+		} else {
+			printf("rtl8139: not found — add to qemu.sh:\r\n");
+			printf("  -device rtl8139,netdev=net0 -netdev user,id=net0\r\n");
+		}
+	}
+	printf("=== Section 10.2 ready ===\r\n\r\n");
 
 	printf("  ___        _ _ \r\n");
 	printf(" / _ \\ _   _(_) | ___  _ __  \r\n");

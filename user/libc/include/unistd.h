@@ -35,6 +35,9 @@
 #define SYS_GETHZ     16
 #define SYS_PIPE      17
 #define SYS_PCI_READ  18  /* pci_read_u(bus,(slot<<8)|func,offset) → dword */
+#define SYS_NET_SEND   19  /* net_send(buf, len) → 0 ok, -1 err            */
+#define SYS_NET_RECV   20  /* net_recv(buf, maxlen) → bytes, 0=none, -1=err */
+#define SYS_NET_STATUS 21  /* net_status(mac6_buf) → 1=ready, 0=not ready  */
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -81,5 +84,10 @@ unsigned int gethz(void);       /* SYS_GETHZ    — PIT frequency in Hz    */
  * Returns: 32-bit config dword (vendor==0xFFFF → no device in slot)         */
 unsigned int pci_read_u(unsigned int bus, unsigned int slot,
                         unsigned int func, unsigned int off);
+
+/* ── Network (section 10.2) ───────────────────────────────────────────────── */
+int net_send(const void *buf, int len);
+int net_recv(void *buf, int maxlen);
+int net_status(unsigned char mac[6]);   /* returns 1 if NIC ready, 0 if not */
 
 #endif /* _UNISTD_H */

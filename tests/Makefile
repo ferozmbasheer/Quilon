@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139
 
 .PHONY: all build run clean help
 
@@ -267,6 +267,16 @@ PCI_SRC = ../kernel/arch/i386/pci.c
 
 $(BINDIR)/test_pci: test_pci.c framework.h $(PCI_SRC)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_pci.c $(PCI_SRC)
+
+# RTL8139 tests (section 10.2)
+# rtl8139.c is compiled without __is_kernel, so all x86 I/O code (#ifdef
+# __is_kernel) is excluded.  Only the static-inline helpers from rtl8139.h
+# are exercised: rtl8139_bar0_iobase, rtl8139_rx_advance, rtl8139_capr_value,
+# rtl8139_rx_aligned_len, and the constant/flag values.
+RTL8139_SRC = ../kernel/arch/i386/rtl8139.c
+
+$(BINDIR)/test_rtl8139: test_rtl8139.c framework.h $(RTL8139_SRC)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_rtl8139.c $(RTL8139_SRC)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

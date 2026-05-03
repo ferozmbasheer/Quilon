@@ -195,3 +195,35 @@ pci_read_u:
     int   $0x80
     popl  %ebx
     ret
+
+/* ── net_send(const void *buf, int len) → int ───────────────────────────── */
+.global net_send
+net_send:
+    pushl %ebx
+    movl  $19,       %eax    /* SYS_NET_SEND */
+    movl  8(%esp),   %ebx    /* buf */
+    movl  12(%esp),  %ecx    /* len */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── net_recv(void *buf, int maxlen) → int ──────────────────────────────── */
+.global net_recv
+net_recv:
+    pushl %ebx
+    movl  $20,       %eax    /* SYS_NET_RECV */
+    movl  8(%esp),   %ebx    /* buf */
+    movl  12(%esp),  %ecx    /* maxlen */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── net_status(unsigned char mac[6]) → int ─────────────────────────────── */
+.global net_status
+net_status:
+    pushl %ebx
+    movl  $21,       %eax    /* SYS_NET_STATUS */
+    movl  8(%esp),   %ebx    /* mac buffer (or NULL) */
+    int   $0x80
+    popl  %ebx
+    ret

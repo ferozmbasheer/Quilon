@@ -90,6 +90,8 @@ static void cmd_help(void)
     printf("  cow                    - CoW fork: parent/child see own data\r\n");
     printf("  pipe                   - demo anonymous pipe (SYS_PIPE)\r\n");
     printf("  pci                    - list PCI bus devices (section 10.1)\r\n");
+    printf("  net                    - show RTL8139 NIC status (section 10.2)\r\n");
+    printf("  netsend                - send ARP request and poll for reply\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -537,6 +539,87 @@ static void cmd_pci(void)
     printf("=== done ===\r\n");
 }
 
+static void cmd_net(void)
+{
+    unsigned char mac[6];
+    printf("=== RTL8139 Network Card (section 10.2) ===\r\n");
+
+    int ready = net_status(mac);
+    if (!ready) {
+        printf("rtl8139: not ready (not found or init failed)\r\n");
+        printf("  make sure QEMU is started with:"
+               " -device rtl8139,netdev=net0 -netdev user,id=net0\r\n");
+    } else {
+        printf("rtl8139: ready\r\n");
+        printf("mac: %x:%x:%x:%x:%x:%x\r\n",
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+    printf("=== done ===\r\n");
+}
+
+static void cmd_netsend(void)
+{
+    unsigned char mac[6];
+    printf("=== RTL8139 TX/RX demo (section 10.2) ===\r\n");
+
+    int ready = net_status(mac);
+    if (!ready) {
+        printf("rtl8139: NIC not ready\r\n");
+        return;
+    }
+    printf("mac: %x:%x:%x:%x:%x:%x\r\n",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    /* Build a minimal ARP "Who has 10.0.2.2?" broadcast frame. */
+    unsigned char frame[42];
+    int i;
+
+    /* Ethernet header: dst=broadcast, src=our MAC, EtherType=0x0806 (ARP) */
+    for (i = 0; i < 6; i++) frame[i] = 0xFF;       /* dst: broadcast */
+    for (i = 0; i < 6; i++) frame[6 + i] = mac[i]; /* src: our MAC */
+    frame[12] = 0x08; frame[13] = 0x06;             /* EtherType: ARP */
+
+    /* ARP payload */
+    frame[14] = 0x00; frame[15] = 0x01; /* HTYPE: Ethernet */
+    frame[16] = 0x08; frame[17] = 0x00; /* PTYPE: IPv4 */
+    frame[18] = 6;                       /* HLEN */
+    frame[19] = 4;                       /* PLEN */
+    frame[20] = 0x00; frame[21] = 0x01; /* OPER: request */
+    for (i = 0; i < 6; i++) frame[22 + i] = mac[i]; /* sender MAC */
+    frame[28] = 10; frame[29] = 0; frame[30] = 2; frame[31] = 15; /* sender IP 10.0.2.15 */
+    for (i = 0; i < 6; i++) frame[32 + i] = 0x00;   /* target MAC: unknown */
+    frame[38] = 10; frame[39] = 0; frame[40] = 2; frame[41] = 2;  /* target IP 10.0.2.2 */
+
+    printf("sending ARP request (42 bytes)...\r\n");
+    int r = net_send(frame, 42);
+    if (r != 0) {
+        printf("net_send: failed (%d)\r\n", r);
+        return;
+    }
+    printf("TX: ok\r\n");
+
+    /* Poll for a response (up to ~1M iterations). */
+    printf("polling for RX...\r\n");
+    unsigned char rxbuf[1520];
+    int got = 0;
+    int iter;
+    for (iter = 0; iter < 1000000 && !got; iter++) {
+        int n = net_recv(rxbuf, (int)sizeof(rxbuf));
+        if (n <= 0) continue;
+        got = 1;
+        printf("RX: %d bytes\r\n", n);
+        printf("  dst: %x:%x:%x:%x:%x:%x\r\n",
+               rxbuf[0], rxbuf[1], rxbuf[2], rxbuf[3], rxbuf[4], rxbuf[5]);
+        printf("  src: %x:%x:%x:%x:%x:%x\r\n",
+               rxbuf[6], rxbuf[7], rxbuf[8], rxbuf[9], rxbuf[10], rxbuf[11]);
+        unsigned int etype = ((unsigned int)rxbuf[12] << 8) | rxbuf[13];
+        printf("  ethertype: 0x%x\r\n", etype);
+    }
+    if (!got)
+        printf("no reply received (timeout)\r\n");
+    printf("=== done ===\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -592,6 +675,8 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "pipe")   == 0) cmd_pipe();
     else if (strcmp(cmd, "initrd") == 0) cmd_initrd();
     else if (strcmp(cmd, "pci")    == 0) cmd_pci();
+    else if (strcmp(cmd, "net")     == 0) cmd_net();
+    else if (strcmp(cmd, "netsend") == 0) cmd_netsend();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

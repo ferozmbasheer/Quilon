@@ -26,4 +26,6 @@ fi
 qemu-system-$(./target-triplet-to-arch.sh $HOST) \
     -kernel sysroot/boot/quilon.kernel \
     -drive file=disk.img,format=raw,if=ide,index=0 \
+    -device rtl8139,netdev=net0 \
+    -netdev user,id=net0 \
     -serial stdio

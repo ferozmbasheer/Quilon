@@ -52,6 +52,7 @@
 #include <kernel/pit.h>
 #include <kernel/vma.h>
 #include <kernel/pci.h>
+#include <kernel/rtl8139.h>
 #include <string.h>
 #endif
 
@@ -668,6 +669,77 @@ void syscall_handler(syscall_regs_t *regs)
 #else
         (void)bus; (void)slot; (void)func; (void)off;
         ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_NET_SEND (19) — transmit one raw Ethernet frame via the RTL8139.
+     *   EBX = pointer to frame bytes in user space (destination MAC first).
+     *   ECX = frame byte count (must be ≤ RTL8139_TX_BUF_SIZE = 1792).
+     *   Returns: 0 on success, -1 on error (NIC absent, frame too long, etc.).
+     *
+     * The kernel copies the frame into a kernel DMA buffer before passing it
+     * to the card, so the user buffer only needs to be readable during the
+     * syscall — it need not be page-aligned or physically contiguous.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_NET_SEND: {
+#ifdef __is_kernel
+        const void *buf = (const void *)(uintptr_t)regs->ebx;
+        uint16_t    len = (uint16_t)(regs->ecx & 0xFFFFu);
+        if (!buf || len == 0) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)rtl8139_send(buf, len);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_NET_RECV (20) — poll for a received Ethernet frame.
+     *   EBX = pointer to receive buffer in user space.
+     *   ECX = maximum bytes to copy (should be ≥ RTL8139_MAX_ETH_FRAME).
+     *   Returns: frame byte count on success, 0 if ring buffer empty,
+     *            -1 on hardware error or bad packet.
+     *
+     * This is a non-blocking poll: it returns 0 immediately if no frame is
+     * waiting in the ring buffer.  The caller should loop with a delay or
+     * use it in a spin loop for a bounded number of iterations.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_NET_RECV: {
+#ifdef __is_kernel
+        void    *buf    = (void *)(uintptr_t)regs->ebx;
+        uint16_t maxlen = (uint16_t)(regs->ecx & 0xFFFFu);
+        if (!buf || maxlen == 0) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)rtl8139_recv(buf, maxlen);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_NET_STATUS (21) — query NIC readiness and MAC address.
+     *   EBX = pointer to a 6-byte buffer to receive the MAC address,
+     *         or 0/NULL to skip the MAC copy (status-only query).
+     *   Returns: 1 if the RTL8139 is initialised and ready, 0 if not present.
+     *
+     * Allows ring-3 code to check whether the kernel successfully initialised
+     * the NIC at boot and to read the hardware MAC address without needing
+     * direct I/O port access.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_NET_STATUS: {
+#ifdef __is_kernel
+        uint8_t *mac_out = (uint8_t *)(uintptr_t)regs->ebx;
+        if (rtl8139_is_ready()) {
+            if (mac_out)
+                rtl8139_get_mac(mac_out);
+            ret = 1;
+        } else {
+            ret = 0;
+        }
+#else
+        ret = 0;
 #endif
         break;
     }
