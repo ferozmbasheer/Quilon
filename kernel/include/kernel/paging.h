@@ -8,6 +8,19 @@
 #define PAGE_WRITABLE  (1u << 1)   /* R/W – allow writes                   */
 #define PAGE_USER      (1u << 2)   /* U/S – accessible from ring 3         */
 
+/* ── Higher-half kernel constants (section 9.1) ────────────────────────────
+ *
+ * The kernel is linked at virtual 0xC0100000 but loaded at physical 0x100000.
+ * KERNEL_OFFSET is the difference: virtual - physical = 0xC0000000.
+ * KERNEL_PD_IDX is the page directory index for 0xC0000000 (= 0xC0000000 >> 22 = 768).
+ *
+ * Physical address of a kernel virtual: phys = virt - KERNEL_OFFSET
+ * Virtual address of a physical page:   virt = phys + KERNEL_OFFSET
+ *   (only valid for pages in the first 4 MiB, covered by the kernel mapping)
+ */
+#define KERNEL_OFFSET    0xC0000000u
+#define KERNEL_PD_IDX    (KERNEL_OFFSET >> 22)   /* = 768 */
+
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096u
 #endif
@@ -51,6 +64,10 @@ extern uint32_t page_directory[1024];
 /* Return a pointer to the kernel's global page directory.
  * Used when switching back to the kernel address space after exec_longjmp. */
 uint32_t *paging_get_kernel_pd(void);
+
+/* Return the physical address of the kernel page directory for loading into CR3.
+ * Use this (not paging_get_kernel_pd()) when switching to the kernel address space. */
+uint32_t paging_kernel_cr3(void);
 
 void paging_initialize(void);
 

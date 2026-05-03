@@ -264,6 +264,49 @@ void kernel_main(void) {
 			       "(see ROADMAP.md 4.12 and BUILD.md)\r\n");
 	}
 
+	/* ── Section 9.1: Higher-Half Kernel demo ─────────────────────────────────
+	 *
+	 * The kernel is now linked at virtual 0xC0100000 (higher half) but loaded
+	 * by GRUB at physical 0x100000.  KERNEL_OFFSET = 0xC0000000 is the
+	 * difference between the two addresses.
+	 *
+	 * Both PD[0] (identity map) and PD[768] (kernel-high) point to the same
+	 * physical page table, so physical 0x001xxxxx is accessible both as
+	 * virtual 0x001xxxxx (identity) and as 0xC01xxxxx (kernel symbol address).
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 9.1: Higher-Half Kernel ===\r\n");
+	{
+		extern uint32_t kernel_start, kernel_end;
+		uint32_t k_virt = (uint32_t)(uintptr_t)&kernel_start;
+		uint32_t k_phys = k_virt - KERNEL_OFFSET;
+		uint32_t k_size = (uint32_t)(uintptr_t)&kernel_end -
+		                  (uint32_t)(uintptr_t)&kernel_start;
+
+		printf("higher-half: KERNEL_OFFSET = 0x%x\r\n",
+		       (unsigned)KERNEL_OFFSET);
+		printf("higher-half: KERNEL_PD_IDX = %d  "
+		       "(PD entry for 0xC0000000)\r\n",
+		       (int)KERNEL_PD_IDX);
+		printf("higher-half: kernel_start virt=0x%x  phys=0x%x\r\n",
+		       (unsigned)k_virt, (unsigned)k_phys);
+		printf("higher-half: kernel size = %d bytes\r\n", (int)k_size);
+		printf("higher-half: kernel PD phys = 0x%x  "
+		       "(loaded in CR3)\r\n",
+		       (unsigned)paging_kernel_cr3());
+
+		/* Demonstrate that the same physical page is reachable via both the
+		 * identity map (low virtual == physical) and the kernel-high map.   */
+		volatile uint32_t *via_identity = (volatile uint32_t *)(uintptr_t)k_phys;
+		volatile uint32_t *via_high     = (volatile uint32_t *)(uintptr_t)k_virt;
+		printf("higher-half: read via identity  0x%x -> 0x%x\r\n",
+		       (unsigned)k_phys, (unsigned)*via_identity);
+		printf("higher-half: read via high-map  0x%x -> 0x%x  (same value)\r\n",
+		       (unsigned)k_virt, (unsigned)*via_high);
+		printf("higher-half: alias match: %s\r\n",
+		       (*via_identity == *via_high) ? "yes" : "no");
+	}
+	printf("=== Section 9.1 ready ===\r\n\r\n");
+
 	/* ── Process isolation demo (section 5.1) ─────────────────────────────
 	 * Show that two processes can have independent page directories at the
 	 * same virtual address range without colliding.                       */

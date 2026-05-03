@@ -62,10 +62,10 @@ void kmalloc_initialize(void)
     uintptr_t start = ((uintptr_t)&kernel_end + ALIGN - 1u) & ~(ALIGN - 1u);
     uintptr_t end   = start + HEAP_SIZE;
 
-    /* Sanity check: the first 4 MiB is identity-mapped.  Make sure the
-     * entire heap fits within that window.                                 */
-    if (end > 4u * 1024u * 1024u) {
-        printf("kmalloc: PANIC — heap [0x%x, 0x%x) exceeds 4 MiB identity map\r\n",
+    /* Sanity check: the kernel is mapped into a 4 MiB window at KERNEL_OFFSET
+     * (0xC0000000-0xC03FFFFF).  Verify the heap fits within that window.   */
+    if (end > KERNEL_OFFSET + 4u * 1024u * 1024u) {
+        printf("kmalloc: PANIC — heap [0x%x, 0x%x) exceeds kernel 4 MiB window\r\n",
                (unsigned)start, (unsigned)end);
         for (;;) asm volatile("hlt");
     }

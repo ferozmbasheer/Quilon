@@ -3,6 +3,7 @@
 
 #include <kernel/pmm.h>
 #include <kernel/multiboot.h>
+#include <kernel/paging.h>
 
 /* ── Bitmap ─────────────────────────────────────────────────────────────── */
 /* One bit per 4 KiB page across the full 32-bit (4 GiB) address space.
@@ -102,8 +103,9 @@ void pmm_initialize(void *multiboot_info)
     pmm_reserve_range(0, PAGE_SIZE);
 
     /* Reserve pages occupied by the kernel image (text + rodata + data + bss,
-     * which includes this bitmap array itself).                             */
-    pmm_reserve_range((uint32_t)&kernel_start,
+     * which includes this bitmap array itself).
+     * kernel_start/end are linked at high VA; subtract KERNEL_OFFSET for physical. */
+    pmm_reserve_range((uint32_t)&kernel_start - KERNEL_OFFSET,
                       (uint32_t)&kernel_end - (uint32_t)&kernel_start);
 }
 

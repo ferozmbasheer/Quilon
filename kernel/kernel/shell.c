@@ -91,7 +91,7 @@ static void shell_cmd_exec(const char *path)
      * Restore the kernel's page directory before resuming the shell.
      * STI re-enables hardware interrupts (the longjmp bypassed iret).
      */
-    paging_switch((uint32_t)(uintptr_t)paging_get_kernel_pd());
+    paging_switch(paging_kernel_cr3());
     asm volatile("sti");
     exec_return_active = 0;
     printf("exec: '%s' exited; back in kernel address space\r\n", path);
@@ -287,7 +287,7 @@ static void shell_run_ring3_task(void (*task)(void), const char *label)
         usermode_enter(task);
     }
 
-    paging_switch((uint32_t)(uintptr_t)paging_get_kernel_pd());
+    paging_switch(paging_kernel_cr3());
     asm volatile("sti");
     exec_return_active = 0;
     pmm_free_page(proc_pd);

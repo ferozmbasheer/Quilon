@@ -1,45 +1,35 @@
-/* The bootloader will look at this image and start execution at the symbol
-   designated at the entry point. */
+/* Link the kernel at 3 GiB + 1 MiB (0xC0100000).
+ * GRUB loads each section at its LMA (= VMA - KERNEL_OFFSET = physical 0x100000+).
+ * AT() sets the LMA so ELF p_paddr is correct for GRUB to load at 0x100000. */
 ENTRY(_start)
 
-/* Tell where the various sections of the object files will be put in the final
-   kernel image. */
+KERNEL_OFFSET = 0xC0000000;
+
 SECTIONS
 {
-	/* Begin putting sections at 1 MiB, a conventional place for kernels to be
-	   loaded at by the bootloader. */
-	. = 1M;
-	kernel_start = .;
+    . = 0xC0100000;
+    kernel_start = .;
 
-	/* First put the multiboot header, as it is required to be put very early
-	   early in the image or the bootloader won't recognize the file format.
-	   Next we'll put the .text section. */
-	.text BLOCK(4K) : ALIGN(4K)
-	{
-		*(.multiboot)
-		*(.text)
-	}
+    .text BLOCK(4K) : AT(ADDR(.text) - KERNEL_OFFSET) ALIGN(4K)
+    {
+        *(.multiboot)
+        *(.text)
+    }
 
-	/* Read-only data. */
-	.rodata BLOCK(4K) : ALIGN(4K)
-	{
-		*(.rodata)
-	}
+    .rodata BLOCK(4K) : AT(ADDR(.rodata) - KERNEL_OFFSET) ALIGN(4K)
+    {
+        *(.rodata)
+    }
 
-	/* Read-write data (initialized) */
-	.data BLOCK(4K) : ALIGN(4K)
-	{
-		*(.data)
-	}
+    .data BLOCK(4K) : AT(ADDR(.data) - KERNEL_OFFSET) ALIGN(4K)
+    {
+        *(.data)
+    }
 
-	/* Read-write data (uninitialized) and stack */
-	.bss BLOCK(4K) : ALIGN(4K)
-	{
-		*(COMMON)
-		*(.bss)
-	}
-	kernel_end = .;
-
-	/* The compiler may produce other sections, put them in the proper place in
-	   in this file, if you'd like to include them in the final kernel. */
+    .bss BLOCK(4K) : AT(ADDR(.bss) - KERNEL_OFFSET) ALIGN(4K)
+    {
+        *(COMMON)
+        *(.bss)
+    }
+    kernel_end = .;
 }

@@ -82,6 +82,13 @@ void usermode_initialize(void)
      * ring-3 code can access the user stack in the first 4 MiB.
      */
     paging_set_user_access(0x00000000u, 0x00400000u);
+
+    /* After higher-half: mark the kernel-high region user-accessible so that
+     * ring-3 demo tasks (compiled into kernel text at 0xC01xxxxx) can execute.
+     * PD[0] and PD[KERNEL_PD_IDX] share the same page table, so the PTEs are
+     * already marked USER by the call above — this only adds PAGE_USER to
+     * the PD[KERNEL_PD_IDX] entry itself.                                   */
+    paging_set_user_access(KERNEL_OFFSET, KERNEL_OFFSET + 0x00400000u);
 }
 
 void usermode_enter_esp(void (*user_func)(void), uint32_t user_esp_top)

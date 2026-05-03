@@ -1,3 +1,6 @@
+.set KERNEL_OFFSET, 0xC0000000
+.set KERNEL_PD_IDX, 768           /* 0xC0000000 >> 22 */
+
 # Declare constants for the multiboot header.
 .set ALIGN,    1<<0             # align loaded modules on page boundaries
 .set MEMINFO,  1<<1             # provide memory map
@@ -20,8 +23,13 @@ stack_bottom:
 .global stack_top
 stack_top:
 
+# Temporary boot page directory (4-MiB PSE entries, zeroed in _start).
+.align 4096
+.global boot_pd
+boot_pd:
+.skip 4096
+
 # Storage for the Multiboot info pointer passed by GRUB in %ebx.
-# Saved before _init so the stack stays 16-byte aligned for kernel_main.
 .section .data
 .global multiboot_info_ptr
 multiboot_info_ptr:
@@ -32,21 +40,63 @@ multiboot_info_ptr:
 .global _start
 .type _start, @function
 _start:
-	movl $stack_top, %esp
+    /* Paging is OFF here; all addresses must be physical. */
 
-	# Save the Multiboot info pointer before calling _init.
-	movl %ebx, multiboot_info_ptr
+    /* 1. Temporary stack at physical address (stack_top is linked at high VA). */
+    movl $(stack_top - KERNEL_OFFSET), %esp
 
-	# Call the global constructors.
-	call _init
+    /* 2. Save GRUB's Multiboot info pointer to its physical address. */
+    movl %ebx, (multiboot_info_ptr - KERNEL_OFFSET)
 
-	# Transfer control to the main kernel.
-	call kernel_main
+    /* 3. Enable PSE (4-MiB pages) in CR4 bit 4. */
+    movl %cr4, %eax
+    orl  $0x10, %eax
+    movl %eax, %cr4
 
-	# Hang if kernel_main unexpectedly returns.
-	cli
-1:	hlt
-	jmp 1b
+    /* 4. Zero the boot page directory (4096 bytes = 1024 dwords). */
+    movl $(boot_pd - KERNEL_OFFSET), %edi
+    movl $1024, %ecx
+    xorl %eax, %eax
+    rep  stosl
+
+    /* 5. PD[0]: identity-map 0x00000000-0x003FFFFF (PS=1, W=1, P=1). */
+    movl $0x00000083, (boot_pd - KERNEL_OFFSET)
+
+    /* 6. PD[768]: map 0xC0000000-0xC03FFFFF -> phys 0x00000000 (kernel high). */
+    movl $0x00000083, (boot_pd - KERNEL_OFFSET + KERNEL_PD_IDX * 4)
+
+    /* 7. Load physical address of boot_pd into CR3. */
+    movl $(boot_pd - KERNEL_OFFSET), %eax
+    movl %eax, %cr3
+
+    /* 8. Enable paging: set CR0 bit 31 (PG). */
+    movl %cr0, %eax
+    orl  $0x80000000, %eax
+    movl %eax, %cr0
+
+    /* 9. Jump to high virtual address.
+     *    EIP is still in the identity-mapped low region; the 'lea' gives the
+     *    high linked address of _start_high, then jmp *%eax crosses to it.  */
+    lea  _start_high, %eax
+    jmp  *%eax
+
+.global _start_high
+_start_high:
+    /* Now running at high virtual address ~0xC0100000. */
+
+    /* 10. Switch stack pointer to the high virtual address. */
+    addl $KERNEL_OFFSET, %esp
+
+    /* 11. Call the global constructors. */
+    call _init
+
+    /* 12. Transfer control to the main kernel. */
+    call kernel_main
+
+    /* Hang if kernel_main unexpectedly returns. */
+    cli
+1:  hlt
+    jmp 1b
 .size _start, . - _start
 
 .global inb

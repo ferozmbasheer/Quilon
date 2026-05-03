@@ -219,6 +219,61 @@ static void test_decompose_reconstruct(void)
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+ * Section 9.1 — Higher-Half Kernel constants
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static void test_kernel_offset(void)
+{
+    ASSERT_EQ(KERNEL_OFFSET, 0xC0000000u, "KERNEL_OFFSET == 0xC0000000");
+
+    /* The kernel is linked 3 GiB above the physical load address. */
+    uint32_t phys_start = 0x00100000u;          /* GRUB loads at 1 MiB */
+    uint32_t virt_start = phys_start + KERNEL_OFFSET;
+    ASSERT_EQ(virt_start, 0xC0100000u, "phys 0x100000 + KERNEL_OFFSET = 0xC0100000");
+
+    /* Round-trip: virtual → physical → virtual. */
+    uint32_t phys = virt_start - KERNEL_OFFSET;
+    ASSERT_EQ(phys, phys_start, "virt - KERNEL_OFFSET == original phys");
+}
+
+static void test_kernel_pd_idx(void)
+{
+    ASSERT_EQ(KERNEL_PD_IDX, 768u, "KERNEL_PD_IDX == 768");
+
+    /* VIRT_PD_INDEX of the kernel virtual base must equal KERNEL_PD_IDX. */
+    ASSERT_EQ(VIRT_PD_INDEX(KERNEL_OFFSET), KERNEL_PD_IDX,
+              "VIRT_PD_INDEX(KERNEL_OFFSET) == KERNEL_PD_IDX");
+
+    /* The entry just before the kernel slot belongs to user space. */
+    ASSERT((KERNEL_PD_IDX - 1u) < KERNEL_PD_IDX,
+           "PD[767] is user-space, below kernel PD slot");
+
+    /* User virtual addresses (< KERNEL_OFFSET) have pd_index < KERNEL_PD_IDX. */
+    ASSERT_EQ(VIRT_PD_INDEX(0x00400000u) < KERNEL_PD_IDX, 1u,
+              "user virtual 0x400000 has pd_index < KERNEL_PD_IDX");
+
+    /* Kernel virtual addresses (>= KERNEL_OFFSET) have pd_index >= KERNEL_PD_IDX. */
+    ASSERT_EQ(VIRT_PD_INDEX(0xC0100000u) >= KERNEL_PD_IDX, 1u,
+              "kernel virtual 0xC0100000 has pd_index >= KERNEL_PD_IDX");
+}
+
+static void test_higher_half_address_split(void)
+{
+    /* User space: 0x00000000 – 0xBFFFFFFF (PD[0] – PD[767]) */
+    uint32_t user_end = KERNEL_OFFSET - 1u;
+    ASSERT_EQ(VIRT_PD_INDEX(user_end), 767u,
+              "last user-space PD entry is 767");
+
+    /* Kernel space: 0xC0000000 – 0xFFFFFFFF (PD[768] – PD[1023]) */
+    ASSERT_EQ(VIRT_PD_INDEX(0xFFFFFFFFu), 1023u,
+              "last kernel-space PD entry is 1023");
+
+    /* Stack top (0xC0000000) is the first address in kernel-high PD slot. */
+    ASSERT_EQ(VIRT_PD_INDEX(0xC0000000u), KERNEL_PD_IDX,
+              "USER_STACK_TOP == KERNEL_OFFSET is PD[768] boundary");
+}
+
+/* ══════════════════════════════════════════════════════════════════════
  * main
  * ══════════════════════════════════════════════════════════════════════ */
 
@@ -245,6 +300,10 @@ int main(void)
     RUN_SUITE(test_make_entry_large_address);
 
     RUN_SUITE(test_decompose_reconstruct);
+
+    RUN_SUITE(test_kernel_offset);
+    RUN_SUITE(test_kernel_pd_idx);
+    RUN_SUITE(test_higher_half_address_split);
 
     TEST_SUMMARY();
 }
