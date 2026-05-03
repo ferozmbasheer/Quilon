@@ -22,6 +22,7 @@
 #include <kernel/process.h>
 #include <kernel/signal.h>
 #include <kernel/initrd.h>
+#include <kernel/pci.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -481,6 +482,50 @@ void kernel_main(void) {
 		printf("section 6 demo: use 'sbrk' or 'fork' at the shell prompt\r\n");
 		printf("=== Section 6 ready ===\r\n\r\n");
 	}
+
+	/* ── Section 10.1: PCI Bus Enumeration ───────────────────────────────────
+	 *
+	 * Walk all 256 PCI buses × 32 slots.  Each non-empty slot is recorded in
+	 * pci_devices[].  Multi-function devices (header type bit 7) have their
+	 * extra functions probed individually.
+	 *
+	 * In QEMU the default i440FX machine exposes at minimum:
+	 *   Bus 0 Slot 0  — Intel i440FX Host Bridge        (class 0x06)
+	 *   Bus 0 Slot 1  — Intel PIIX3/PIIX4 ISA+IDE       (class 0x06)
+	 *   Bus 0 Slot 2  — Bochs/QEMU VGA                  (class 0x03)
+	 *
+	 * Interactive demo:  quilon> pci
+	 * ─────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 10.1: PCI Bus Enumeration ===\r\n");
+	{
+		pci_enumerate();
+		printf("pci: enumerated %d device(s)\r\n", pci_device_count);
+
+		for (int i = 0; i < pci_device_count; i++) {
+			const pci_device_t *d = &pci_devices[i];
+			printf("pci: [%d] %d:%d.%d  vendor=0x%x  device=0x%x"
+			       "  class=0x%x (%s)\r\n",
+			       i,
+			       (int)d->bus, (int)d->slot, (int)d->func,
+			       (unsigned)d->vendor_id, (unsigned)d->device_id,
+			       (unsigned)d->class_code,
+			       pci_class_name(d->class_code));
+		}
+
+		/* Hint for section 10.2 — RTL8139 detection. */
+		const pci_device_t *rtl =
+		    pci_find_device(PCI_VENDOR_REALTEK, PCI_DEVICE_RTL8139);
+		if (rtl)
+			printf("pci: RTL8139 NIC @ %d:%d.%d  "
+			       "(ready for section 10.2 driver)\r\n",
+			       (int)rtl->bus, (int)rtl->slot, (int)rtl->func);
+		else
+			printf("pci: RTL8139 not found  "
+			       "(add -device rtl8139 to qemu.sh for section 10.2)\r\n");
+
+		printf("pci: use 'pci' at the shell prompt for interactive listing\r\n");
+	}
+	printf("=== Section 10.1 ready ===\r\n\r\n");
 
 	printf("  ___        _ _ \r\n");
 	printf(" / _ \\ _   _(_) | ___  _ __  \r\n");

@@ -12,6 +12,7 @@
 #include <kernel/vma.h>
 #include <kernel/process.h>
 #include <kernel/initrd.h>
+#include <kernel/pci.h>
 
 static void shell_cmd_ls(void)
 {
@@ -452,12 +453,43 @@ static void shell_cmd_pipetest(void)
     printf("=== done ===\r\n");
 }
 
+static void shell_cmd_pci(void)
+{
+    printf("=== PCI Bus Enumeration (section 10.1) ===\r\n");
+    pci_enumerate();
+    printf("Found %d device(s):\r\n", pci_device_count);
+
+    for (int i = 0; i < pci_device_count; i++) {
+        const pci_device_t *d = &pci_devices[i];
+        printf("  [%d] %d:%d.%d  vendor=0x%x  device=0x%x"
+               "  class=0x%x (%s)\r\n",
+               i,
+               (int)d->bus, (int)d->slot, (int)d->func,
+               (unsigned)d->vendor_id, (unsigned)d->device_id,
+               (unsigned)d->class_code,
+               pci_class_name(d->class_code));
+    }
+
+    if (pci_device_count == 0)
+        printf("  (no PCI devices found)\r\n");
+
+    /* Highlight the RTL8139 if present (useful for section 10.2). */
+    const pci_device_t *rtl =
+        pci_find_device(PCI_VENDOR_REALTEK, PCI_DEVICE_RTL8139);
+    if (rtl)
+        printf("  RTL8139 NIC @ %d:%d.%d  "
+               "(add -device rtl8139 to qemu.sh)\r\n",
+               (int)rtl->bus, (int)rtl->slot, (int)rtl->func);
+
+    printf("=== done ===\r\n");
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, cow, ps, ls,\r\n");
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
-        printf("          rm <file>, fstest, pipetest, initrd,\r\n");
+        printf("          rm <file>, fstest, pipetest, initrd, pci,\r\n");
         printf("          exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
@@ -514,6 +546,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_pipetest();
     } else if (strcmp(cmd, "initrd") == 0) {
         shell_cmd_initrd();
+    } else if (strcmp(cmd, "pci") == 0) {
+        shell_cmd_pci();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

@@ -89,6 +89,7 @@ static void cmd_help(void)
     printf("  fork                   - demo SYS_FORK with parent/child\r\n");
     printf("  cow                    - CoW fork: parent/child see own data\r\n");
     printf("  pipe                   - demo anonymous pipe (SYS_PIPE)\r\n");
+    printf("  pci                    - list PCI bus devices (section 10.1)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -460,6 +461,82 @@ static void cmd_pipe(void)
     printf("=== done ===\r\n");
 }
 
+/* ── PCI class code name — minimal inline table (no kernel headers needed) ── */
+static const char *pci_cls(unsigned int code)
+{
+    switch (code) {
+    case 0x00: return "Unclassified";
+    case 0x01: return "Mass Storage";
+    case 0x02: return "Network";
+    case 0x03: return "Display";
+    case 0x04: return "Multimedia";
+    case 0x05: return "Memory";
+    case 0x06: return "Bridge";
+    case 0x07: return "Communication";
+    case 0x08: return "System Peripheral";
+    case 0x09: return "Input Device";
+    case 0x0C: return "Serial Bus";
+    case 0x0D: return "Wireless";
+    case 0xFF: return "Unassigned";
+    default:   return "Unknown";
+    }
+}
+
+static void cmd_pci(void)
+{
+    int found = 0;
+    printf("=== PCI Bus Enumeration (section 10.1) ===\r\n");
+
+    for (unsigned int bus = 0; bus < 256; bus++) {
+        for (unsigned int slot = 0; slot < 32; slot++) {
+            unsigned int w = pci_read_u(bus, slot, 0, 0x00);
+            unsigned int vendor = w & 0xFFFF;
+            if (vendor == 0xFFFF) continue;   /* no device */
+
+            unsigned int device = w >> 16;
+            /* Read class/subclass from offset 0x08. */
+            unsigned int cw  = pci_read_u(bus, slot, 0, 0x08);
+            unsigned int cls = (cw >> 24) & 0xFF;
+            unsigned int sub = (cw >> 16) & 0xFF;
+
+            printf("  %u:%u.0  vendor=0x%x  device=0x%x"
+                   "  class=0x%x/0x%x (%s)\r\n",
+                   bus, slot,
+                   vendor, device,
+                   cls, sub,
+                   pci_cls(cls));
+            found++;
+
+            /* Check for multi-function device (header type bit 7). */
+            unsigned int hw = pci_read_u(bus, slot, 0, 0x0C);
+            unsigned int htype = (hw >> 16) & 0xFF;
+            if (htype & 0x80) {
+                for (unsigned int func = 1; func < 8; func++) {
+                    unsigned int fw = pci_read_u(bus, slot, func, 0x00);
+                    if ((fw & 0xFFFF) == 0xFFFF) continue;
+                    unsigned int fdev = fw >> 16;
+                    unsigned int fcw  = pci_read_u(bus, slot, func, 0x08);
+                    unsigned int fcls = (fcw >> 24) & 0xFF;
+                    unsigned int fsub = (fcw >> 16) & 0xFF;
+                    printf("  %u:%u.%u  vendor=0x%x  device=0x%x"
+                           "  class=0x%x/0x%x (%s)\r\n",
+                           bus, slot, func,
+                           fw & 0xFFFF, fdev,
+                           fcls, fsub,
+                           pci_cls(fcls));
+                    found++;
+                }
+            }
+        }
+    }
+
+    if (found == 0)
+        printf("  (no PCI devices found)\r\n");
+    else
+        printf("Total: %d device(s)\r\n", found);
+    printf("=== done ===\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -514,6 +591,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "cow")    == 0) cmd_cow();
     else if (strcmp(cmd, "pipe")   == 0) cmd_pipe();
     else if (strcmp(cmd, "initrd") == 0) cmd_initrd();
+    else if (strcmp(cmd, "pci")    == 0) cmd_pci();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

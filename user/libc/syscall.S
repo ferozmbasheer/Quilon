@@ -180,3 +180,18 @@ pipe:
     int   $0x80
     popl  %ebx
     ret
+
+/* ── pci_read_u(bus, slot, func, off) → unsigned int ────────────────────── */
+/* SYS_PCI_READ: EBX=bus, ECX=(slot<<8)|func, EDX=offset                     */
+.global pci_read_u
+pci_read_u:
+    pushl %ebx
+    movl  $18,       %eax    /* SYS_PCI_READ */
+    movl  8(%esp),   %ebx    /* arg1: bus */
+    movl  12(%esp),  %ecx    /* arg2: slot */
+    shll  $8,        %ecx    /* ecx = slot << 8 */
+    orl   16(%esp),  %ecx    /* ecx |= func */
+    movl  20(%esp),  %edx    /* arg4: offset */
+    int   $0x80
+    popl  %ebx
+    ret

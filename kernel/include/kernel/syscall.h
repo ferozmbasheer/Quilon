@@ -31,6 +31,7 @@
 #define SYS_GETTICKS 15  /* getticks() → current PIT tick count (uint32_t)       */
 #define SYS_GETHZ    16  /* gethz() → PIT frequency in Hz (uint32_t)             */
 #define SYS_PIPE     17  /* pipe(int fds[2]) → 0 on success, -1 on failure       */
+#define SYS_PCI_READ 18  /* pci_read(bus, (slot<<8)|func, offset) → 32-bit dword */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

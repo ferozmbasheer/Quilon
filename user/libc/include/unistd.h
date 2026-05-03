@@ -34,6 +34,7 @@
 #define SYS_GETTICKS  15
 #define SYS_GETHZ     16
 #define SYS_PIPE      17
+#define SYS_PCI_READ  18  /* pci_read_u(bus,(slot<<8)|func,offset) → dword */
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -70,5 +71,15 @@ int pipe(int fds[2]);           /* SYS_PIPE — create anonymous pipe, 0/-1 */
 /* ── Timer ────────────────────────────────────────────────────────────────── */
 unsigned int getticks(void);    /* SYS_GETTICKS — raw PIT tick counter   */
 unsigned int gethz(void);       /* SYS_GETHZ    — PIT frequency in Hz    */
+
+/* ── PCI configuration space (section 10.1) ──────────────────────────────── */
+/* Read a 32-bit DWORD from PCI config space.
+ * bus  : PCI bus number  (0–255)
+ * slot : device slot     (0–31)
+ * func : function number (0–7)
+ * off  : byte offset (DWORD-aligned; low 2 bits ignored by hardware)
+ * Returns: 32-bit config dword (vendor==0xFFFF → no device in slot)         */
+unsigned int pci_read_u(unsigned int bus, unsigned int slot,
+                        unsigned int func, unsigned int off);
 
 #endif /* _UNISTD_H */

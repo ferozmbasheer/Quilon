@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci
 
 .PHONY: all build run clean help
 
@@ -257,6 +257,16 @@ $(BINDIR)/test_vma: test_vma.c framework.h $(VMA_SRC)
 $(BINDIR)/test_cow: test_cow.c framework.h $(PMM_SRC) $(LIBC_STRING) $(LIBC_PRINTF)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_cow.c $(PMM_SRC) $(LIBC_STRING) $(LIBC_PRINTF)
+
+# PCI tests (section 10.1)
+# pci.c is compiled on the host without __is_kernel, so the #ifdef guards
+# exclude all x86 I/O (outl/inl) and hardware-dependent functions.
+# Only pci_class_name(), pci_find_device(), pci_get_device(), and the
+# static inline pci_config_addr() are exercised here.
+PCI_SRC = ../kernel/arch/i386/pci.c
+
+$(BINDIR)/test_pci: test_pci.c framework.h $(PCI_SRC)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_pci.c $(PCI_SRC)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

@@ -102,4 +102,19 @@ CoW fork implemented across all layers:
 
 **All 17 test suites pass.**
 
-**Next section:** Section 10 — Towards a Real OS (PCI, RTL8139, TCP/IP, VGA, SMP)
+**Section 10.1 — PCI Bus Enumeration (completed 2026-05-03)**
+
+PCI configuration space enumeration via I/O ports 0xCF8/0xCFC:
+
+- `kernel/include/kernel/pci.h` — `pci_device_t`, `PCI_MAX_DEVICES=64`, `pci_config_addr()` static inline, vendor/device constants (REALTEK, RTL8139, INTEL, QEMU), config register offsets; all hardware-independent declarations usable by tests
+- `kernel/arch/i386/pci.c` — `pci_read`/`pci_write` (inline `outl`/`inl` asm); `pci_enumerate` (256 buses × 32 slots, multi-function aware via header type bit 7); `pci_find_device`, `pci_get_device`, `pci_class_name`; hardware functions guarded by `#ifdef __is_kernel`
+- `kernel/kernel/kernel.c` — Section 10.1 boot demo: calls `pci_enumerate()`, lists all devices with class name, highlights RTL8139 if present
+- `kernel/kernel/shell.c` — `pci` command: re-enumerates and prints full device table
+- `user/shell/main.c` — `pci` command: scans all buses via `pci_read_u()` syscall, inline class name lookup
+- `SYS_PCI_READ = 18` — EBX=bus, ECX=(slot<<8)|func, EDX=offset → 32-bit dword; kernel delegates to `pci_read()`; host build returns -1
+- `user/libc/syscall.S` — `pci_read_u` stub (packs slot/func into ECX)
+- `user/libc/include/unistd.h` — `pci_read_u()` declaration + SYS_PCI_READ constant
+- `tests/test_pci.c` — 37 tests: address construction (enable bit, bus/slot/func/offset fields, known values), class name lookup, device table index/find, table capacity limit; all pass
+- All 18 test suites pass.
+
+**Next section:** Section 10.2 — Network Card Driver (RTL8139)

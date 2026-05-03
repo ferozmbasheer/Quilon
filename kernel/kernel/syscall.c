@@ -51,6 +51,7 @@
 #include <kernel/signal.h>
 #include <kernel/pit.h>
 #include <kernel/vma.h>
+#include <kernel/pci.h>
 #include <string.h>
 #endif
 
@@ -645,6 +646,27 @@ void syscall_handler(syscall_regs_t *regs)
         int *fds = (int *)(uintptr_t)regs->ebx;
         ret = (fds != (void *)0) ? (uint32_t)vfs_pipe(fds) : (uint32_t)-1;
 #else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_PCI_READ — read a 32-bit DWORD from PCI configuration space.
+     * EBX = bus (uint8_t)
+     * ECX = (slot << 8) | func
+     * EDX = byte offset (DWORD-aligned; low 2 bits ignored)
+     * Returns: 32-bit config dword, or 0xFFFFFFFF on host builds.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_PCI_READ: {
+        uint8_t bus  = (uint8_t)(regs->ebx & 0xFF);
+        uint8_t slot = (uint8_t)((regs->ecx >> 8) & 0x1F);
+        uint8_t func = (uint8_t)(regs->ecx & 0x07);
+        uint8_t off  = (uint8_t)(regs->edx & 0xFC);
+#ifdef __is_kernel
+        ret = pci_read(bus, slot, func, off);
+#else
+        (void)bus; (void)slot; (void)func; (void)off;
         ret = (uint32_t)-1;
 #endif
         break;
