@@ -58,7 +58,7 @@ static void shell_cmd_exec(const char *path)
      *  - the global kernel PD is untouched, so a second exec of the same
      * binary will not collide with the first.
      */
-    uint32_t entry = elf_load_into(path, proc_pd);
+    uint32_t entry = elf_load_into(path, proc_pd, NULL);  /* ring-0 path: no VMA table */
     if (entry == 0) {
         printf("exec: failed to load '%s'\r\n", path);
         pmm_free_page(proc_pd);

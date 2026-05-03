@@ -85,6 +85,7 @@ static void cmd_help(void)
     printf("  seconds                - uptime in whole seconds\r\n");
     printf("  clear / cls            - scroll screen\r\n");
     printf("  sbrk                   - demo heap growth via SYS_SBRK\r\n");
+    printf("  heaptest               - demand-paging demo: 256 KiB lazy heap\r\n");
     printf("  fork                   - demo SYS_FORK with parent/child\r\n");
     printf("  pipe                   - demo anonymous pipe (SYS_PIPE)\r\n");
     printf("  exit                   - exit the shell\r\n");
@@ -294,6 +295,56 @@ static void cmd_clear(void)
         write(STDOUT_FILENO, "\r\n", 2);
 }
 
+/*
+ * cmd_heaptest — demand paging demo (section 9.2).
+ *
+ * Allocates a 256 KiB buffer via malloc (which calls sbrk internally).
+ * With demand paging, sbrk only creates a VMA — no physical pages are
+ * allocated yet.  Each write to a new page triggers a page-fault, and the
+ * kernel prints "[demand] pid X: mapped page 0xXXXXX".  This makes the
+ * lazy page-by-page allocation visible on the console.
+ *
+ * After writing, every page is verified to confirm the kernel delivered the
+ * correct data at each demand-paged address.
+ */
+static void cmd_heaptest(void)
+{
+    const int BUF_SIZE  = 256 * 1024;   /* 256 KiB = 64 pages */
+    const int PAGE_SIZE = 4096;
+
+    printf("=== Demand-paging heap test (section 9.2) ===\r\n");
+    printf("Allocating %d KiB via malloc (sbrk → VMA, no pages yet)...\r\n",
+           BUF_SIZE / 1024);
+
+    char *buf = (char *)malloc(BUF_SIZE);
+    if (!buf) {
+        printf("heaptest: malloc failed\r\n");
+        return;
+    }
+    printf("malloc returned %p\r\n", (void *)buf);
+    printf("Touching each 4-KiB page (each touch triggers a demand-page fault):\r\n");
+
+    int i;
+    for (i = 0; i < BUF_SIZE; i += PAGE_SIZE) {
+        buf[i] = (char)((i / PAGE_SIZE) & 0xFF);
+    }
+
+    printf("Verifying page contents...\r\n");
+    int ok = 1;
+    for (i = 0; i < BUF_SIZE; i += PAGE_SIZE) {
+        if (buf[i] != (char)((i / PAGE_SIZE) & 0xFF)) {
+            printf("  MISMATCH at offset %d\r\n", i);
+            ok = 0;
+            break;
+        }
+    }
+
+    printf("Result: %s\r\n", ok ? "PASS — all 64 pages demand-paged and verified"
+                                 : "FAIL — data mismatch");
+    free(buf);
+    printf("=== done ===\r\n");
+}
+
 static void cmd_sbrk(void)
 {
     char *p = (char *)sbrk(4096);
@@ -411,7 +462,8 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "pid")    == 0) cmd_pid();
     else if (strcmp(cmd, "clear")  == 0) cmd_clear();
     else if (strcmp(cmd, "cls")    == 0) cmd_clear();
-    else if (strcmp(cmd, "sbrk")   == 0) cmd_sbrk();
+    else if (strcmp(cmd, "sbrk")     == 0) cmd_sbrk();
+    else if (strcmp(cmd, "heaptest") == 0) cmd_heaptest();
     else if (strcmp(cmd, "fork")   == 0) cmd_fork();
     else if (strcmp(cmd, "pipe")   == 0) cmd_pipe();
     else if (strcmp(cmd, "initrd") == 0) cmd_initrd();

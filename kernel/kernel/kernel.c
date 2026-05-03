@@ -432,12 +432,18 @@ void kernel_main(void) {
 		/* Try to find and launch SHELL.ELF as the first ring-3 process. */
 		uint32_t *shell_pd = paging_create_address_space();
 		if (shell_pd) {
-			uint32_t shell_entry = elf_load_into("SHELL.ELF", shell_pd);
+			vma_t shell_vmas[PROC_VMA_MAX];
+			vma_init(shell_vmas, PROC_VMA_MAX);
+			uint32_t shell_entry = elf_load_into("SHELL.ELF", shell_pd, shell_vmas);
 			if (shell_entry != 0) {
 				process_t *shell_proc =
 				    process_create("shell", shell_entry,
 				                   (uint32_t)(uintptr_t)shell_pd);
 				if (shell_proc) {
+					/* Copy VMAs from elf_load_into into the PCB. */
+					for (int _v = 0; _v < PROC_VMA_MAX; _v++)
+						shell_proc->vmas[_v] = shell_vmas[_v];
+
 					printf("user space: launching SHELL.ELF "
 					       "(pid=%d, entry=0x%x)\r\n",
 					       (int)shell_proc->pid,

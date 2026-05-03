@@ -43,6 +43,7 @@ kernel/pipe.o \
 kernel/fat16.o \
 kernel/elf.o \
 kernel/initrd.o \
+kernel/vma.o \
 
 OBJS=\
 $(ARCHDIR)/crti.o \

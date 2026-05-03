@@ -50,6 +50,7 @@
 #include <kernel/pmm.h>
 #include <kernel/signal.h>
 #include <kernel/pit.h>
+#include <kernel/vma.h>
 #include <string.h>
 #endif
 
@@ -319,8 +320,13 @@ void syscall_handler(syscall_regs_t *regs)
         uint32_t *child_pd = paging_create_address_space();
         if (!child_pd) { ret = (uint32_t)-1; break; }
 
-        /* 2. Load the ELF into the child's address space. */
-        uint32_t _entry = elf_load_into(path, child_pd);
+        /* 2. Load the ELF into the child's address space.
+         *    Use a local VMA array so the process slot is not created until
+         *    the load succeeds — avoids scheduling a process with entry=0. */
+        vma_t child_vmas[PROC_VMA_MAX];
+        vma_init(child_vmas, PROC_VMA_MAX);
+
+        uint32_t _entry = elf_load_into(path, child_pd, child_vmas);
         if (!_entry) {
             pmm_free_page(child_pd);
             ret = (uint32_t)-1;
@@ -335,6 +341,10 @@ void syscall_handler(syscall_regs_t *regs)
             ret = (uint32_t)-1;
             break;
         }
+
+        /* 4. Copy the VMAs populated by elf_load_into into the PCB. */
+        for (int _v = 0; _v < PROC_VMA_MAX; _v++)
+            _child->vmas[_v] = child_vmas[_v];
 
         ret = _child->pid;
 #else
@@ -461,37 +471,59 @@ void syscall_handler(syscall_regs_t *regs)
 
         uint32_t new_brk = old_brk + (uint32_t)sbrk_inc;
 
-        /* Map into whichever page directory is currently loaded in CR3.
-         * In the exec_setjmp shell path, CR3 is already proc_pd (switched
-         * before usermode_enter).  Using paging_map_page_alloc() would write
-         * into the kernel's global page_directory[] instead — wrong PD.     */
-        uint32_t active_cr3;
-        asm volatile("mov %%cr3, %0" : "=r"(active_cr3));
-        uint32_t *active_pd = (uint32_t *)(uintptr_t)active_cr3;
-
-        /* Allocate and map physical pages for the newly requested range.
-         * Page-align the start so we do not re-map already-covered pages.   */
-        uint32_t page_addr = old_brk & ~(PAGE_SIZE - 1u);
-        while (page_addr < new_brk) {
-            void *phys = pmm_alloc_page();
-            if (!phys) { ret = (uint32_t)-1; goto sbrk_done; }
-
-            if (paging_map_page_alloc_into(active_pd, page_addr,
-                                           (uint32_t)(uintptr_t)phys,
-                                           PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
-                pmm_free_page(phys);
-                ret = (uint32_t)-1;
-                goto sbrk_done;
+        if (current_process) {
+            /*
+             * Demand-paged heap (section 9.2):
+             *
+             * Instead of allocating physical pages immediately, we just extend
+             * (or create) the heap VMA.  Physical pages are allocated by the
+             * page-fault handler the first time the program writes to each page.
+             *
+             * vma_extend finds the existing heap VMA by its start address
+             * (USER_HEAP_START) and updates its end.  On the very first sbrk
+             * call the VMA does not exist yet, so vma_add creates it.
+             */
+            if (vma_extend(current_process->vmas, PROC_VMA_MAX,
+                           USER_HEAP_START, new_brk) != 0) {
+                if (vma_add(current_process->vmas, PROC_VMA_MAX,
+                            USER_HEAP_START, new_brk,
+                            VMA_R | VMA_W | VMA_ANON) != 0) {
+                    ret = (uint32_t)-1;
+                    break;
+                }
             }
-            page_addr += PAGE_SIZE;
+            *break_ptr = new_brk;
+            ret = old_brk;
+        } else {
+            /*
+             * No process context (ring-0 exec_setjmp path) — fall back to
+             * eager allocation since there is no VMA table to populate.
+             */
+            uint32_t active_cr3;
+            asm volatile("mov %%cr3, %0" : "=r"(active_cr3));
+            uint32_t *active_pd = (uint32_t *)(uintptr_t)active_cr3;
+
+            uint32_t page_addr = old_brk & ~(PAGE_SIZE - 1u);
+            int sbrk_ok = 1;
+            while (page_addr < new_brk && sbrk_ok) {
+                void *phys = pmm_alloc_page();
+                if (!phys) { sbrk_ok = 0; break; }
+                if (paging_map_page_alloc_into(active_pd, page_addr,
+                        (uint32_t)(uintptr_t)phys,
+                        PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+                    pmm_free_page(phys);
+                    sbrk_ok = 0;
+                    break;
+                }
+                page_addr += PAGE_SIZE;
+            }
+            if (sbrk_ok) { *break_ptr = new_brk; ret = old_brk; }
+            else            ret = (uint32_t)-1;
         }
-        *break_ptr = new_brk;
-        ret = old_brk;
-        sbrk_done: break;
 #else
         ret = (uint32_t)-1;
-        break;
 #endif
+        break;
     }
 
     /* ────────────────────────────────────────────────────────────────────────

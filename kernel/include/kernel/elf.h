@@ -2,6 +2,7 @@
 #define _KERNEL_ELF_H
 
 #include <stdint.h>
+#include <kernel/vma.h>   /* vma_t — demand paging (section 9.2) */
 
 /* ── ELF identification constants ────────────────────────────────────────── */
 
@@ -169,14 +170,24 @@ uint32_t elf_load(const char *path);
  * mapped addresses.  This allows the kernel to prepare a child process's
  * address space entirely before the child is first scheduled.
  *
- * target_pd — pointer to the child's page directory, as returned by
- *             paging_create_address_space().  Must be in the first 4 MiB
- *             (identity-mapped) so writes to it are safe.
+ * Section 9.2 (demand paging) extension:
+ *   - Pages that lie entirely within the BSS region of a segment (virtual
+ *     address >= page-aligned(p_vaddr + p_filesz)) are NOT allocated here;
+ *     they are left unmapped and will be zero-filled by the page-fault
+ *     handler when first accessed.
+ *   - If vmas is not NULL, a VMA is added for every PT_LOAD segment and for
+ *     the user stack, so the fault handler can validate demand-page requests.
+ *
+ * target_pd — pointer to the child's page directory (must be in the first
+ *             4 MiB, identity-mapped, as all pmm_alloc_page() results are).
+ * vmas      — if non-NULL, pointer to a PROC_VMA_MAX-entry VMA array that
+ *             will be populated with one VMA per PT_LOAD segment plus one for
+ *             the stack.  Pass NULL to skip VMA registration (ring-0 exec).
  *
  * Returns the entry point virtual address on success, or 0 on failure.
  *
  * Only compiled in the kernel build (__is_kernel defined).
  */
-uint32_t elf_load_into(const char *path, uint32_t *target_pd);
+uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas);
 
 #endif /* _KERNEL_ELF_H */

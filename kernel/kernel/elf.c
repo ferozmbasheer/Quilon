@@ -68,6 +68,7 @@
 #include <kernel/pmm.h>
 #include <kernel/paging.h>
 #include <kernel/usermode.h>
+#include <kernel/vma.h>
 #endif
 
 /* Maximum ELF file size accepted by the loader.
@@ -276,7 +277,16 @@ uint32_t elf_load(const char *path)
  * This allows the kernel to prepare a child's address space entirely in
  * the background, before the child is ever scheduled.
  */
-uint32_t elf_load_into(const char *path, uint32_t *target_pd)
+/*
+ * STACK_VMA_PAGES — how many pages the stack VMA covers.
+ *
+ * Only the top page (USER_STACK_TOP - PAGE_SIZE) is mapped eagerly.
+ * The remaining STACK_VMA_PAGES-1 pages are demand-paged as the stack grows.
+ * 64 pages = 256 KiB of maximum stack depth — generous for user programs.
+ */
+#define STACK_VMA_PAGES 64u
+
+uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
 {
     /* ── Step 1: open the file ───────────────────────────────────────────── */
     int fd = vfs_open(path);
@@ -335,13 +345,37 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
         uint32_t virt_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1u)
                               & ~(PAGE_SIZE - 1u);
 
-        printf("[elf] segment %d: vaddr=0x%x  filesz=%d  memsz=%d\r\n",
+        /*
+         * Demand-paging split: pages that lie entirely within the BSS region
+         * (virtual address >= page-aligned(p_vaddr + p_filesz)) are left
+         * unmapped.  The page-fault handler will zero-fill them on first access.
+         *
+         * A page is "purely BSS" when:
+         *   virt >= file_page_end  AND  p_filesz < p_memsz
+         *
+         * The page straddling the file/BSS boundary still gets mapped eagerly
+         * because it contains both file data and zeroed BSS bytes.
+         */
+        uint32_t file_page_end;
+        if (ph->p_filesz == 0) {
+            file_page_end = virt_start;   /* entire segment is BSS */
+        } else {
+            file_page_end = (ph->p_vaddr + ph->p_filesz + PAGE_SIZE - 1u)
+                            & ~(PAGE_SIZE - 1u);
+        }
+
+        printf("[elf] segment %d: vaddr=0x%x  filesz=%d  memsz=%d  "
+               "bss_start=0x%x\r\n",
                (int)i, (unsigned)ph->p_vaddr,
-               (int)ph->p_filesz, (int)ph->p_memsz);
+               (int)ph->p_filesz, (int)ph->p_memsz,
+               (unsigned)file_page_end);
 
         for (uint32_t virt = virt_start; virt < virt_end; virt += PAGE_SIZE) {
-            /* Allocate a fresh physical page (in the first 4 MiB, so
-             * its physical address equals its virtual address).        */
+
+            /* Skip purely-BSS pages — demand-paged via VMA. */
+            if (virt >= file_page_end && ph->p_filesz < ph->p_memsz)
+                continue;
+
             uint8_t *phys_page = (uint8_t *)pmm_alloc_page();
             if (!phys_page) {
                 printf("[elf] PMM out of pages at virt=0x%x\r\n",
@@ -349,9 +383,8 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
                 kfree(buf);
                 return 0;
             }
-            memset(phys_page, 0, PAGE_SIZE);   /* zero including BSS  */
+            memset(phys_page, 0, PAGE_SIZE);
 
-            /* Map the physical page at virt in the child's PD. */
             if (paging_map_page_alloc_into(
                     target_pd, virt,
                     (uint32_t)(uintptr_t)phys_page,
@@ -362,17 +395,7 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
                 return 0;
             }
 
-            /*
-             * Copy the portion of this segment that overlaps the current page.
-             *
-             * The page covers [virt, virt + PAGE_SIZE).
-             * File data covers [p_vaddr, p_vaddr + p_filesz).
-             * Intersection: [copy_start, copy_end).
-             *
-             * We write to phys_page (identity-mapped), not to virt -
-             * because virt lives in target_pd which is not currently
-             * active in CR3.
-             */
+            /* Copy the file-data portion that falls within this page. */
             if (ph->p_filesz > 0) {
                 uint32_t copy_start =
                     (ph->p_vaddr > virt) ? ph->p_vaddr : virt;
@@ -388,19 +411,27 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
                 }
             }
         }
+
+        /* Register a VMA covering the entire segment (including BSS pages).
+         * The fault handler uses this to validate demand-page requests.    */
+        if (vmas) {
+            uint32_t seg_flags = VMA_ANON;
+            if (ph->p_flags & PF_R) seg_flags |= VMA_R;
+            if (ph->p_flags & PF_W) seg_flags |= VMA_W;
+            if (ph->p_flags & PF_X) seg_flags |= VMA_X;
+            vma_add(vmas, PROC_VMA_MAX, virt_start, virt_end, seg_flags);
+        }
     }
 
-    /* ── Step 5: allocate and map a per-process user stack ──────────────── */
+    /* ── Step 5: map the initial stack page and register the stack VMA ──── */
     /*
-     * Each ELF process gets its own private 4-KiB stack page mapped at
-     * [USER_STACK_TOP - PAGE_SIZE, USER_STACK_TOP) in target_pd.
-     * Ring-3 ESP starts at USER_STACK_TOP (top of this page) and grows
-     * downward into it.
+     * Only the top page [USER_STACK_TOP - PAGE_SIZE, USER_STACK_TOP) is
+     * mapped eagerly — ESP starts here and grows downward into it.
      *
-     * Placing the stack high (near 3 GiB) keeps it well clear of the ELF
-     * text/data segments at 0x400000 and the heap above them, so no two
-     * processes can accidentally share stack memory even if they are both
-     * mapped at the same virtual addresses in different page directories.
+     * The stack VMA covers [USER_STACK_TOP - STACK_VMA_PAGES * PAGE_SIZE,
+     * USER_STACK_TOP).  Any access below the initial page but within the VMA
+     * is satisfied by the demand-paging fault handler, giving the process up
+     * to STACK_VMA_PAGES * 4 KiB of auto-growing stack.
      */
     uint8_t *stack_phys = (uint8_t *)pmm_alloc_page();
     if (!stack_phys) {
@@ -419,6 +450,12 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd)
         pmm_free_page(stack_phys);
         kfree(buf);
         return 0;
+    }
+
+    if (vmas) {
+        uint32_t stack_start = USER_STACK_TOP - STACK_VMA_PAGES * PAGE_SIZE;
+        vma_add(vmas, PROC_VMA_MAX, stack_start, USER_STACK_TOP,
+                VMA_R | VMA_W | VMA_ANON | VMA_STACK);
     }
 
     uint32_t entry = ehdr->e_entry;

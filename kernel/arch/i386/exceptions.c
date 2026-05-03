@@ -1,10 +1,14 @@
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifdef __is_kernel
 #include <kernel/process.h>
 #include <kernel/signal.h>
 #include <kernel/scheduler.h>
+#include <kernel/vma.h>
+#include <kernel/paging.h>
+#include <kernel/pmm.h>
 #endif
 
 /* Must mirror exactly what is on the stack when exception_handler is called:
@@ -60,24 +64,96 @@ void exception_handler(registers_t *regs)
 {
 #ifdef __is_kernel
     /*
-     * Page Fault (vector 14) from ring-3 code → send SIGSEGV.
+     * Page Fault (vector 14) — demand paging + SIGSEGV delivery (section 9.2).
      *
-     * (regs->cs & 3) == 3 means the faulting instruction was at CPL=3.
-     * Rather than panicking the entire kernel for a user-space bug, we
-     * post SIGSEGV to the current process and call signal_dispatch() to
-     * terminate it gracefully (zombie → parent woken).
+     * The CPU pushes a non-zero error code (err_code):
+     *   bit 0 (P):  0 = not-present fault,  1 = protection fault.
+     *   bit 1 (W):  0 = read fault,          1 = write fault.
+     *   bit 2 (U):  0 = supervisor access,   1 = user access.
      *
-     * If there is no current process (kernel-mode page fault), fall through
-     * to the usual panic below.
+     * CR2 always holds the faulting virtual address.
+     *
+     * Decision tree:
+     *
+     *  [kernel-mode fault, bit 2 = 0]
+     *    → kernel bug: fall through to panic below.
+     *
+     *  [user-mode fault, bit 0 = 1 (page present but protection violation)]
+     *    → genuine fault (e.g. write to read-only page). → SIGSEGV.
+     *    (Copy-on-write, section 9.3, will intercept this case first.)
+     *
+     *  [user-mode fault, bit 0 = 0 (page not present)]
+     *    → demand paging candidate:
+     *      - Look up fault_addr in the process's VMA list.
+     *      - No VMA → out-of-bounds access → SIGSEGV.
+     *      - VMA found → allocate a zero physical page, map it with the
+     *        VMA's permission flags, and return.  The CPU re-executes the
+     *        faulting instruction automatically.
      */
-    if (regs->int_no == 14 && (regs->cs & 3) == 3 && current_process) {
+    if (regs->int_no == 14 && current_process) {
         uint32_t fault_addr;
         asm volatile("mov %%cr2, %0" : "=r"(fault_addr));
-        printf("\r\n[signal] pid %d: page fault at 0x%x (EIP=0x%x) → SIGSEGV\r\n",
-               (int)current_process->pid, (unsigned)fault_addr, (unsigned)regs->eip);
-        signal_send(current_process, SIGSEGV);
-        signal_dispatch();   /* terminates process; does not return */
-        __builtin_unreachable();
+
+        /* Only handle user-mode faults here. */
+        if ((regs->cs & 3) == 3) {
+
+            /* Protection fault (page was present but access was denied). */
+            if (regs->err_code & 1u) {
+                printf("\r\n[pf] pid %d: protection fault at 0x%x "
+                       "(EIP=0x%x) → SIGSEGV\r\n",
+                       (int)current_process->pid,
+                       (unsigned)fault_addr, (unsigned)regs->eip);
+                signal_send(current_process, SIGSEGV);
+                signal_dispatch();
+                __builtin_unreachable();
+            }
+
+            /* Not-present fault — check VMAs. */
+            vma_t *vma = vma_find(current_process->vmas, PROC_VMA_MAX, fault_addr);
+            if (!vma) {
+                printf("\r\n[pf] pid %d: no VMA at 0x%x "
+                       "(EIP=0x%x) → SIGSEGV\r\n",
+                       (int)current_process->pid,
+                       (unsigned)fault_addr, (unsigned)regs->eip);
+                signal_send(current_process, SIGSEGV);
+                signal_dispatch();
+                __builtin_unreachable();
+            }
+
+            /* Demand-page: allocate a zero physical page and map it. */
+            void *phys = pmm_alloc_page();
+            if (!phys) {
+                printf("\r\n[pf] pid %d: OOM at 0x%x → SIGSEGV\r\n",
+                       (int)current_process->pid, (unsigned)fault_addr);
+                signal_send(current_process, SIGSEGV);
+                signal_dispatch();
+                __builtin_unreachable();
+            }
+            memset(phys, 0, PAGE_SIZE);
+
+            uint32_t page_flags = PAGE_PRESENT | PAGE_USER;
+            if (vma->flags & VMA_W) page_flags |= PAGE_WRITABLE;
+
+            uint32_t fault_page = fault_addr & ~(PAGE_SIZE - 1u);
+            uint32_t *proc_pd   = (uint32_t *)(uintptr_t)current_process->cr3;
+
+            if (paging_map_page_alloc_into(proc_pd, fault_page,
+                                           (uint32_t)(uintptr_t)phys,
+                                           page_flags) != 0) {
+                pmm_free_page(phys);
+                printf("\r\n[pf] pid %d: mapping failed at 0x%x → SIGSEGV\r\n",
+                       (int)current_process->pid, (unsigned)fault_addr);
+                signal_send(current_process, SIGSEGV);
+                signal_dispatch();
+                __builtin_unreachable();
+            }
+
+            printf("[demand] pid %d: mapped page 0x%x\r\n",
+                   (int)current_process->pid, (unsigned)fault_page);
+            /* Return normally — CPU re-executes the faulting instruction. */
+            return;
+        }
+        /* Kernel-mode page fault: fall through to panic. */
     }
 #endif
 

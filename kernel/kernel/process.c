@@ -18,6 +18,7 @@
 #include <stdio.h>
 
 #include <kernel/process.h>
+#include <kernel/vma.h>
 
 #ifdef __is_kernel
 #include <kernel/usermode.h>
@@ -48,6 +49,7 @@ void process_init(void)
         process_table[i].name[0]         = '\0';
         for (int s = 0; s < NSIG; s++)
             process_table[i].signal_handlers[s] = SIG_DFL;
+        vma_init(process_table[i].vmas, PROC_VMA_MAX);
     }
     current_process = NULL;
 }
@@ -72,6 +74,7 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
         p->pending_signals = 0;
         for (int s = 0; s < NSIG; s++)
             p->signal_handlers[s] = SIG_DFL;
+        vma_init(p->vmas, PROC_VMA_MAX);
 
         /* Copy name (bounded, always NUL-terminated) */
         int j;

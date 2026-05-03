@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma
 
 .PHONY: all build run clean help
 
@@ -138,9 +138,11 @@ $(BINDIR)/test_usermode: test_usermode.c framework.h
 # is never called in tests so no reference to IDT[] is emitted).
 $(BINDIR)/test_syscall: test_syscall.c framework.h \
                         ../kernel/kernel/syscall.c \
+                        $(VMA_SRC) \
                         $(LIBC_PRINTF) $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_syscall.c ../kernel/kernel/syscall.c \
+	    $(VMA_SRC) \
 	    $(LIBC_PRINTF) $(LIBC_STRING)
 
 # VFS tests
@@ -180,10 +182,11 @@ $(BINDIR)/test_elf: test_elf.c framework.h \
 # the process_first_run trampoline are all absent.  Only process_init,
 # process_create, process_find, and process_pick_next are exercised.
 PROCESS_SRC = ../kernel/kernel/process.c
+VMA_SRC     = ../kernel/kernel/vma.c
 
-$(BINDIR)/test_process: test_process.c framework.h $(PROCESS_SRC) $(LIBC_STRING)
+$(BINDIR)/test_process: test_process.c framework.h $(PROCESS_SRC) $(VMA_SRC) $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
-	    test_process.c $(PROCESS_SRC) $(LIBC_STRING)
+	    test_process.c $(PROCESS_SRC) $(VMA_SRC) $(LIBC_STRING)
 
 # Signal tests
 # signal.c's send/bitmask logic is pure C (no asm, no scheduler).
@@ -194,9 +197,9 @@ $(BINDIR)/test_process: test_process.c framework.h $(PROCESS_SRC) $(LIBC_STRING)
 SIGNAL_SRC = ../kernel/kernel/signal.c
 
 $(BINDIR)/test_signal: test_signal.c framework.h \
-                       $(SIGNAL_SRC) $(PROCESS_SRC) $(LIBC_STRING)
+                       $(SIGNAL_SRC) $(PROCESS_SRC) $(VMA_SRC) $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
-	    test_signal.c $(SIGNAL_SRC) $(PROCESS_SRC) $(LIBC_STRING)
+	    test_signal.c $(SIGNAL_SRC) $(PROCESS_SRC) $(VMA_SRC) $(LIBC_STRING)
 
 # User libc tests (section 7.1)
 # Tests string.c, stdio.c, and stdlib.c from user/libc/ on the host.
@@ -241,6 +244,11 @@ $(BINDIR)/test_initrd: test_initrd.c framework.h \
 	    test_initrd.c $(INITRD_SRC) \
 	    ../kernel/kernel/vfs.c \
 	    $(LIBC_STRING)
+
+# VMA tests (section 9.2)
+# vma.c is pure C — no x86 asm, no hardware calls.  Compiles on the host.
+$(BINDIR)/test_vma: test_vma.c framework.h $(VMA_SRC)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_vma.c $(VMA_SRC)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

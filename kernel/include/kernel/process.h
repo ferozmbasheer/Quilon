@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <kernel/signal.h>   /* NSIG, SIG_DFL — used in process_t below */
+#include <kernel/vma.h>      /* vma_t, PROC_VMA_MAX — demand paging (9.2) */
 
 #define PROCESS_MAX        16    /* maximum concurrent processes               */
 #define PROCESS_NAME_LEN   16    /* max process name length (including NUL)    */
@@ -130,6 +131,19 @@ typedef struct process {
      * subsequent ret lands in process_first_run (boot.S trampoline).
      */
     uint8_t      kernel_stack[4096] __attribute__((aligned(16)));
+
+    /*
+     * Virtual Memory Areas (section 9.2 — demand paging).
+     *
+     * Each VMA records a contiguous virtual address range [start, end) and
+     * its permission flags.  The page-fault handler uses this table to decide
+     * whether a not-present fault is a genuine segfault or a demand-page
+     * that should be satisfied by allocating a zero physical page.
+     *
+     * Populated by elf_load_into() (one VMA per PT_LOAD segment + one for the
+     * stack) and extended by SYS_SBRK (heap VMA grows as malloc calls sbrk).
+     */
+    vma_t        vmas[PROC_VMA_MAX];
 } process_t;
 
 /* ── Global state ─────────────────────────────────────────────────────────── */
