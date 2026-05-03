@@ -99,6 +99,21 @@ void exception_handler(registers_t *regs)
 
             /* Protection fault (page was present but access was denied). */
             if (regs->err_code & 1u) {
+                /* Check for a copy-on-write write fault (section 9.3).
+                 * Conditions: write fault (bit 1) + VMA says writable +
+                 * PTE has PAGE_COW set.                                   */
+                if (regs->err_code & 2u) {
+                    vma_t *cow_vma = vma_find(current_process->vmas,
+                                              PROC_VMA_MAX, fault_addr);
+                    if (cow_vma && (cow_vma->flags & VMA_W)) {
+                        uint32_t *proc_pd =
+                            (uint32_t *)(uintptr_t)current_process->cr3;
+                        if (paging_cow_handle(proc_pd, fault_addr) == 0) {
+                            /* Handled — CPU re-executes the faulting insn. */
+                            return;
+                        }
+                    }
+                }
                 printf("\r\n[pf] pid %d: protection fault at 0x%x "
                        "(EIP=0x%x) → SIGSEGV\r\n",
                        (int)current_process->pid,

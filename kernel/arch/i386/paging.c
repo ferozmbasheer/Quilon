@@ -3,6 +3,7 @@
 
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
+#include <kernel/vma.h>
 
 /* Page directory and first page table: statically allocated and 4 KiB-
  * aligned so the CPU will accept them as PD/PT base addresses.
@@ -182,44 +183,80 @@ void paging_switch(uint32_t pd_phys)
 int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd)
 {
     /* Entry 0 is the shared kernel page table — already in child_pd[0].
-     * Entry KERNEL_PD_IDX (768) is the shared kernel-high page table — skip it.
+     * Entry KERNEL_PD_IDX (768) is the shared kernel-high page table — skip.
      * Walk entries 1-1023 for user pages.                                 */
     for (int i = 1; i < 1024; i++) {
         if (i == (int)KERNEL_PD_IDX) continue;
         if (!(parent_pd[i] & PAGE_PRESENT))
             continue;
 
-        /* Obtain a pointer to the parent's page table (identity-mapped). */
         uint32_t *parent_pt = (uint32_t *)(parent_pd[i] & ~(uint32_t)0xFFF);
 
-        /* Allocate a fresh page table for the child. */
         uint32_t *child_pt = (uint32_t *)pmm_alloc_page();
         if (!child_pt) return -1;
         memset(child_pt, 0, PAGE_SIZE);
 
-        /* Install in child PD with the same flags as the parent PDE. */
+        /* Install in child PD.  Preserve parent PDE flags except WRITABLE:
+         * a PDE containing only CoW pages should not advertise writability
+         * at the directory level, as that is still per-PTE.               */
         child_pd[i] = paging_make_entry(
             (uint32_t)(uintptr_t)child_pt,
             parent_pd[i] & (uint32_t)0xFFF);
 
-        /* Copy each present page from parent's PT into child's PT. */
         for (int j = 0; j < 1024; j++) {
             if (!(parent_pt[j] & PAGE_PRESENT))
                 continue;
 
-            uint32_t src_phys = parent_pt[j] & ~(uint32_t)0xFFF;
-            void *dst_phys = pmm_alloc_page();
-            if (!dst_phys) return -1;
+            uint32_t phys  = parent_pt[j] & ~(uint32_t)0xFFF;
+            uint32_t flags = parent_pt[j] & (uint32_t)0xFFF;
 
-            /* Physical == virtual for identity-mapped first 4 MiB. */
-            memcpy(dst_phys, (const void *)(uintptr_t)src_phys, PAGE_SIZE);
+            /* Both processes now reference this physical page. */
+            pmm_ref_page((void *)(uintptr_t)phys);
 
-            /* Map in child's page table with same flags. */
-            child_pt[j] = paging_make_entry(
-                (uint32_t)(uintptr_t)dst_phys,
-                parent_pt[j] & (uint32_t)0xFFF);
+            if (flags & PAGE_WRITABLE) {
+                /* Mark as CoW: clear WRITABLE, set PAGE_COW in both. */
+                uint32_t cow_flags = (flags & ~(uint32_t)PAGE_WRITABLE) | PAGE_COW;
+                parent_pt[j] = paging_make_entry(phys, cow_flags);
+                child_pt[j]  = paging_make_entry(phys, cow_flags);
+            } else {
+                /* Read-only: share the page unchanged. */
+                child_pt[j] = paging_make_entry(phys, flags);
+            }
         }
     }
+    return 0;
+}
+
+int paging_cow_handle(uint32_t *pd, uint32_t fault_addr)
+{
+    uint32_t pd_idx = VIRT_PD_INDEX(fault_addr);
+    uint32_t pt_idx = VIRT_PT_INDEX(fault_addr);
+
+    if (!(pd[pd_idx] & PAGE_PRESENT)) return -1;
+
+    uint32_t *pt  = (uint32_t *)(pd[pd_idx] & ~(uint32_t)0xFFF);
+    uint32_t  pte = pt[pt_idx];
+
+    if (!(pte & PAGE_COW)) return -1;   /* not a CoW page */
+
+    uint32_t phys  = pte & ~(uint32_t)0xFFF;
+    uint32_t flags = pte & (uint32_t)0xFFF;
+
+    if (pmm_page_refcount((void *)(uintptr_t)phys) <= 1) {
+        /* Sole owner: just restore writability. */
+        uint32_t new_flags = (flags & ~(uint32_t)PAGE_COW) | PAGE_WRITABLE;
+        pt[pt_idx] = paging_make_entry(phys, new_flags);
+    } else {
+        /* Shared: copy the page, drop our reference to the original. */
+        void *new_phys = pmm_alloc_page();
+        if (!new_phys) return -1;
+        memcpy(new_phys, (const void *)(uintptr_t)phys, PAGE_SIZE);
+        pmm_free_page((void *)(uintptr_t)phys);  /* decrement shared refcount */
+        uint32_t new_flags = (flags & ~(uint32_t)PAGE_COW) | PAGE_WRITABLE;
+        pt[pt_idx] = paging_make_entry((uint32_t)(uintptr_t)new_phys, new_flags);
+    }
+
+    asm volatile("invlpg (%0)" :: "r"(fault_addr) : "memory");
     return 0;
 }
 

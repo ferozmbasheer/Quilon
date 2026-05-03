@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow
 
 .PHONY: all build run clean help
 
@@ -249,6 +249,14 @@ $(BINDIR)/test_initrd: test_initrd.c framework.h \
 # vma.c is pure C — no x86 asm, no hardware calls.  Compiles on the host.
 $(BINDIR)/test_vma: test_vma.c framework.h $(VMA_SRC)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_vma.c $(VMA_SRC)
+
+# CoW fork tests (section 9.3)
+# Tests PMM reference counting (pmm.c — pure C) and the CoW page-table
+# algorithm (simulated inline in test_cow.c — no paging.c asm needed).
+# paging.h is used for PAGE_COW / PAGE_* constants and paging_make_entry().
+$(BINDIR)/test_cow: test_cow.c framework.h $(PMM_SRC) $(LIBC_STRING) $(LIBC_PRINTF)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_cow.c $(PMM_SRC) $(LIBC_STRING) $(LIBC_PRINTF)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

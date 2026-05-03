@@ -8,6 +8,13 @@
 #define PAGE_WRITABLE  (1u << 1)   /* R/W – allow writes                   */
 #define PAGE_USER      (1u << 2)   /* U/S – accessible from ring 3         */
 
+/* Bit 9 is available to the OS (x86 reserved for software use).
+ * We use it to mark copy-on-write pages (section 9.3):
+ *   – Set on both parent and child PTEs by paging_fork_address_space().
+ *   – Cleared and PAGE_WRITABLE restored by paging_cow_handle() when the
+ *     first write fault is taken against this page. */
+#define PAGE_COW       (1u << 9)
+
 /* ── Higher-half kernel constants (section 9.1) ────────────────────────────
  *
  * The kernel is linked at virtual 0xC0100000 but loaded at physical 0x100000.
@@ -130,27 +137,50 @@ uint32_t *paging_create_address_space(void);
 void paging_switch(uint32_t pd_phys);
 
 /*
- * paging_fork_address_space — copy all user pages from parent_pd to child_pd.
+ * paging_fork_address_space — CoW fork of all user pages (section 9.3).
  *
- * Implements the memory-duplication step of fork() (section 6.2).  Walks
- * every page directory entry in parent_pd EXCEPT entry 0 (the shared kernel
- * page table, already installed in child_pd by paging_create_address_space).
+ * Implements copy-on-write fork.  Walks every page directory entry in
+ * parent_pd EXCEPT the shared kernel entries (PD[0] and PD[KERNEL_PD_IDX]).
  *
- * For each present PDE in [1, 1023]:
+ * For each present PDE in [1, 1023] (excluding KERNEL_PD_IDX):
  *   1. Allocate a new page table for child_pd.
  *   2. For each present PTE in that page table:
- *       a. Allocate a fresh physical page.
- *       b. Copy the 4 KiB content (parent phys addr == parent virt addr
- *          because all PMM pages are identity-mapped in the first 4 MiB).
- *       c. Map it in child_pd at the same virtual address with the same flags.
+ *       a. Call pmm_ref_page() to record that a second PTE references
+ *          the same physical page.
+ *       b. If the page is writable: clear PAGE_WRITABLE and set PAGE_COW
+ *          in BOTH the parent PTE and the child PTE.  Both processes will
+ *          now fault on the first write.
+ *       c. If the page is read-only: share it unchanged (no CoW needed).
  *
- * No TLB flush is needed: child_pd is not yet loaded in CR3.
+ * The caller MUST flush the parent TLB after this call (e.g. by calling
+ * paging_switch(current_process->cr3)) because we modified parent PTEs.
+ *
+ * No TLB flush is needed for child_pd: it is not yet loaded in CR3.
  *
  * Returns 0 on success, -1 if pmm_alloc_page() fails (OOM).
- * On failure, any pages already copied are leaked (acceptable for now —
- * a production OS would free them on rollback).
  */
 int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd);
+
+/*
+ * paging_cow_handle — resolve a copy-on-write write fault (section 9.3).
+ *
+ * Called by the page fault handler when a write to a PAGE_COW page raises
+ * a protection fault (err_code bit 1 set, page was present but read-only).
+ *
+ * Algorithm:
+ *   1. Locate the PTE for fault_addr in pd[].
+ *   2. Verify PAGE_COW is set (otherwise return -1 — not a CoW fault).
+ *   3. If pmm_page_refcount() == 1: this process is the sole remaining
+ *      owner — clear PAGE_COW, restore PAGE_WRITABLE, no copy needed.
+ *   4. If refcount > 1: allocate a new physical page, copy content,
+ *      call pmm_free_page() to decrement the shared page's refcount,
+ *      install the new page as writable (PAGE_COW cleared).
+ *   5. invlpg the fault address to invalidate the stale TLB entry.
+ *
+ * Returns 0 on success (fault handled, CPU will re-execute), -1 on
+ * failure (not a CoW fault or OOM — caller should send SIGSEGV).
+ */
+int paging_cow_handle(uint32_t *pd, uint32_t fault_addr);
 
 /*
  * paging_map_page_alloc_into — map a page into an arbitrary page directory.

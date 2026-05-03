@@ -380,13 +380,18 @@ void syscall_handler(syscall_regs_t *regs)
         uint32_t *fork_pd = paging_create_address_space();
         if (!fork_pd) { ret = (uint32_t)-1; break; }
 
-        /* 2. Copy user pages from parent's address space into child's. */
+        /* 2. CoW-fork: share user pages, mark writable ones read-only+COW. */
         uint32_t *parent_pd = (uint32_t *)(uintptr_t)current_process->cr3;
         if (paging_fork_address_space(parent_pd, fork_pd) != 0) {
             pmm_free_page(fork_pd);
             ret = (uint32_t)-1;
             break;
         }
+
+        /* paging_fork_address_space modified the parent's PTEs (cleared
+         * PAGE_WRITABLE on writable pages).  Reload CR3 to flush stale
+         * TLB entries so the parent will take CoW faults on next write. */
+        paging_switch(current_process->cr3);
 
         /* 3. Allocate PCB.  entry=0 because kernel_esp is set manually. */
         process_t *fork_child = process_create(
@@ -398,6 +403,12 @@ void syscall_handler(syscall_regs_t *regs)
         }
         fork_child->parent_pid = current_process->pid;
         fork_child->heap_end   = current_process->heap_end;
+
+        /* 3.5. Copy VMAs: child inherits parent's address-space layout.
+         * VMA flags retain VMA_W even though PTEs are now read-only —
+         * the VMA records logical permission; PTEs enforce it until CoW. */
+        for (int _v = 0; _v < PROC_VMA_MAX; _v++)
+            fork_child->vmas[_v] = current_process->vmas[_v];
 
         /* 4. Copy the 64-byte int80_stub frame from parent's kernel stack.
          *

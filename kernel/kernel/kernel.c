@@ -307,6 +307,91 @@ void kernel_main(void) {
 	}
 	printf("=== Section 9.1 ready ===\r\n\r\n");
 
+	/* ── Section 9.3: Copy-on-Write fork demo ─────────────────────────────────
+	 *
+	 * Shows that paging_fork_address_space() now uses CoW rather than eager
+	 * page copies:
+	 *   1. PMM reference counting: pmm_alloc_page sets refcount=1;
+	 *      pmm_ref_page increments it; pmm_free_page only frees when it hits 0.
+	 *   2. A CoW fork shares physical pages — free count stays the same after
+	 *      the fork (the parent's writable pages are not duplicated).
+	 *   3. PAGE_COW flag value and non-overlap with existing PTE flags.
+	 *
+	 * Interactive: quilon> fork   (ring-0 shell: reports -1, needs scheduler)
+	 *              quilon> cow    (shows refcount lifecycle; SHELL.ELF shows live
+	 *                             parent/child write isolation)
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("=== Section 9.3: Copy-on-Write fork ===\r\n");
+	{
+		/* ── 1. PMM reference counting ───────────────────────────────── */
+		uint32_t free_before = pmm_free_page_count();
+		void *page_a = pmm_alloc_page();
+
+		if (page_a) {
+			printf("cow: alloc page_a @ 0x%x  refcount=%d  "
+			       "(expect 1)\r\n",
+			       (unsigned)(uintptr_t)page_a,
+			       (int)pmm_page_refcount(page_a));
+
+			pmm_ref_page(page_a);
+			printf("cow: after pmm_ref_page    refcount=%d  "
+			       "(expect 2)\r\n",
+			       (int)pmm_page_refcount(page_a));
+
+			pmm_free_page(page_a);   /* decrement to 1 */
+			printf("cow: after first free      refcount=%d  "
+			       "(expect 1, page NOT yet freed)\r\n",
+			       (int)pmm_page_refcount(page_a));
+			printf("cow: free pages after first free = %d  "
+			       "(same as before alloc: %d)\r\n",
+			       (int)pmm_free_page_count(), (int)free_before - 1);
+
+			pmm_free_page(page_a);   /* decrement to 0 — now freed */
+			printf("cow: after second free     free count = %d  "
+			       "(back to %d: page returned)\r\n",
+			       (int)pmm_free_page_count(), (int)free_before);
+		}
+
+		/* ── 2. PAGE_COW flag ──────────────────────────────────────── */
+		printf("cow: PAGE_COW=0x%x  (bit 9, software-reserved)\r\n",
+		       (unsigned)PAGE_COW);
+		printf("cow: overlaps PRESENT?  %s  WRITABLE?  %s  USER?  %s\r\n",
+		       (PAGE_COW & PAGE_PRESENT)  ? "YES (BUG)" : "no",
+		       (PAGE_COW & PAGE_WRITABLE) ? "YES (BUG)" : "no",
+		       (PAGE_COW & PAGE_USER)     ? "YES (BUG)" : "no");
+
+		/* ── 3. CoW fork free-count invariant ─────────────────────── */
+		uint32_t *pd_parent = paging_create_address_space();
+		uint32_t *pd_child  = paging_create_address_space();
+		if (pd_parent && pd_child) {
+			/* Map a writable user page in the parent. */
+			void *user_page = pmm_alloc_page();
+			if (user_page) {
+				paging_map_page_alloc_into(pd_parent, 0x00400000u,
+				    (uint32_t)(uintptr_t)user_page,
+				    PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+
+				uint32_t free_pre_fork  = pmm_free_page_count();
+				paging_fork_address_space(pd_parent, pd_child);
+				uint32_t free_post_fork = pmm_free_page_count();
+
+				printf("cow: free pages before CoW fork: %d\r\n",
+				       (int)free_pre_fork);
+				printf("cow: free pages after  CoW fork: %d  "
+				       "(only PT page allocated, not the data page)\r\n",
+				       (int)free_post_fork);
+				printf("cow: data page refcount after fork: %d  "
+				       "(expect 2)\r\n",
+				       (int)pmm_page_refcount(user_page));
+			}
+			pmm_free_page(pd_parent);
+			pmm_free_page(pd_child);
+		}
+
+		printf("cow: use 'cow' at the shell prompt for interactive demo\r\n");
+	}
+	printf("=== Section 9.3 ready ===\r\n\r\n");
+
 	/* ── Process isolation demo (section 5.1) ─────────────────────────────
 	 * Show that two processes can have independent page directories at the
 	 * same virtual address range without colliding.                       */

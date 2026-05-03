@@ -9,6 +9,7 @@
 #include <kernel/elf.h>
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
+#include <kernel/vma.h>
 #include <kernel/process.h>
 #include <kernel/initrd.h>
 
@@ -340,6 +341,74 @@ static void shell_cmd_initrd(void)
     printf("=== done ===\r\n");
 }
 
+static void shell_cmd_cow(void)
+{
+    printf("=== CoW fork demo (section 9.3) ===\r\n");
+
+    /* ── 1. PMM reference-count lifecycle ───────────────────────────── */
+    uint32_t free0 = pmm_free_page_count();
+    void *page_a = pmm_alloc_page();
+    if (!page_a) { printf("cow: out of memory\r\n"); return; }
+
+    printf("1. alloc page_a @ 0x%x  refcount=%d\r\n",
+           (unsigned)(uintptr_t)page_a, (int)pmm_page_refcount(page_a));
+
+    pmm_ref_page(page_a);
+    printf("2. pmm_ref_page  -> refcount=%d  (shared between two PTEs)\r\n",
+           (int)pmm_page_refcount(page_a));
+
+    pmm_free_page(page_a);
+    printf("3. first free    -> refcount=%d  (page NOT released)\r\n",
+           (int)pmm_page_refcount(page_a));
+
+    pmm_free_page(page_a);
+    printf("4. second free   -> free count=%d  (restored to %d: page freed)\r\n",
+           (int)pmm_free_page_count(), (int)free0);
+
+    /* ── 2. CoW fork: writable page shared, not copied ──────────────── */
+    printf("5. PAGE_COW=0x%x  (bit 9, OS-reserved PTE bit)\r\n",
+           (unsigned)PAGE_COW);
+
+    uint32_t *pd_p = paging_create_address_space();
+    uint32_t *pd_c = paging_create_address_space();
+    void     *upage = pmm_alloc_page();
+
+    if (pd_p && pd_c && upage) {
+        /* Map a writable user page in the parent's address space. */
+        paging_map_page_alloc_into(pd_p, 0x00400000u,
+            (uint32_t)(uintptr_t)upage,
+            PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+
+        uint32_t pre = pmm_free_page_count();
+        paging_fork_address_space(pd_p, pd_c);
+        uint32_t post = pmm_free_page_count();
+
+        printf("6. free pages before CoW fork: %d\r\n", (int)pre);
+        printf("   free pages after  CoW fork: %d  "
+               "(only PT alloc, data page shared)\r\n", (int)post);
+        printf("   data page refcount: %d  (expect 2)\r\n",
+               (int)pmm_page_refcount(upage));
+
+        /* Inspect parent PDE: writable bit should be clear, COW set. */
+        uint32_t pd_idx = VIRT_PD_INDEX(0x00400000u);
+        if (pd_p[pd_idx] & PAGE_PRESENT) {
+            uint32_t *pt_p = (uint32_t *)(pd_p[pd_idx] & ~(uint32_t)0xFFF);
+            uint32_t  pte  = pt_p[VIRT_PT_INDEX(0x00400000u)];
+            printf("   parent PTE flags: WRITABLE=%d  COW=%d  "
+                   "(expect 0, 1)\r\n",
+                   (int)!!(pte & PAGE_WRITABLE),
+                   (int)!!(pte & PAGE_COW));
+        }
+
+        pmm_free_page(pd_p);
+        pmm_free_page(pd_c);
+        pmm_free_page(upage);
+    }
+
+    printf("7. fork+write demo: run from SHELL.ELF with 'cow' command\r\n");
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_pipetest(void)
 {
     const char *msg = "Hello through the pipe!";
@@ -386,9 +455,10 @@ static void shell_cmd_pipetest(void)
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
-        printf("          ring3, syscall, sbrk, fork, ps, ls, cat <file>,\r\n");
-        printf("          touch <file>, write <file> <data>, rm <file>,\r\n");
-        printf("          fstest, pipetest, initrd, exec <file.elf>\r\n");
+        printf("          ring3, syscall, sbrk, fork, cow, ps, ls,\r\n");
+        printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
+        printf("          rm <file>, fstest, pipetest, initrd,\r\n");
+        printf("          exec <file.elf>\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -422,6 +492,8 @@ static void shell_execute(const char *cmd) {
         printf("(fork requires a scheduler-managed process; "
                "exec_setjmp path returns -1  - expected)\r\n");
         shell_run_ring3_task(user_task_fork, "fork");
+    } else if (strcmp(cmd, "cow") == 0) {
+        shell_cmd_cow();
     } else if (strcmp(cmd, "ps") == 0) {
         shell_cmd_ps();
     } else if (strcmp(cmd, "ls") == 0) {

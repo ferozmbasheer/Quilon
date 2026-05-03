@@ -87,6 +87,7 @@ static void cmd_help(void)
     printf("  sbrk                   - demo heap growth via SYS_SBRK\r\n");
     printf("  heaptest               - demand-paging demo: 256 KiB lazy heap\r\n");
     printf("  fork                   - demo SYS_FORK with parent/child\r\n");
+    printf("  cow                    - CoW fork: parent/child see own data\r\n");
     printf("  pipe                   - demo anonymous pipe (SYS_PIPE)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
@@ -372,6 +373,51 @@ static void cmd_fork(void)
     }
 }
 
+/* cmd_cow — demonstrate copy-on-write fork (section 9.3).
+ *
+ * Allocates a buffer, writes "parent" into it, then forks.
+ * The child overwrites it with "child" and exits.  Because CoW is in
+ * effect, the parent still sees its original value — the write in the
+ * child triggered a CoW fault, a new physical page was allocated for the
+ * child, and the parent's page was left untouched.               */
+static void cmd_cow(void)
+{
+    static char shared[32];
+
+    /* Write initial data before fork. */
+    int i;
+    const char *init = "parent-data";
+    for (i = 0; init[i]; i++) shared[i] = init[i];
+    shared[i] = '\0';
+
+    printf("cow: before fork, shared=\"%s\"\r\n", shared);
+
+    int pid = fork();
+    if (pid < 0) {
+        printf("cow: fork failed\r\n");
+        return;
+    }
+
+    if (pid == 0) {
+        /* Child: overwrite the buffer.  This write triggers a CoW fault;
+         * the kernel copies the page and maps a private copy here. */
+        const char *cdata = "child-data";
+        for (i = 0; cdata[i]; i++) shared[i] = cdata[i];
+        shared[i] = '\0';
+        printf("cow: child  (PID=%d) shared=\"%s\"\r\n", getpid(), shared);
+        exit(0);
+    } else {
+        int code = 0;
+        wait(pid, &code);
+        /* Parent's copy must be untouched — CoW preserved isolation. */
+        printf("cow: parent (PID=%d) shared=\"%s\"  "
+               "(expect \"parent-data\")\r\n", getpid(), shared);
+        printf("cow: %s\r\n",
+               (shared[0] == 'p') ? "PASS: CoW preserved parent page"
+                                  : "FAIL: parent page was corrupted");
+    }
+}
+
 static void cmd_pipe(void)
 {
     const char *msg = "Hello through the pipe!";
@@ -465,6 +511,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "sbrk")     == 0) cmd_sbrk();
     else if (strcmp(cmd, "heaptest") == 0) cmd_heaptest();
     else if (strcmp(cmd, "fork")   == 0) cmd_fork();
+    else if (strcmp(cmd, "cow")    == 0) cmd_cow();
     else if (strcmp(cmd, "pipe")   == 0) cmd_pipe();
     else if (strcmp(cmd, "initrd") == 0) cmd_initrd();
     else if (strcmp(cmd, "exit")   == 0) {

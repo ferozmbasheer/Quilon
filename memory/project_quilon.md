@@ -85,4 +85,21 @@ Read-only VFS driver backed by an in-memory image, available before any disk dri
 **Image format:** `[uint32_t N] [N × {char name[16]; uint32_t size; uint8_t data[size]}]`
 **Boot order:** initrd mounted first → ATA/FAT16 mounts and replaces it if a disk is found.
 
-**Next section:** Section 9 — Memory Management (Higher-Half Kernel, Demand Paging, CoW fork)
+**Section 9.3 — Copy-on-Write fork (completed 2026-05-03)**
+
+CoW fork implemented across all layers:
+
+- `kernel/arch/i386/pmm.c` — added `uint8_t refcount[MAX_PAGES]`; `pmm_alloc_page` sets refcount=1; `pmm_free_page` decrements and only frees when refcount reaches 0; new `pmm_ref_page()` increments refcount; `pmm_page_refcount()` returns count; `pmm_init_range()` zeroes refcount array
+- `kernel/include/kernel/pmm.h` — declared `pmm_ref_page`, `pmm_page_refcount`
+- `kernel/include/kernel/paging.h` — added `PAGE_COW = (1u << 9)` (OS-reserved PTE bit 9); updated `paging_fork_address_space` docs; declared `paging_cow_handle(pd, fault_addr)`
+- `kernel/arch/i386/paging.c` — rewrote `paging_fork_address_space` to CoW: shares physical pages, marks writable PTEs read-only+PAGE_COW in both parent and child, calls `pmm_ref_page`; added `paging_cow_handle`: single-owner → restore writability in place; multi-owner → copy page, `pmm_free_page` old ref, map new page writable; uses `invlpg` for TLB invalidation
+- `kernel/arch/i386/exceptions.c` — CoW check before SIGSEGV: write fault (err_code bit 1) + VMA_W → calls `paging_cow_handle`; returns normally to re-execute faulting instruction
+- `kernel/kernel/syscall.c` — SYS_FORK: after `paging_fork_address_space`, flushes parent TLB via `paging_switch(current_process->cr3)`; copies VMAs from parent to child
+- `kernel/kernel/kernel.c` — Section 9.3 boot demo: PMM refcount lifecycle, PAGE_COW flags, free-count invariant after CoW fork
+- `kernel/kernel/shell.c` + `user/shell/main.c` — `cow` command added to both shells; user shell `cmd_cow` does actual fork+write isolation demo
+
+**Tests:** `tests/test_cow.c` — 67 tests: PMM refcount lifecycle, PAGE_COW flag properties, CoW fork PTE flag logic (simulated), CoW handle shared/sole-owner cases, full parent/child isolation lifecycle. Makefile rule added.
+
+**All 17 test suites pass.**
+
+**Next section:** Section 10 — Towards a Real OS (PCI, RTL8139, TCP/IP, VGA, SMP)

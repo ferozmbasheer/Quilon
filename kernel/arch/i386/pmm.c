@@ -16,6 +16,12 @@
 static uint32_t bitmap[BITMAP_WORDS];
 static uint32_t free_pages = 0;
 
+/* ── Reference counts (section 9.3 — CoW) ──────────────────────────────── */
+/* One byte per physical page.  Starts at 1 on alloc; pmm_ref_page
+ * increments it; pmm_free_page decrements it and only releases the
+ * page when the count reaches 0.  max refcount per page: 255. */
+static uint8_t refcount[MAX_PAGES];
+
 /* Linker-defined symbols — use their *addresses*, not their contents. */
 extern uint32_t kernel_start;
 extern uint32_t kernel_end;
@@ -120,6 +126,7 @@ void *pmm_alloc_page(void)
             if (!page_test(page)) {
                 page_set(page);
                 free_pages--;
+                refcount[page] = 1;
                 return (void *)(uintptr_t)(page * PAGE_SIZE);
             }
         }
@@ -130,10 +137,28 @@ void *pmm_alloc_page(void)
 void pmm_free_page(void *addr)
 {
     uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
-    if (page_test(page)) {
-        page_clear(page);
-        free_pages++;
+    if (!page_test(page)) return;  /* page is not allocated — no-op */
+    if (refcount[page] > 1) {
+        refcount[page]--;
+        return;  /* still referenced by other page tables */
     }
+    /* Last reference: release the page back to the pool. */
+    refcount[page] = 0;
+    page_clear(page);
+    free_pages++;
+}
+
+void pmm_ref_page(void *addr)
+{
+    uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
+    if (page_test(page) && refcount[page] < 255u)
+        refcount[page]++;
+}
+
+uint8_t pmm_page_refcount(void *addr)
+{
+    uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
+    return refcount[page];
 }
 
 uint32_t pmm_free_page_count(void)
@@ -145,6 +170,7 @@ void pmm_init_range(uint32_t free_base, uint32_t free_len,
                     uint32_t reserved_base, uint32_t reserved_len)
 {
     memset(bitmap, 0xFF, sizeof(bitmap));
+    memset(refcount, 0, sizeof(refcount));
     free_pages = 0;
 
     pmm_free_range(free_base, free_len);
