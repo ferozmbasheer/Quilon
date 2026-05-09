@@ -38,6 +38,25 @@ void gdt_set_kernel_stack(uint32_t esp0)
     default_tss.esp0 = esp0;
 }
 
+void gdt_initialize_ap(void)
+{
+    /* The BSP already built the GDT and copied it to the physical address
+     * stored in kgdtr.  APs just reload the same descriptor table and
+     * refresh all segment registers to pick up the 32-bit flat selectors.*/
+    asm volatile(
+        "lgdtl   (kgdtr)        \n\t"
+        "movw    $0x10, %%ax    \n\t"
+        "movw    %%ax,  %%ds    \n\t"
+        "movw    %%ax,  %%es    \n\t"
+        "movw    %%ax,  %%fs    \n\t"
+        "movw    %%ax,  %%gs    \n\t"
+        "movw    %%ax,  %%ss    \n\t"
+        "ljmp    $0x08, $1f     \n\t"
+        "1:                     \n\t"
+        ::: "eax"
+    );
+}
+
 void gdt_initialize(void)
 {
     default_tss.debug_flag = 0x00;

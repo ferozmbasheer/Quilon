@@ -8,6 +8,12 @@
 #define PAGE_WRITABLE  (1u << 1)   /* R/W – allow writes                   */
 #define PAGE_USER      (1u << 2)   /* U/S – accessible from ring 3         */
 
+/* Bit 3 (PWT) and bit 4 (PCD) control caching behaviour.
+ * PAGE_NOCACHE sets PCD (Page Cache Disable) to bypass the CPU cache for
+ * MMIO regions.  Always set this on page-table entries that map device
+ * registers (e.g. the Local APIC at 0xFEE00000).                          */
+#define PAGE_NOCACHE   (1u << 4)
+
 /* Bit 9 is available to the OS (x86 reserved for software use).
  * We use it to mark copy-on-write pages (section 9.3):
  *   – Set on both parent and child PTEs by paging_fork_address_space().
@@ -111,6 +117,11 @@ int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags);
  * PTEs marked not-present) before the first entry is written.
  */
 int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags);
+
+/* Map a hardware MMIO region: like paging_map_page_alloc but always sets
+ * PAGE_NOCACHE so the CPU does not cache MMIO register reads/writes.
+ * Used by apic_initialize() to map the Local APIC at 0xFEE00000. */
+void paging_map_mmio(uint32_t virt, uint32_t phys);
 
 /* ── Per-process address space (section 5.1) ────────────────────────────── */
 

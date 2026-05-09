@@ -285,6 +285,12 @@ int paging_map_page_alloc_into(uint32_t *pd, uint32_t virt,
     return 0;
 }
 
+void paging_map_mmio(uint32_t virt, uint32_t phys)
+{
+    paging_map_page_alloc(virt, phys,
+                          PAGE_PRESENT | PAGE_WRITABLE | PAGE_NOCACHE);
+}
+
 int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags)
 {
     uint32_t pd_idx = VIRT_PD_INDEX(virt);

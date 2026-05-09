@@ -16,6 +16,8 @@
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
 #include <kernel/vbe.h>
+#include <kernel/apic.h>
+#include <kernel/smp.h>
 
 static void shell_cmd_ls(void)
 {
@@ -679,6 +681,26 @@ static void shell_cmd_pci(void)
     printf("=== done ===\r\n");
 }
 
+static void shell_cmd_smp(void)
+{
+    printf("=== Symmetric Multiprocessing (section 10.5) ===\r\n");
+    printf("CPUs discovered (MP table): %d\r\n", (int)smp_cpu_count);
+    printf("CPUs online:                %d\r\n", (int)smp_cpus_online);
+    printf("\r\n");
+    for (uint32_t _i = 0; _i < smp_cpu_count; _i++) {
+        const cpu_info_t *c = &smp_cpus[_i];
+        printf("  CPU%d  APIC-ID=%-2d  %s  active=%-2s  online=%s\r\n",
+               (int)_i,
+               (int)c->apic_id,
+               c->is_bsp  ? "BSP" : "AP ",
+               c->active  ? "yes" : "no",
+               c->online  ? "yes" : "no");
+    }
+    printf("\r\n");
+    printf("BSP LAPIC ID (current CPU): %d\r\n", (int)apic_id());
+    printf("spinlock: PMM bitmap is SMP-safe (spinlock_t)\r\n");
+}
+
 static void shell_cmd_vga(void)
 {
     if (!vbe_active()) {
@@ -701,6 +723,7 @@ static void shell_execute(const char *cmd) {
         printf("          rm <file>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
         printf("          dhcp, ping <ip>, arp, tcpip, vga\r\n");
+        printf("          smp                    - SMP CPU status (section 10.5)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -774,6 +797,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_tcpip();
     } else if (strcmp(cmd, "vga") == 0) {
         shell_cmd_vga();
+    } else if (strcmp(cmd, "smp") == 0) {
+        shell_cmd_smp();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

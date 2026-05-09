@@ -4,6 +4,7 @@
 #include <kernel/pmm.h>
 #include <kernel/multiboot.h>
 #include <kernel/paging.h>
+#include <kernel/spinlock.h>
 
 /* ── Bitmap ─────────────────────────────────────────────────────────────── */
 /* One bit per 4 KiB page across the full 32-bit (4 GiB) address space.
@@ -15,6 +16,11 @@
 
 static uint32_t bitmap[BITMAP_WORDS];
 static uint32_t free_pages = 0;
+
+/* Protects bitmap and free_pages against concurrent access from multiple
+ * CPUs (SMP section 10.5).  Initialised statically so it is ready before
+ * any kernel code runs.                                                    */
+static spinlock_t pmm_lock = SPINLOCK_INIT;
 
 /* ── Reference counts (section 9.3 — CoW) ──────────────────────────────── */
 /* One byte per physical page.  Starts at 1 on alloc; pmm_ref_page
@@ -117,6 +123,8 @@ void pmm_initialize(void *multiboot_info)
 
 void *pmm_alloc_page(void)
 {
+    spinlock_acquire(&pmm_lock);
+    void *result = NULL;
     for (uint32_t i = 0; i < BITMAP_WORDS; i++) {
         if (bitmap[i] == 0xFFFFFFFFu)
             continue;   /* all 32 pages in this word are used */
@@ -127,25 +135,31 @@ void *pmm_alloc_page(void)
                 page_set(page);
                 free_pages--;
                 refcount[page] = 1;
-                return (void *)(uintptr_t)(page * PAGE_SIZE);
+                result = (void *)(uintptr_t)(page * PAGE_SIZE);
+                goto done;
             }
         }
     }
-    return NULL;   /* out of memory */
+done:
+    spinlock_release(&pmm_lock);
+    return result;   /* NULL = out of memory */
 }
 
 void pmm_free_page(void *addr)
 {
+    spinlock_acquire(&pmm_lock);
     uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
-    if (!page_test(page)) return;  /* page is not allocated — no-op */
+    if (!page_test(page)) goto done;   /* page not allocated — no-op */
     if (refcount[page] > 1) {
         refcount[page]--;
-        return;  /* still referenced by other page tables */
+        goto done;                     /* still referenced */
     }
     /* Last reference: release the page back to the pool. */
     refcount[page] = 0;
     page_clear(page);
     free_pages++;
+done:
+    spinlock_release(&pmm_lock);
 }
 
 void pmm_ref_page(void *addr)

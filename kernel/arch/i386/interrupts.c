@@ -10,6 +10,7 @@
 
 extern void outb(unsigned short port, unsigned char data);
 extern char inb(unsigned short port);
+extern void load_idt(void *idt_ptr);
 
 struct IDT_entry IDT[256];
 
@@ -38,7 +39,6 @@ void idt_initialize(void) {
       idt_set_gate(i, (uint32_t)isr_stubs[i],
                    IDT_SELECTOR_KERNEL_CODE, IDT_TYPE_INTERRUPT_GATE);
 
-  extern int load_idt();
 
   /* IRQ assembly stubs defined in boot.S via the IRQ_STUB macro */
   extern void irq0(void),  irq1(void),  irq2(void),  irq3(void);
@@ -79,6 +79,18 @@ void idt_initialize(void) {
 	idt_ptr[1] = idt_address >> 16;
 
 	load_idt(idt_ptr);
+}
+
+void idt_load_ap(void)
+{
+    /* Re-issue lidt with the BSP's IDT descriptor so the AP's interrupt
+     * handling uses the same gates as the BSP.                             */
+    unsigned long idt_address = (unsigned long)IDT;
+    unsigned long idt_ptr[2];
+    idt_ptr[0] = (sizeof(struct IDT_entry) * 256) +
+                 ((idt_address & 0xffff) << 16);
+    idt_ptr[1] = idt_address >> 16;
+    load_idt(idt_ptr);
 }
 
 void irq0_handler(void) {

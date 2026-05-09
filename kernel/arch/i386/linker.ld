@@ -14,6 +14,11 @@ SECTIONS
     {
         *(.multiboot)
         *(.text)
+        /* AP startup trampoline — must be in the kernel binary so that
+         * smp_boot_aps() can copy it to physical 0x8000 at runtime.
+         * It is linked here (at its kernel-high VMA) and accessed by the
+         * smp_trampoline_start / smp_trampoline_end symbols.               */
+        *(.smp_trampoline)
     }
 
     .rodata BLOCK(4K) : AT(ADDR(.rodata) - KERNEL_OFFSET) ALIGN(4K)

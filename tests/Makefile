@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp
 
 .PHONY: all build run clean help
 
@@ -291,6 +291,15 @@ $(BINDIR)/test_net: test_net.c framework.h
 # on the host.  vbe.c is NOT linked (it calls paging_map_page_alloc and MMIO).
 $(BINDIR)/test_vbe: test_vbe.c framework.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_vbe.c
+
+# SMP tests (section 10.5)
+# Tests spinlock.h (pure static-inline), apic.h (pure static-inline helpers),
+# and smp.c's mp_parse_config() (pure C, no hardware access).
+# apic.c and smp.c kernel-only paths are guarded by #ifdef __is_kernel and
+# are absent in the host build.  smp.c is included directly in test_smp.c
+# to pull in mp_parse_config() without linking hardware-dependent code.
+$(BINDIR)/test_smp: test_smp.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_smp.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

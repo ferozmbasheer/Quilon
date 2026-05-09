@@ -28,6 +28,12 @@ struct IDT_entry{
 
 void idt_initialize(void);
 
+/* Reload the IDT on an Application Processor.
+ * The BSP already filled IDT[] and called load_idt(); this function
+ * issues a new lidt so the AP uses the same interrupt descriptor table.
+ * Call from ap_entry_c() after gdt_initialize_ap().                      */
+void idt_load_ap(void);
+
 /* Set a single IDT gate */
 static inline void idt_set_gate(int vector, uint32_t handler,
                                 uint16_t selector, uint8_t type_attr)

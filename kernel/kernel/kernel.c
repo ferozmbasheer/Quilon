@@ -26,6 +26,8 @@
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
 #include <kernel/vbe.h>
+#include <kernel/apic.h>
+#include <kernel/smp.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -689,6 +691,54 @@ void kernel_main(void) {
 		printf("vbe: use 'vga' at the shell prompt to run the demo\r\n");
 	}
 	printf("=== Section 10.4 ready ===\r\n\r\n");
+
+	/* ── Section 10.5: Symmetric Multiprocessing (SMP) ───────────────────────
+	 *
+	 * Initialises the Local APIC on the Bootstrap Processor (BSP), parses the
+	 * Intel MP configuration table to discover Application Processors (APs),
+	 * and boots each AP via an INIT+SIPI sequence.
+	 *
+	 * Each AP executes a 16-bit→32-bit real-mode trampoline (copied to physical
+	 * 0x8000 before the first SIPI), enables paging with the kernel CR3, and
+	 * calls ap_entry_c() where it reloads the GDT/IDT and enters an idle loop.
+	 *
+	 * A spinlock now protects pmm_alloc_page() / pmm_free_page() so that
+	 * simultaneous memory allocation from multiple cores is safe.
+	 *
+	 * New files:
+	 *   kernel/include/kernel/spinlock.h   — test-and-set spinlock
+	 *   kernel/include/kernel/apic.h       — LAPIC register map + ICR helpers
+	 *   kernel/include/kernel/smp.h        — cpu_info_t, MP table structs
+	 *   kernel/arch/i386/apic.c            — LAPIC init, EOI, IPI send
+	 *   kernel/arch/i386/smp.c             — MP table parse, AP boot, ap_entry_c
+	 *   kernel/arch/i386/smp_trampoline.S  — 16-bit AP startup trampoline
+	 *
+	 * Try with QEMU option -smp 2 (already added to qemu.sh) to see two CPUs.
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 10.5: Symmetric Multiprocessing (SMP) ===\r\n");
+
+	apic_initialize();
+
+	smp_initialize();
+	printf("smp: found %d CPU(s) via MP table\r\n", (int)smp_cpu_count);
+	for (uint32_t _ci = 0; _ci < smp_cpu_count; _ci++) {
+		printf("  CPU %d: APIC-ID=%d %s\r\n",
+		       (int)_ci,
+		       (int)smp_cpus[_ci].apic_id,
+		       smp_cpus[_ci].is_bsp ? "(BSP)" : "(AP)");
+	}
+
+	if (smp_cpu_count > 1) {
+		smp_boot_aps();
+		printf("smp: %d/%d CPU(s) online\r\n",
+		       (int)smp_cpus_online, (int)smp_cpu_count);
+	} else {
+		printf("smp: single-CPU system (add -smp 2 to qemu.sh "
+		       "for multi-core demo)\r\n");
+	}
+	printf("spinlock: PMM protected by spinlock_t (SMP-safe alloc/free)\r\n");
+	printf("smp: use 'smp' at the shell prompt for CPU status\r\n");
+	printf("=== Section 10.5 ready ===\r\n\r\n");
 
 	printf("  ___        _ _ \r\n");
 	printf(" / _ \\ _   _(_) | ___  _ __  \r\n");

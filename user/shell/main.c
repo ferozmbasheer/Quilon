@@ -96,6 +96,7 @@ static void cmd_help(void)
     printf("  ip                     - show current IPv4 address\r\n");
     printf("  ping <a.b.c.d>         - ICMP echo request\r\n");
     printf("  vga                    - show VBE framebuffer info (section 10.4)\r\n");
+    printf("  smp                    - show CPU/SMP info via CPUID (section 10.5)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -709,6 +710,33 @@ static void cmd_vga(void)
     printf("vga: framebuffer %ux%u  bpp=%u\r\n", info[0], info[1], info[2]);
 }
 
+static void cmd_smp(void)
+{
+    /* Read CPUID leaf 1 for APIC ID and feature flags (ring-3 safe).
+     * EBX[31:24] = Initial APIC ID of the logical processor running this code.
+     * EDX bit 9  = APIC on-chip present.                                   */
+    unsigned int eax, ebx, ecx, edx;
+    asm volatile(
+        "cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "a"(1)
+    );
+    unsigned int apic_id    = (ebx >> 24) & 0xFF;
+    unsigned int has_apic   = (edx >> 9)  & 1;
+    unsigned int has_htt    = (edx >> 28) & 1;   /* Hyper-Threading */
+    unsigned int logical_cnt = has_htt ? ((ebx >> 16) & 0xFF) : 1;
+
+    printf("=== SMP info (section 10.5) ===\r\n");
+    printf("CPUID.1: EAX=0x%x\r\n", eax);
+    printf("Initial APIC ID (this CPU): %u\r\n", apic_id);
+    printf("On-chip APIC present:       %s\r\n", has_apic ? "yes" : "no");
+    printf("Max logical CPUs (HTT):     %u\r\n", logical_cnt);
+
+    /* CPUID leaf 4 / leaf 0xB report topology on newer CPUs.
+     * For QEMU -smp 2, leaf 1 EBX[23:16] typically reports 2.            */
+    printf("(kernel SMP state visible via 'smp' in the ring-0 shell)\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -770,6 +798,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "ip")     == 0) cmd_ip();
     else if (strcmp(cmd, "ping")   == 0) cmd_ping(arg);
     else if (strcmp(cmd, "vga")    == 0) cmd_vga();
+    else if (strcmp(cmd, "smp")    == 0) cmd_smp();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

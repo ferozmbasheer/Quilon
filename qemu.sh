@@ -29,4 +29,5 @@ qemu-system-$(./target-triplet-to-arch.sh $HOST) \
     -drive file=disk.img,format=raw,if=ide,index=1 \
     -device rtl8139,netdev=net0 \
     -netdev user,id=net0 \
+    -smp 2 \
     -serial stdio

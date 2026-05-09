@@ -99,6 +99,14 @@ struct tss {
 
 void gdt_initialize(void);
 
+/* Reload the BSP's GDT on an Application Processor.
+ * The BSP already built kgdt[] and copied it to GDTBASE; this function
+ * just executes lgdt + segment-register reload so the AP uses the same
+ * descriptors as the BSP.  Call from ap_entry_c() before enabling
+ * interrupts.  Does NOT reload the TSS (ltr) — the AP shares the BSP's
+ * TSS in this implementation.                                             */
+void gdt_initialize_ap(void);
+
 /*
  * gdt_set_kernel_stack — set the TSS esp0 field to esp0.
  *
