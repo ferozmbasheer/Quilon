@@ -53,6 +53,7 @@
 #include <kernel/vma.h>
 #include <kernel/pci.h>
 #include <kernel/rtl8139.h>
+#include <kernel/net.h>
 #include <string.h>
 #endif
 
@@ -738,6 +739,50 @@ void syscall_handler(syscall_regs_t *regs)
         } else {
             ret = 0;
         }
+#else
+        ret = 0;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_NET_PING (22) — send an ICMP echo request and wait for a reply.
+     *   EBX = destination IPv4 address (host byte order).
+     *   Returns: 1 if an echo reply was received, 0 on timeout, -1 on error.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_NET_PING: {
+#ifdef __is_kernel
+        ret = (uint32_t)net_ping(regs->ebx);
+#else
+        ret = 0;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_NET_DHCP (23) — run DHCP discovery to obtain an IPv4 address.
+     *   No arguments.
+     *   Returns: 0 on success (IP configured), -1 on timeout or NIC absent.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_NET_DHCP: {
+#ifdef __is_kernel
+        ret = (uint32_t)net_dhcp();
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_NET_GETIP (24) — read the currently configured IPv4 address.
+     *   No arguments.
+     *   Returns: host-byte-order IPv4 address, or 0 if not yet configured.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_NET_GETIP: {
+#ifdef __is_kernel
+        uint32_t _ip = 0;
+        net_get_ip(&_ip);
+        ret = _ip;
 #else
         ret = 0;
 #endif

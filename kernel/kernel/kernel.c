@@ -24,6 +24,7 @@
 #include <kernel/initrd.h>
 #include <kernel/pci.h>
 #include <kernel/rtl8139.h>
+#include <kernel/net.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -595,6 +596,53 @@ void kernel_main(void) {
 		}
 	}
 	printf("=== Section 10.2 ready ===\r\n\r\n");
+
+	/* ── Section 10.3: Minimal TCP/IP Stack ──────────────────────────────────
+	 *
+	 * Initialises the TCP/IP stack on top of the RTL8139 driver.
+	 * Provides: Ethernet II, ARP, IPv4, ICMP, UDP, TCP, and DHCP.
+	 *
+	 * Stack layers:
+	 *   L2  Ethernet II  — eth_hdr_t   (14 bytes)
+	 *   L3  ARP          — arp_pkt_t   (28 bytes)
+	 *   L3  IPv4         — ipv4_hdr_t  (20 bytes)
+	 *   L4  ICMP         — icmp_hdr_t  ( 8 bytes)
+	 *   L4  UDP          — udp_hdr_t   ( 8 bytes)
+	 *   L4  TCP          — tcp_hdr_t   (20 bytes)
+	 *   App DHCP         — dhcp_msg_t  (300 bytes min)
+	 *
+	 * Interactive demos (after SHELL.ELF launches):
+	 *   quilon> dhcp          — obtain IP via DHCP
+	 *   quilon> ip            — show current IP address
+	 *   quilon> ping 10.0.2.2 — ICMP echo to QEMU gateway
+	 *   quilon> arp           — show ARP cache
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 10.3: Minimal TCP/IP Stack ===\r\n");
+	{
+		printf("tcpip: initialising network stack...\r\n");
+		int net_ok = net_init();
+		if (net_ok == 0) {
+			printf("tcpip: stack ready\r\n");
+			printf("tcpip: protocols: Ethernet/ARP/IPv4/ICMP/UDP/TCP/DHCP\r\n");
+			printf("tcpip: ARP cache size: %d entries\r\n",
+			       (int)NET_ARP_CACHE_SIZE);
+			printf("tcpip: UDP RX buffer: %d bytes  "
+			       "TCP RX buffer: %d bytes\r\n",
+			       (int)NET_UDP_MAX_PAYLOAD, (int)NET_TCP_RX_BUF);
+
+			/* Print registered syscalls for this section. */
+			printf("tcpip: SYS_NET_PING=%d  SYS_NET_DHCP=%d"
+			       "  SYS_NET_GETIP=%d\r\n",
+			       SYS_NET_PING, SYS_NET_DHCP, SYS_NET_GETIP);
+
+			printf("tcpip: use 'dhcp' to acquire IP, "
+			       "'ping <ip>' to test connectivity\r\n");
+		} else {
+			printf("tcpip: NIC not found — "
+			       "add -device rtl8139 to qemu.sh\r\n");
+		}
+	}
+	printf("=== Section 10.3 ready ===\r\n\r\n");
 
 	printf("  ___        _ _ \r\n");
 	printf(" / _ \\ _   _(_) | ___  _ __  \r\n");

@@ -14,6 +14,7 @@
 #include <kernel/initrd.h>
 #include <kernel/pci.h>
 #include <kernel/rtl8139.h>
+#include <kernel/net.h>
 
 static void shell_cmd_ls(void)
 {
@@ -482,6 +483,110 @@ static void shell_cmd_net(void)
     printf("=== done ===\r\n");
 }
 
+/* Parse "a.b.c.d" into a host-byte-order uint32_t.  Returns 0 on error. */
+static uint32_t parse_ipv4(const char *s)
+{
+    uint32_t ip = 0;
+    int octet = 0, dots = 0;
+    while (*s) {
+        if (*s >= '0' && *s <= '9') {
+            octet = octet * 10 + (*s - '0');
+            if (octet > 255) return 0;
+        } else if (*s == '.') {
+            ip = (ip << 8) | (uint32_t)octet;
+            octet = 0;
+            dots++;
+            if (dots > 3) return 0;
+        } else {
+            return 0;
+        }
+        s++;
+    }
+    if (dots != 3) return 0;
+    return (ip << 8) | (uint32_t)octet;
+}
+
+static void shell_cmd_ping(const char *arg)
+{
+    if (arg[0] == '\0') {
+        printf("Usage: ping <ip>\r\n");
+        return;
+    }
+    uint32_t dst = parse_ipv4(arg);
+    if (dst == 0) {
+        printf("ping: invalid address '%s'\r\n", arg);
+        return;
+    }
+    if (net_init() != 0) {
+        printf("ping: NIC not ready\r\n");
+        return;
+    }
+    printf("PING %d.%d.%d.%d ...\r\n",
+           (int)((dst >> 24) & 0xFF), (int)((dst >> 16) & 0xFF),
+           (int)((dst >> 8)  & 0xFF), (int)(dst & 0xFF));
+    int r = net_ping(dst);
+    if (r > 0)
+        printf("reply received\r\n");
+    else if (r == 0)
+        printf("timeout — no reply\r\n");
+    else
+        printf("error (NIC not ready or no IP configured)\r\n");
+}
+
+static void shell_cmd_dhcp(void)
+{
+    printf("=== DHCP (section 10.3) ===\r\n");
+    if (net_init() != 0) {
+        printf("dhcp: NIC not ready\r\n");
+        return;
+    }
+    printf("dhcp: sending DISCOVER...\r\n");
+    int r = net_dhcp();
+    if (r == 0) {
+        uint32_t ip = 0;
+        net_get_ip(&ip);
+        printf("dhcp: ACK — IP = %d.%d.%d.%d\r\n",
+               (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
+               (int)((ip >> 8)  & 0xFF), (int)(ip & 0xFF));
+    } else {
+        printf("dhcp: failed (timeout or no server)\r\n");
+    }
+    printf("=== done ===\r\n");
+}
+
+static void shell_cmd_arp(void)
+{
+    printf("=== ARP cache (section 10.3) ===\r\n");
+    if (net_init() != 0) {
+        printf("arp: NIC not ready\r\n");
+        return;
+    }
+    net_arp_cache_print();
+    printf("=== done ===\r\n");
+}
+
+static void shell_cmd_tcpip(void)
+{
+    printf("=== TCP/IP stack status (section 10.3) ===\r\n");
+    if (net_init() != 0) {
+        printf("tcpip: NIC not ready\r\n");
+        return;
+    }
+    uint32_t ip = 0;
+    int has_ip = net_get_ip(&ip);
+    if (has_ip)
+        printf("IP: %d.%d.%d.%d\r\n",
+               (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
+               (int)((ip >> 8)  & 0xFF), (int)(ip & 0xFF));
+    else
+        printf("IP: not configured (run 'dhcp')\r\n");
+
+    printf("TCP state: %d  ARP cache slots: %d\r\n",
+           (int)net_tcp_state(), (int)NET_ARP_CACHE_SIZE);
+    printf("protocols: Ethernet/ARP/IPv4/ICMP/UDP/TCP/DHCP\r\n");
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_netsend(void)
 {
     printf("=== RTL8139 TX/RX demo (section 10.2) ===\r\n");
@@ -580,6 +685,7 @@ static void shell_execute(const char *cmd) {
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
         printf("          rm <file>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
+        printf("          dhcp, ping <ip>, arp, tcpip\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -641,6 +747,16 @@ static void shell_execute(const char *cmd) {
         shell_cmd_net();
     } else if (strcmp(cmd, "netsend") == 0) {
         shell_cmd_netsend();
+    } else if (strcmp(cmd, "dhcp") == 0) {
+        shell_cmd_dhcp();
+    } else if (strncmp(cmd, "ping ", 5) == 0) {
+        shell_cmd_ping(cmd + 5);
+    } else if (strcmp(cmd, "ping") == 0) {
+        shell_cmd_ping("");
+    } else if (strcmp(cmd, "arp") == 0) {
+        shell_cmd_arp();
+    } else if (strcmp(cmd, "tcpip") == 0) {
+        shell_cmd_tcpip();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

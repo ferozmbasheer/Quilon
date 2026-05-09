@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net
 
 .PHONY: all build run clean help
 
@@ -277,6 +277,13 @@ RTL8139_SRC = ../kernel/arch/i386/rtl8139.c
 
 $(BINDIR)/test_rtl8139: test_rtl8139.c framework.h $(RTL8139_SRC)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_rtl8139.c $(RTL8139_SRC)
+
+# TCP/IP stack tests (section 10.3)
+# net.h is header-only (pure static-inline helpers) — no .c file is linked.
+# The __is_kernel guard keeps all hardware-dependent code out of the host build,
+# so the checksum, byte-order, and frame-building functions are fully testable.
+$(BINDIR)/test_net: test_net.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_net.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

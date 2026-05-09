@@ -227,3 +227,27 @@ net_status:
     int   $0x80
     popl  %ebx
     ret
+
+/* ── net_ping(unsigned int dst_ip) → int ────────────────────────────────── */
+.global net_ping
+net_ping:
+    pushl %ebx
+    movl  $22,       %eax    /* SYS_NET_PING */
+    movl  8(%esp),   %ebx    /* dst_ip (host byte order) */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── net_dhcp(void) → int ───────────────────────────────────────────────── */
+.global net_dhcp
+net_dhcp:
+    movl  $23, %eax          /* SYS_NET_DHCP */
+    int   $0x80
+    ret
+
+/* ── net_getip(void) → unsigned int ─────────────────────────────────────── */
+.global net_getip
+net_getip:
+    movl  $24, %eax          /* SYS_NET_GETIP */
+    int   $0x80
+    ret

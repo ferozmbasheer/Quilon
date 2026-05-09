@@ -117,4 +117,21 @@ PCI configuration space enumeration via I/O ports 0xCF8/0xCFC:
 - `tests/test_pci.c` — 37 tests: address construction (enable bit, bus/slot/func/offset fields, known values), class name lookup, device table index/find, table capacity limit; all pass
 - All 18 test suites pass.
 
-**Next section:** Section 10.2 — Network Card Driver (RTL8139)
+**Section 10.2 — RTL8139 Network Card Driver (completed 2026-05-03)**
+
+RTL8139 NIC driver over PCI: DMA ring-buffer RX, 4-slot TX, IRQ, MAC read. SYS_NET_SEND/RECV/STATUS syscalls. Shell: `net`, `netsend` commands.
+
+**Section 10.3 — Minimal TCP/IP Stack (completed 2026-05-03)**
+
+Full protocol stack: Ethernet II, ARP, IPv4, ICMP, UDP, TCP, DHCP.
+
+- `kernel/include/kernel/net.h` — all protocol structs, constants, pure-C static-inline helpers (checksum, byte-order, frame builders); testable on host without x86 I/O
+- `kernel/kernel/net.c` — hardware-dependent implementation (guarded by `#ifdef __is_kernel`): ARP cache (4 slots), DHCP discover→offer→request→ACK, ICMP ping, single TCP connection state machine (LISTEN→SYN_RCVD→ESTABLISHED→CLOSED)
+- **Checksum storage bug fixed:** `ipv4_fill`, `icmp_fill_echo_request`, `icmp_fill_echo_reply` must call `net_htons(net_checksum16(...))` — storing `checksum = net_checksum16(...)` directly was little-endian-wrong (bytes swapped vs. network order)
+- New syscalls: `SYS_NET_PING=22`, `SYS_NET_DHCP=23`, `SYS_NET_GETIP=24`
+- Kernel shell: `ping <ip>`, `dhcp`, `arp`, `tcpip` commands
+- User shell: `ping <ip>`, `dhcp`, `ip` commands
+- `tests/test_net.c` — 107 tests: byte-order helpers, checksum (RFC 1071 + TCP/UDP pseudo-header), Ethernet/ARP/IPv4/ICMP/UDP/TCP frame builders, full Eth+IP+ICMP frame assembly; all pass
+- All 20 test suites pass.
+
+**Next section:** Section 10.4 (check ROADMAP2.md for the next item)

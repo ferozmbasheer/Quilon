@@ -38,6 +38,9 @@
 #define SYS_NET_SEND   19  /* net_send(buf, len) → 0 ok, -1 err            */
 #define SYS_NET_RECV   20  /* net_recv(buf, maxlen) → bytes, 0=none, -1=err */
 #define SYS_NET_STATUS 21  /* net_status(mac6_buf) → 1=ready, 0=not ready  */
+#define SYS_NET_PING   22  /* net_ping(dst_ip) → 1=reply, 0=timeout, -1   */
+#define SYS_NET_DHCP   23  /* net_dhcp() → 0=ok, -1=timeout               */
+#define SYS_NET_GETIP  24  /* net_getip() → host-order IP (0 if not set)  */
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -89,5 +92,8 @@ unsigned int pci_read_u(unsigned int bus, unsigned int slot,
 int net_send(const void *buf, int len);
 int net_recv(void *buf, int maxlen);
 int net_status(unsigned char mac[6]);   /* returns 1 if NIC ready, 0 if not */
+int net_ping(unsigned int dst_ip);      /* ICMP echo; 1=reply 0=timeout -1=err */
+int net_dhcp(void);                     /* DHCP discover→ack; 0=ok -1=timeout  */
+unsigned int net_getip(void);           /* current IPv4 addr (0 if not set)    */
 
 #endif /* _UNISTD_H */

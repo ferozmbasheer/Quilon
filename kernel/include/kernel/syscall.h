@@ -35,6 +35,9 @@
 #define SYS_NET_SEND   19  /* net_send(buf, len) → 0 ok, -1 err                    */
 #define SYS_NET_RECV   20  /* net_recv(buf, maxlen) → bytes copied, 0=none, -1=err */
 #define SYS_NET_STATUS 21  /* net_status(mac6_buf) → 1=NIC ready, 0=not ready      */
+#define SYS_NET_PING   22  /* net_ping(dst_ip) → 1=reply, 0=timeout, -1=err        */
+#define SYS_NET_DHCP   23  /* net_dhcp() → 0=IP obtained, -1=timeout               */
+#define SYS_NET_GETIP  24  /* net_getip() → host-order IPv4 address (0 if uncfg'd) */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

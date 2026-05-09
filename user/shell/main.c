@@ -92,6 +92,9 @@ static void cmd_help(void)
     printf("  pci                    - list PCI bus devices (section 10.1)\r\n");
     printf("  net                    - show RTL8139 NIC status (section 10.2)\r\n");
     printf("  netsend                - send ARP request and poll for reply\r\n");
+    printf("  dhcp                   - obtain IP address via DHCP\r\n");
+    printf("  ip                     - show current IPv4 address\r\n");
+    printf("  ping <a.b.c.d>         - ICMP echo request\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -586,9 +589,9 @@ static void cmd_netsend(void)
     frame[19] = 4;                       /* PLEN */
     frame[20] = 0x00; frame[21] = 0x01; /* OPER: request */
     for (i = 0; i < 6; i++) frame[22 + i] = mac[i]; /* sender MAC */
-    frame[28] = 10; frame[29] = 0; frame[30] = 2; frame[31] = 15; /* sender IP 10.0.2.15 */
+    frame[28] = 10; frame[29] = 0; frame[30] = 2; frame[31] = 15; /* sender IP 10.0.2.15 (Standard guest IP in QEMU)*/
     for (i = 0; i < 6; i++) frame[32 + i] = 0x00;   /* target MAC: unknown */
-    frame[38] = 10; frame[39] = 0; frame[40] = 2; frame[41] = 2;  /* target IP 10.0.2.2 */
+    frame[38] = 10; frame[39] = 0; frame[40] = 2; frame[41] = 2;  /* target IP 10.0.2.2 (QEMU virtual gateway/DNS)*/
 
     printf("sending ARP request (42 bytes)...\r\n");
     int r = net_send(frame, 42);
@@ -618,6 +621,79 @@ static void cmd_netsend(void)
     if (!got)
         printf("no reply received (timeout)\r\n");
     printf("=== done ===\r\n");
+}
+
+static unsigned int shell_parse_ipv4(const char *s)
+{
+    unsigned int ip = 0;
+    unsigned int octet = 0;
+    int dots = 0;
+    while (*s) {
+        if (*s >= '0' && *s <= '9') {
+            octet = octet * 10u + (unsigned int)(*s - '0');
+            if (octet > 255u) return 0u;
+        } else if (*s == '.') {
+            ip = (ip << 8) | octet;
+            octet = 0u;
+            dots++;
+            if (dots > 3) return 0u;
+        } else {
+            return 0u;
+        }
+        s++;
+    }
+    if (dots != 3) return 0u;
+    return (ip << 8) | octet;
+}
+
+static void cmd_dhcp(void)
+{
+    printf("=== DHCP (section 10.3) ===\r\n");
+    printf("dhcp: sending DISCOVER...\r\n");
+    int r = net_dhcp();
+    if (r == 0) {
+        unsigned int ip = net_getip();
+        printf("dhcp: ACK — IP = %u.%u.%u.%u\r\n",
+               (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
+               (ip >>  8) & 0xFF,  ip & 0xFF);
+    } else {
+        printf("dhcp: failed (timeout or no DHCP server)\r\n");
+    }
+    printf("=== done ===\r\n");
+}
+
+static void cmd_ip(void)
+{
+    unsigned int ip = net_getip();
+    if (ip == 0)
+        printf("IP: not configured (run 'dhcp')\r\n");
+    else
+        printf("IP: %u.%u.%u.%u\r\n",
+               (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
+               (ip >>  8) & 0xFF,  ip & 0xFF);
+}
+
+static void cmd_ping(const char *arg)
+{
+    if (!arg || arg[0] == '\0') {
+        printf("Usage: ping <a.b.c.d>\r\n");
+        return;
+    }
+    unsigned int dst = shell_parse_ipv4(arg);
+    if (dst == 0u) {
+        printf("ping: invalid address '%s'\r\n", arg);
+        return;
+    }
+    printf("PING %u.%u.%u.%u ...\r\n",
+           (dst >> 24) & 0xFF, (dst >> 16) & 0xFF,
+           (dst >>  8) & 0xFF,  dst & 0xFF);
+    int r = net_ping(dst);
+    if (r > 0)
+        printf("reply received\r\n");
+    else if (r == 0)
+        printf("timeout — no reply\r\n");
+    else
+        printf("error (NIC not ready or no IP configured)\r\n");
 }
 
 static void cmd_ticks(void)
@@ -677,6 +753,9 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "pci")    == 0) cmd_pci();
     else if (strcmp(cmd, "net")     == 0) cmd_net();
     else if (strcmp(cmd, "netsend") == 0) cmd_netsend();
+    else if (strcmp(cmd, "dhcp")   == 0) cmd_dhcp();
+    else if (strcmp(cmd, "ip")     == 0) cmd_ip();
+    else if (strcmp(cmd, "ping")   == 0) cmd_ping(arg);
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);
