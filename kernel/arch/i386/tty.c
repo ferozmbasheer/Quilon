@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include <kernel/tty.h>
+#include <kernel/vbe.h>
 
 #include "vga.h"
 
@@ -83,6 +84,7 @@ void terminal_handlenewline() {
 }
 
 void terminal_putchar(char c) {
+	if (vbe_active()) { vbe_terminal_putchar(c); return; }
 	unsigned char uc = c;
 	if(uc == '\n') {
 		terminal_handlenewline();

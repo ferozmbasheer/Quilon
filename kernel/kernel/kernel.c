@@ -25,6 +25,7 @@
 #include <kernel/pci.h>
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
+#include <kernel/vbe.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -124,7 +125,7 @@ void kernel_main(void) {
 	 *    the frees and coalescing above.                                   */
 	kmalloc_dump();
 
-	/* ── Section 8.3: initrd — RAM-Based Initial Filesystem ────────────────
+	/* ── Section 8.3: initrd - RAM-Based Initial Filesystem ────────────────
 	 *
 	 * An initrd is a small filesystem embedded in RAM, available at boot
 	 * before any disk drivers are initialised.  GRUB passes it as a
@@ -316,7 +317,7 @@ void kernel_main(void) {
 	 * page copies:
 	 *   1. PMM reference counting: pmm_alloc_page sets refcount=1;
 	 *      pmm_ref_page increments it; pmm_free_page only frees when it hits 0.
-	 *   2. A CoW fork shares physical pages — free count stays the same after
+	 *   2. A CoW fork shares physical pages - free count stays the same after
 	 *      the fork (the parent's writable pages are not duplicated).
 	 *   3. PAGE_COW flag value and non-overlap with existing PTE flags.
 	 *
@@ -349,7 +350,7 @@ void kernel_main(void) {
 			       "(same as before alloc: %d)\r\n",
 			       (int)pmm_free_page_count(), (int)free_before - 1);
 
-			pmm_free_page(page_a);   /* decrement to 0 — now freed */
+			pmm_free_page(page_a);   /* decrement to 0 - now freed */
 			printf("cow: after second free     free count = %d  "
 			       "(back to %d: page returned)\r\n",
 			       (int)pmm_free_page_count(), (int)free_before);
@@ -492,9 +493,9 @@ void kernel_main(void) {
 	 * extra functions probed individually.
 	 *
 	 * In QEMU the default i440FX machine exposes at minimum:
-	 *   Bus 0 Slot 0  — Intel i440FX Host Bridge        (class 0x06)
-	 *   Bus 0 Slot 1  — Intel PIIX3/PIIX4 ISA+IDE       (class 0x06)
-	 *   Bus 0 Slot 2  — Bochs/QEMU VGA                  (class 0x03)
+	 *   Bus 0 Slot 0  - Intel i440FX Host Bridge        (class 0x06)
+	 *   Bus 0 Slot 1  - Intel PIIX3/PIIX4 ISA+IDE       (class 0x06)
+	 *   Bus 0 Slot 2  - Bochs/QEMU VGA                  (class 0x03)
 	 *
 	 * Interactive demo:  quilon> pci
 	 * ─────────────────────────────────────────────────────────────────────── */
@@ -514,7 +515,7 @@ void kernel_main(void) {
 			       pci_class_name(d->class_code));
 		}
 
-		/* Hint for section 10.2 — RTL8139 detection. */
+		/* Hint for section 10.2 - RTL8139 detection. */
 		const pci_device_t *rtl =
 		    pci_find_device(PCI_VENDOR_REALTEK, PCI_DEVICE_RTL8139);
 		if (rtl)
@@ -538,8 +539,8 @@ void kernel_main(void) {
 	 *   -device rtl8139,netdev=net0 -netdev user,id=net0
 	 * (qemu.sh already includes these flags after this section was added.)
 	 *
-	 * Interactive demo:  quilon> net       — show NIC status and MAC address
-	 *                    quilon> netsend   — transmit a test ARP frame + poll RX
+	 * Interactive demo:  quilon> net       - show NIC status and MAC address
+	 *                    quilon> netsend   - transmit a test ARP frame + poll RX
 	 * ──────────────────────────────────────────────────────────────────────── */
 	printf("\r\n=== Section 10.2: RTL8139 Network Card Driver ===\r\n");
 	{
@@ -591,7 +592,7 @@ void kernel_main(void) {
 
 			printf("rtl8139: use 'net' for status, 'netsend' for TX+RX demo\r\n");
 		} else {
-			printf("rtl8139: not found — add to qemu.sh:\r\n");
+			printf("rtl8139: not found - add to qemu.sh:\r\n");
 			printf("  -device rtl8139,netdev=net0 -netdev user,id=net0\r\n");
 		}
 	}
@@ -603,19 +604,19 @@ void kernel_main(void) {
 	 * Provides: Ethernet II, ARP, IPv4, ICMP, UDP, TCP, and DHCP.
 	 *
 	 * Stack layers:
-	 *   L2  Ethernet II  — eth_hdr_t   (14 bytes)
-	 *   L3  ARP          — arp_pkt_t   (28 bytes)
-	 *   L3  IPv4         — ipv4_hdr_t  (20 bytes)
-	 *   L4  ICMP         — icmp_hdr_t  ( 8 bytes)
-	 *   L4  UDP          — udp_hdr_t   ( 8 bytes)
-	 *   L4  TCP          — tcp_hdr_t   (20 bytes)
-	 *   App DHCP         — dhcp_msg_t  (300 bytes min)
+	 *   L2  Ethernet II  - eth_hdr_t   (14 bytes)
+	 *   L3  ARP          - arp_pkt_t   (28 bytes)
+	 *   L3  IPv4         - ipv4_hdr_t  (20 bytes)
+	 *   L4  ICMP         - icmp_hdr_t  ( 8 bytes)
+	 *   L4  UDP          - udp_hdr_t   ( 8 bytes)
+	 *   L4  TCP          - tcp_hdr_t   (20 bytes)
+	 *   App DHCP         - dhcp_msg_t  (300 bytes min)
 	 *
 	 * Interactive demos (after SHELL.ELF launches):
-	 *   quilon> dhcp          — obtain IP via DHCP
-	 *   quilon> ip            — show current IP address
-	 *   quilon> ping 10.0.2.2 — ICMP echo to QEMU gateway
-	 *   quilon> arp           — show ARP cache
+	 *   quilon> dhcp          - obtain IP via DHCP
+	 *   quilon> ip            - show current IP address
+	 *   quilon> ping 10.0.2.2 - ICMP echo to QEMU gateway
+	 *   quilon> arp           - show ARP cache
 	 * ──────────────────────────────────────────────────────────────────────── */
 	printf("\r\n=== Section 10.3: Minimal TCP/IP Stack ===\r\n");
 	{
@@ -638,11 +639,56 @@ void kernel_main(void) {
 			printf("tcpip: use 'dhcp' to acquire IP, "
 			       "'ping <ip>' to test connectivity\r\n");
 		} else {
-			printf("tcpip: NIC not found — "
+			printf("tcpip: NIC not found - "
 			       "add -device rtl8139 to qemu.sh\r\n");
 		}
 	}
 	printf("=== Section 10.3 ready ===\r\n\r\n");
+
+	/* ── Section 10.4: VGA Graphics Mode (VESA/VBE) ──────────────────────────
+	 *
+	 * Switches the display to a linear VESA framebuffer if GRUB negotiated a
+	 * graphics mode (set gfxmode=800x600x32 + set gfxpayload=keep in grub.cfg).
+	 * When available, all subsequent terminal_write() calls render to the
+	 * pixel framebuffer instead of the VGA text buffer.
+	 *
+	 * Requires: paging and PMM initialised first (framebuffer pages are mapped
+	 * via paging_map_page_alloc() in vbe_init()).
+	 *
+	 * Interactive demo:  quilon> vga   - draw gradient, color swatches, ASCII table
+	 * ──────────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 10.4: VGA Graphics Mode (VESA/VBE) ===\r\n");
+	{
+		if ((mbi->flags & MULTIBOOT_FLAG_FB) &&
+		    mbi->framebuffer_type == MULTIBOOT_FB_TYPE_RGB) {
+			vbe_info_t fb_info;
+			fb_info.addr   = mbi->framebuffer_addr;
+			fb_info.pitch  = mbi->framebuffer_pitch;
+			fb_info.width  = mbi->framebuffer_width;
+			fb_info.height = mbi->framebuffer_height;
+			fb_info.bpp    = mbi->framebuffer_bpp;
+			fb_info.type   = mbi->framebuffer_type;
+			vbe_init(&fb_info);
+			if (vbe_active()) {
+				printf("vbe: framebuffer %dx%dx%d @ 0x%x  pitch=%d\r\n",
+				       (int)fb_info.width, (int)fb_info.height,
+				       (int)fb_info.bpp,
+				       (unsigned)fb_info.addr,
+				       (int)fb_info.pitch);
+				printf("vbe: terminal %dx%d chars\r\n",
+				       (int)vbe_term_cols(fb_info.width),
+				       (int)vbe_term_rows(fb_info.height));
+				vbe_demo();
+			}
+		} else {
+			printf("vbe: no RGB framebuffer from GRUB "
+			       "(add set gfxmode=800x600x32 to grub.cfg)\r\n");
+		}
+		printf("vbe: SYS_VBE_INFO=%d  - ring-3 framebuffer query\r\n",
+		       SYS_VBE_INFO);
+		printf("vbe: use 'vga' at the shell prompt to run the demo\r\n");
+	}
+	printf("=== Section 10.4 ready ===\r\n\r\n");
 
 	printf("  ___        _ _ \r\n");
 	printf(" / _ \\ _   _(_) | ___  _ __  \r\n");

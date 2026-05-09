@@ -4,16 +4,31 @@
 # Declare constants for the multiboot header.
 .set ALIGN,    1<<0             # align loaded modules on page boundaries
 .set MEMINFO,  1<<1             # provide memory map
-.set FLAGS,    ALIGN | MEMINFO  # this is the Multiboot 'flag' field
+.set VIDEOINFO,1<<2             # request VBE video mode info from GRUB
+.set FLAGS,    ALIGN | MEMINFO | VIDEOINFO
 .set MAGIC,    0x1BADB002       # 'magic number' lets bootloader find the header
 .set CHECKSUM, -(MAGIC + FLAGS) # checksum of above, to prove we are multiboot
 
 # Declare a header as in the Multiboot Standard.
+# GRUB2's struct multiboot_header has FIXED field offsets regardless of
+# which bits are set.  mode_type is always at byte offset 32 (after the
+# 5 address fields at 12–28).  Even though bit 16 (AOUT kludge) is not
+# set, the address fields must be emitted as zero padding so that the
+# video fields land at the correct offsets that GRUB2 reads.
 .section .multiboot
 .align 4
-.long MAGIC
-.long FLAGS
-.long CHECKSUM
+.long MAGIC       # offset  0
+.long FLAGS       # offset  4
+.long CHECKSUM    # offset  8
+.long 0           # offset 12 — header_addr   (bit 16 not set; GRUB ignores)
+.long 0           # offset 16 — load_addr
+.long 0           # offset 20 — load_end_addr
+.long 0           # offset 24 — bss_end_addr
+.long 0           # offset 28 — entry_addr
+.long 0           # offset 32 — mode_type: 0 = linear graphics
+.long 0           # offset 36 — width:  0 = let GRUB pick any suitable mode
+.long 0           # offset 40 — height: 0 = no preference
+.long 0           # offset 44 — depth:  0 = no preference
 
 # Reserve a stack for the initial thread.
 .section .bss

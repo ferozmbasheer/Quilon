@@ -41,6 +41,7 @@
 #define SYS_NET_PING   22  /* net_ping(dst_ip) → 1=reply, 0=timeout, -1   */
 #define SYS_NET_DHCP   23  /* net_dhcp() → 0=ok, -1=timeout               */
 #define SYS_NET_GETIP  24  /* net_getip() → host-order IP (0 if not set)  */
+#define SYS_VBE_INFO   25  /* vbe_info_u(uint32_t out[3]) → 1=active, 0=text */
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -95,5 +96,10 @@ int net_status(unsigned char mac[6]);   /* returns 1 if NIC ready, 0 if not */
 int net_ping(unsigned int dst_ip);      /* ICMP echo; 1=reply 0=timeout -1=err */
 int net_dhcp(void);                     /* DHCP discover→ack; 0=ok -1=timeout  */
 unsigned int net_getip(void);           /* current IPv4 addr (0 if not set)    */
+
+/* ── VBE framebuffer query (section 10.4) ─────────────────────────────────── */
+/* Fills out[0]=width, out[1]=height, out[2]=bpp.
+ * Returns 1 if VBE is active, 0 if in text mode.                             */
+int vbe_info_u(unsigned int out[3]);
 
 #endif /* _UNISTD_H */

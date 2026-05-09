@@ -54,6 +54,7 @@
 #include <kernel/pci.h>
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
+#include <kernel/vbe.h>
 #include <string.h>
 #endif
 
@@ -783,6 +784,34 @@ void syscall_handler(syscall_regs_t *regs)
         uint32_t _ip = 0;
         net_get_ip(&_ip);
         ret = _ip;
+#else
+        ret = 0;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_VBE_INFO (25) — query VBE framebuffer parameters.
+     *   EBX = pointer to uint32_t[3] in user space.
+     *         out[0] = framebuffer width  (pixels)
+     *         out[1] = framebuffer height (pixels)
+     *         out[2] = bits per pixel
+     *   Returns: 1 if VBE is active, 0 if not (text mode only).
+     *
+     * Lets ring-3 programs know the display dimensions and colour depth.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_VBE_INFO: {
+#ifdef __is_kernel
+        uint32_t *out = (uint32_t *)(uintptr_t)regs->ebx;
+        if (vbe_active() && out) {
+            const vbe_info_t *info = vbe_get_info();
+            out[0] = info->width;
+            out[1] = info->height;
+            out[2] = info->bpp;
+            ret = 1;
+        } else {
+            ret = 0;
+        }
 #else
         ret = 0;
 #endif

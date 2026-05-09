@@ -95,6 +95,7 @@ static void cmd_help(void)
     printf("  dhcp                   - obtain IP address via DHCP\r\n");
     printf("  ip                     - show current IPv4 address\r\n");
     printf("  ping <a.b.c.d>         - ICMP echo request\r\n");
+    printf("  vga                    - show VBE framebuffer info (section 10.4)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -696,6 +697,18 @@ static void cmd_ping(const char *arg)
         printf("error (NIC not ready or no IP configured)\r\n");
 }
 
+static void cmd_vga(void)
+{
+    unsigned int info[3];
+    int active = vbe_info_u(info);
+    if (!active) {
+        printf("vga: VBE framebuffer not active (text mode)\r\n");
+        printf("  (add set gfxmode=800x600x32 to grub.cfg)\r\n");
+        return;
+    }
+    printf("vga: framebuffer %ux%u  bpp=%u\r\n", info[0], info[1], info[2]);
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -756,6 +769,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "dhcp")   == 0) cmd_dhcp();
     else if (strcmp(cmd, "ip")     == 0) cmd_ip();
     else if (strcmp(cmd, "ping")   == 0) cmd_ping(arg);
+    else if (strcmp(cmd, "vga")    == 0) cmd_vga();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

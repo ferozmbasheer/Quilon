@@ -146,10 +146,14 @@ uint32_t *paging_create_address_space(void)
     if (!new_pd) return NULL;
     memset(new_pd, 0, PAGE_SIZE);
 
-    /* Share the kernel's identity page table (PD[0]) and kernel-high page
-     * table (PD[768]) so the kernel remains accessible in every process.  */
-    new_pd[0]             = page_directory[0];
-    new_pd[KERNEL_PD_IDX] = page_directory[KERNEL_PD_IDX];
+    /* Share the identity page table (PD[0]) so ring-0 code remains
+     * reachable immediately after a CR3 switch.
+     * Copy ALL upper-half kernel entries (PD[768..1023]) so that any
+     * kernel mapping added before this call (including the VBE framebuffer,
+     * MMIO regions, etc.) is visible in the new address space.            */
+    new_pd[0] = page_directory[0];
+    for (int _i = KERNEL_PD_IDX; _i < 1024; _i++)
+        new_pd[_i] = page_directory[_i];
 
     return new_pd;
 }

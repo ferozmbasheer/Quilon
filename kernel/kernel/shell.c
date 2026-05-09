@@ -15,6 +15,7 @@
 #include <kernel/pci.h>
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
+#include <kernel/vbe.h>
 
 static void shell_cmd_ls(void)
 {
@@ -528,7 +529,7 @@ static void shell_cmd_ping(const char *arg)
     if (r > 0)
         printf("reply received\r\n");
     else if (r == 0)
-        printf("timeout — no reply\r\n");
+        printf("timeout - no reply\r\n");
     else
         printf("error (NIC not ready or no IP configured)\r\n");
 }
@@ -545,7 +546,7 @@ static void shell_cmd_dhcp(void)
     if (r == 0) {
         uint32_t ip = 0;
         net_get_ip(&ip);
-        printf("dhcp: ACK — IP = %d.%d.%d.%d\r\n",
+        printf("dhcp: ACK - IP = %d.%d.%d.%d\r\n",
                (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
                (int)((ip >> 8)  & 0xFF), (int)(ip & 0xFF));
     } else {
@@ -592,7 +593,7 @@ static void shell_cmd_netsend(void)
     printf("=== RTL8139 TX/RX demo (section 10.2) ===\r\n");
 
     if (!rtl8139_is_ready()) {
-        printf("netsend: NIC not initialized — run 'net' first\r\n");
+        printf("netsend: NIC not initialized - run 'net' first\r\n");
         printf("=== done ===\r\n");
         return;
     }
@@ -678,6 +679,20 @@ static void shell_cmd_pci(void)
     printf("=== done ===\r\n");
 }
 
+static void shell_cmd_vga(void)
+{
+    if (!vbe_active()) {
+        printf("vga: no VBE framebuffer active\r\n");
+        printf("  (add set gfxmode=800x600x32 + set gfxpayload=keep to grub.cfg)\r\n");
+        return;
+    }
+    const vbe_info_t *info = vbe_get_info();
+    printf("vga: framebuffer %dx%dx%d @ 0x%x\r\n",
+           (int)info->width, (int)info->height, (int)info->bpp,
+           (unsigned)info->addr);
+    vbe_demo();
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
@@ -685,7 +700,7 @@ static void shell_execute(const char *cmd) {
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
         printf("          rm <file>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
-        printf("          dhcp, ping <ip>, arp, tcpip\r\n");
+        printf("          dhcp, ping <ip>, arp, tcpip, vga\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         terminal_initialize();
     } else if (strcmp(cmd, "cls") == 0) {
@@ -757,6 +772,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_arp();
     } else if (strcmp(cmd, "tcpip") == 0) {
         shell_cmd_tcpip();
+    } else if (strcmp(cmd, "vga") == 0) {
+        shell_cmd_vga();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

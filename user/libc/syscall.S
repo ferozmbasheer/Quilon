@@ -251,3 +251,13 @@ net_getip:
     movl  $24, %eax          /* SYS_NET_GETIP */
     int   $0x80
     ret
+
+/* ── vbe_info_u(unsigned int out[3]) → int ──────────────────────────────── */
+.global vbe_info_u
+vbe_info_u:
+    pushl %ebx
+    movl  $25,      %eax     /* SYS_VBE_INFO */
+    movl  8(%esp),  %ebx     /* out pointer */
+    int   $0x80
+    popl  %ebx
+    ret

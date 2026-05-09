@@ -38,6 +38,7 @@
 #define SYS_NET_PING   22  /* net_ping(dst_ip) → 1=reply, 0=timeout, -1=err        */
 #define SYS_NET_DHCP   23  /* net_dhcp() → 0=IP obtained, -1=timeout               */
 #define SYS_NET_GETIP  24  /* net_getip() → host-order IPv4 address (0 if uncfg'd) */
+#define SYS_VBE_INFO   25  /* vbe_info(uint32_t out[3]) → 1 if VBE active, 0 if not */
 
 /* ── File descriptor numbers (used as EBX with SYS_WRITE) ───────────────────
  * FD_STDIN  → unsupported; SYS_WRITE returns 0.

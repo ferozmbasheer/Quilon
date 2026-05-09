@@ -134,4 +134,22 @@ Full protocol stack: Ethernet II, ARP, IPv4, ICMP, UDP, TCP, DHCP.
 - `tests/test_net.c` — 107 tests: byte-order helpers, checksum (RFC 1071 + TCP/UDP pseudo-header), Ethernet/ARP/IPv4/ICMP/UDP/TCP frame builders, full Eth+IP+ICMP frame assembly; all pass
 - All 20 test suites pass.
 
-**Next section:** Section 10.4 (check ROADMAP2.md for the next item)
+**Section 10.4 — VGA Graphics Mode / VESA VBE (completed 2026-05-08)**
+
+Linear VESA framebuffer driver replacing the VGA text terminal when GRUB negotiates a graphics mode:
+
+- `kernel/include/kernel/vbe.h` — `vbe_info_t` struct, 12 color constants, 8×8 bitmap font (`vbe_font8x8[128][8]`), `VBE_FONT_W=8`/`VBE_FONT_H=16`, static-inline helpers: `vbe_pixel_offset`, `vbe_glyph_pixel`, `vbe_term_cols`, `vbe_term_rows`; all public API declarations
+- `kernel/arch/i386/vbe.c` — `vbe_init()` maps framebuffer pages via `paging_map_page_alloc()`; pixel/rect drawing (32bpp + 24bpp paths); glyph rendering (8×8 font in 8×16 cell with 8-row line-spacing gap); `vbe_terminal_init/putchar/scroll_up`; `vbe_demo()` (gradient bar, color swatches, ASCII glyph table, progress bar); `vbe_get_info()` returns `const vbe_info_t*`
+- `kernel/arch/i386/tty.c` — `terminal_putchar()` delegates to `vbe_terminal_putchar()` when `vbe_active()` is true; all other terminal functions route through `terminal_putchar` automatically
+- `kernel/arch/i386/make.config` — `$(ARCHDIR)/vbe.o` added to `KERNEL_ARCH_OBJS`
+- `kernel/include/kernel/multiboot.h` — extended `multiboot_info_t` to full Multiboot v1 spec: added `MULTIBOOT_FLAG_VBE`, `MULTIBOOT_FLAG_FB`, `MULTIBOOT_FB_TYPE_*`, all intermediate fields (drives, config_table, boot_loader_name, apm_table, VBE fields), and full framebuffer fields (addr/pitch/width/height/bpp/type/color_info)
+- `kernel/kernel/kernel.c` — Section 10.4 boot demo: reads multiboot framebuffer fields, calls `vbe_init()`, logs dimensions and terminal size, runs `vbe_demo()`
+- `kernel/kernel/shell.c` — `vga` command added: shows framebuffer info + runs demo
+- `SYS_VBE_INFO = 25` — `vbe_info_u(uint32_t out[3])` syscall: fills out[0..2] with width/height/bpp, returns 1 if VBE active
+- `user/shell/main.c` — `vga` command: calls `vbe_info_u()` and prints framebuffer dimensions
+- `user/libc/include/unistd.h` + `user/libc/syscall.S` — `SYS_VBE_INFO=25` constant and `vbe_info_u` assembly stub
+- `isodir/boot/grub/grub.cfg` — added `set gfxmode=800x600x32` + `set gfxpayload=keep` before menuentry
+- `tests/test_vbe.c` — 34 tests: color values/uniqueness, font metrics, `vbe_term_cols`/`vbe_term_rows`, `vbe_pixel_offset` (32bpp + 24bpp), glyph bitmap checks (space=blank, 'A' non-blank, line-spacing zero, OOB=0, all printable non-blank)
+- `tests/Makefile` — `$(BINDIR)/test_vbe` rule added; all 21 suites pass
+
+**Next section:** Check ROADMAP2.md for the next item after 10.4.
