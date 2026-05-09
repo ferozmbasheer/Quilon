@@ -16,6 +16,7 @@
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
 #include <kernel/vbe.h>
+#include <kernel/psf.h>
 #include <kernel/apic.h>
 #include <kernel/smp.h>
 
@@ -701,6 +702,107 @@ static void shell_cmd_smp(void)
     printf("spinlock: PMM bitmap is SMP-safe (spinlock_t)\r\n");
 }
 
+static void shell_cmd_psf(void)
+{
+    printf("=== PSF2 Bitmap Font Loader (section 11.2) ===\r\n");
+
+    const psf2_font_t *active = psf2_get_font();
+
+    if (active) {
+        printf("Active PSF2 font:\r\n");
+        printf("  size:        %dx%d px\r\n",
+               (int)active->width, (int)active->height);
+        printf("  glyphs:      %d\r\n", (int)active->glyph_count);
+        printf("  bytes/glyph: %d\r\n", (int)active->bytes_per_glyph);
+    } else {
+        printf("No PSF2 font loaded.\r\n");
+        printf("Building synthetic 8x16 font from built-in 8x8 bitmaps...\r\n");
+
+        /* 2080 bytes = 32-byte header + 128 glyphs × 16 bytes */
+        static uint8_t psf_buf[2080];
+        uint32_t sz = psf2_make_from_builtin(psf_buf, sizeof(psf_buf));
+        if (sz == 0) {
+            printf("psf: buffer too small\r\n");
+            return;
+        }
+        printf("psf: generated %d-byte PSF2 image\r\n", (int)sz);
+
+        if (psf2_load(psf_buf, sz) != 0) {
+            printf("psf: load failed (invalid image)\r\n");
+            return;
+        }
+        active = psf2_get_font();
+        printf("psf: loaded  %dx%d px  %d glyphs  %d bytes/glyph\r\n",
+               (int)active->width, (int)active->height,
+               (int)active->glyph_count, (int)active->bytes_per_glyph);
+
+        /* Reinitialize terminal — dimensions unchanged (still 8x16), but
+         * subsequent draws will use the PSF2 path.
+         * If you load a font with different dimensions, call vbe_terminal_init()
+         * to recompute term_cols / term_rows. */
+        if (vbe_active())
+            vbe_terminal_init();
+    }
+
+    /* Sample output rendered via the active font */
+    printf("\r\nSample text (rendered via %s font):\r\n",
+           psf2_get_font() ? "PSF2" : "built-in");
+    printf("  ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\n");
+    printf("  abcdefghijklmnopqrstuvwxyz\r\n");
+    printf("  0123456789 !\"#$%%&'()*+,-./:;<=>?@[\\]^_`{|}~\r\n");
+    printf("=== done ===\r\n");
+}
+
+static void shell_cmd_ansitest(void)
+{
+    printf("=== ANSI Escape Code Demo (section 11.1) ===\r\n\r\n");
+
+    /* Standard 8 colors */
+    printf("Standard colors:\r\n");
+    printf("  \033[30mBlack\033[0m   \033[31mRed\033[0m     "
+           "\033[32mGreen\033[0m   \033[33mYellow\033[0m\r\n");
+    printf("  \033[34mBlue\033[0m    \033[35mMagenta\033[0m "
+           "\033[36mCyan\033[0m    \033[37mWhite\033[0m\r\n\r\n");
+
+    /* Bright / high-intensity colors */
+    printf("Bright colors:\r\n");
+    printf("  \033[90mDk Grey\033[0m \033[91mBr Red\033[0m  "
+           "\033[92mBr Green\033[0m \033[93mBr Yellow\033[0m\r\n");
+    printf("  \033[94mBr Blue\033[0m \033[95mBr Magenta\033[0m "
+           "\033[96mBr Cyan\033[0m \033[97mBr White\033[0m\r\n\r\n");
+
+    /* Attribute: bold (uses bright variant of following color) */
+    printf("Attributes:\r\n");
+    printf("  \033[1mBold\033[0m  "
+           "\033[1;31mBold Red\033[0m  "
+           "\033[1;32mBold Green\033[0m  "
+           "\033[1;33mBold Yellow\033[0m\r\n\r\n");
+
+    /* Background colors */
+    printf("Background colors:\r\n");
+    printf("  \033[41m Red \033[0m "
+           "\033[42m Green \033[0m "
+           "\033[44m Blue \033[0m "
+           "\033[45m Magenta \033[0m "
+           "\033[46m Cyan \033[0m\r\n\r\n");
+
+    /* Erase-to-EOL: print text, move cursor back, erase rest of line */
+    printf("Erase-to-EOL (text after '|' erased):\r\n");
+    printf("  visible text | ERASED_TEXT");
+    printf("\033[12D\033[K");   /* left 12, erase to EOL */
+    printf("\r\n\r\n");
+
+    /* Cursor save/restore */
+    printf("Cursor save/restore:\r\n");
+    printf("  before ");
+    printf("\033[s");           /* save cursor */
+    printf("OVERWRITTEN");
+    printf("\033[u");           /* restore cursor */
+    printf("after\r\n\r\n");   /* overwrites "OVERWRITTEN" with "after" */
+
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_vga(void)
 {
     if (!vbe_active()) {
@@ -724,10 +826,12 @@ static void shell_execute(const char *cmd) {
         printf("          net, netsend, exec <file.elf>\r\n");
         printf("          dhcp, ping <ip>, arp, tcpip, vga\r\n");
         printf("          smp                    - SMP CPU status (section 10.5)\r\n");
+        printf("          ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
+        printf("          psf                    - PSF2 font loader demo  (section 11.2)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
-        terminal_initialize();
+        printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
-        terminal_initialize();
+        printf("\033[2J\033[H");
     } else if (strcmp(cmd, "halt") == 0) {
         printf("Halting.\r\n");
         asm volatile("cli; hlt");
@@ -795,6 +899,10 @@ static void shell_execute(const char *cmd) {
         shell_cmd_arp();
     } else if (strcmp(cmd, "tcpip") == 0) {
         shell_cmd_tcpip();
+    } else if (strcmp(cmd, "ansitest") == 0) {
+        shell_cmd_ansitest();
+    } else if (strcmp(cmd, "psf") == 0) {
+        shell_cmd_psf();
     } else if (strcmp(cmd, "vga") == 0) {
         shell_cmd_vga();
     } else if (strcmp(cmd, "smp") == 0) {

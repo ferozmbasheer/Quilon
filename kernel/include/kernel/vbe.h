@@ -290,6 +290,22 @@ void vbe_terminal_writestring(const char *s);
 /* Change the foreground / background colours for subsequent output. */
 void vbe_terminal_setcolor(uint32_t fg, uint32_t bg);
 
+/* Move the text cursor to (row, col).  Clamps to screen bounds. */
+void vbe_terminal_set_cursor(uint32_t row, uint32_t col);
+
+/* Read the current cursor position into *row and *col. */
+void vbe_terminal_get_cursor(uint32_t *row, uint32_t *col);
+
+/* Fill the entire framebuffer with the current background colour.
+ * Cursor position is unchanged (unlike vbe_terminal_init). */
+void vbe_terminal_clear_screen(void);
+
+/* Erase part of the current cursor row with the background colour.
+ *   mode 0: from cursor to end of line  (default, ESC[K)
+ *   mode 1: from start of line to cursor
+ *   mode 2: entire line                              */
+void vbe_terminal_erase_line(int mode);
+
 /* ── Graphical demo ─────────────────────────────────────────────────────── */
 
 /*

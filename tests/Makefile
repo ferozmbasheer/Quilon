@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf
 
 .PHONY: all build run clean help
 
@@ -300,6 +300,22 @@ $(BINDIR)/test_vbe: test_vbe.c framework.h
 # to pull in mp_parse_config() without linking hardware-dependent code.
 $(BINDIR)/test_smp: test_smp.c framework.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_smp.c
+
+# ANSI escape-code parser tests (section 11.1)
+# ansi.h is header-only (pure static-inline / static helpers) — no .c file is
+# linked.  The parser state machine, param tokeniser, and SGR color table are
+# fully exercised on the host without any kernel or hardware dependencies.
+$(BINDIR)/test_ansi: test_ansi.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_ansi.c
+
+# PSF2 bitmap font loader tests (section 11.2)
+# psf.h exposes psf2_parse() and psf2_glyph_pixel() as pure static-inline
+# helpers — no .c file is linked.  psf.c is NOT linked because psf2_draw_glyph
+# calls vbe_draw_pixel() (hardware-only) and psf2_make_from_builtin references
+# the vbe_font8x8 array from vbe.h (kernel init path).  The tests construct
+# synthetic PSF2 images in buffers and exercise header validation and pixel access.
+$(BINDIR)/test_psf: test_psf.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_psf.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

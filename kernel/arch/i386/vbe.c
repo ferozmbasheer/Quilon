@@ -19,6 +19,7 @@
 #include <stdio.h>
 
 #include <kernel/vbe.h>
+#include <kernel/psf.h>
 #include <kernel/paging.h>
 
 /* ── Module state ───────────────────────────────────────────────────────── */
@@ -33,6 +34,27 @@ static uint32_t term_col;        /* cursor column (char units) */
 static uint32_t term_row;        /* cursor row    (char units) */
 static uint32_t term_fg;
 static uint32_t term_bg;
+
+/* ── Runtime font dimension helpers ─────────────────────────────────────── */
+/*
+ * Return the active glyph cell width/height.  When a PSF2 font has been
+ * loaded via psf2_load(), these return the PSF2 font's dimensions; otherwise
+ * they fall back to the compile-time built-in 8×16 constants.
+ *
+ * All terminal and drawing code must call these instead of using VBE_FONT_W /
+ * VBE_FONT_H directly so that a loaded PSF2 font is picked up automatically.
+ */
+static inline uint32_t cur_font_w(void)
+{
+    const psf2_font_t *psf = psf2_get_font();
+    return psf ? psf->width : (uint32_t)VBE_FONT_W;
+}
+
+static inline uint32_t cur_font_h(void)
+{
+    const psf2_font_t *psf = psf2_get_font();
+    return psf ? psf->height : (uint32_t)VBE_FONT_H;
+}
 
 /* ── Internal helpers ───────────────────────────────────────────────────── */
 
@@ -91,15 +113,28 @@ void vbe_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg)
 {
     if (!vbe_ready) return;
     unsigned char ci = (unsigned char)c;
-    if (ci > 127u) ci = '?';
 
-    for (uint32_t row = 0; row < VBE_FONT_H; row++) {
-        /* Rows 0–7: glyph data.  Rows 8–15: blank (line-spacing below). */
-        uint8_t bits = (row < 8u) ? vbe_font8x8[ci][row] : 0u;
-        for (uint32_t col = 0; col < VBE_FONT_W; col++) {
-            uint32_t color = (bits & (0x80u >> col)) ? fg : bg;
-            if (x + col < vbe.width && y + row < vbe.height)
-                fb_write(x + col, y + row, color);
+    const psf2_font_t *psf = psf2_get_font();
+    if (psf) {
+        /* PSF2 path: use loaded bitmap font */
+        if ((uint32_t)ci >= psf->glyph_count) ci = (unsigned char)'?';
+        for (uint32_t row = 0; row < psf->height; row++) {
+            for (uint32_t col = 0; col < psf->width; col++) {
+                uint32_t color = psf2_glyph_pixel(psf, ci, col, row) ? fg : bg;
+                if (x + col < vbe.width && y + row < vbe.height)
+                    fb_write(x + col, y + row, color);
+            }
+        }
+    } else {
+        /* Built-in 8×16 path (rows 0–7: data, rows 8–15: blank) */
+        if (ci > 127u) ci = '?';
+        for (uint32_t row = 0; row < VBE_FONT_H; row++) {
+            uint8_t bits = (row < 8u) ? vbe_font8x8[ci][row] : 0u;
+            for (uint32_t col = 0; col < VBE_FONT_W; col++) {
+                uint32_t color = (bits & (0x80u >> col)) ? fg : bg;
+                if (x + col < vbe.width && y + row < vbe.height)
+                    fb_write(x + col, y + row, color);
+            }
         }
     }
 }
@@ -107,9 +142,10 @@ void vbe_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg)
 uint32_t vbe_draw_string(uint32_t x, uint32_t y, const char *s,
                           uint32_t fg, uint32_t bg)
 {
+    uint32_t fw = cur_font_w();
     while (*s) {
         vbe_draw_char(x, y, *s++, fg, bg);
-        x += VBE_FONT_W;
+        x += fw;
     }
     return x;
 }
@@ -119,14 +155,14 @@ uint32_t vbe_draw_string(uint32_t x, uint32_t y, const char *s,
 static void vbe_scroll_up(void)
 {
     uint8_t *fb    = (uint8_t *)(uintptr_t)(uint32_t)vbe.addr;
-    uint32_t row_b = vbe.pitch * VBE_FONT_H;          /* bytes per text row */
+    uint32_t fh    = cur_font_h();
+    uint32_t row_b = vbe.pitch * fh;    /* bytes per text row */
     uint32_t total = row_b * (term_rows - 1u);
 
     memmove(fb, fb + row_b, total);
 
     /* Clear the last text row. */
-    vbe_fill_rect(0, (term_rows - 1u) * VBE_FONT_H,
-                  vbe.width, VBE_FONT_H, term_bg);
+    vbe_fill_rect(0, (term_rows - 1u) * fh, vbe.width, fh, term_bg);
 }
 
 /* ── Terminal emulator ──────────────────────────────────────────────────── */
@@ -134,8 +170,10 @@ static void vbe_scroll_up(void)
 void vbe_terminal_init(void)
 {
     if (!vbe_ready) return;
-    term_cols = vbe_term_cols(vbe.width);
-    term_rows = vbe_term_rows(vbe.height);
+
+    /* Use PSF2 dimensions when a font is loaded; fall back to built-in 8×16. */
+    term_cols = vbe.width  / cur_font_w();
+    term_rows = vbe.height / cur_font_h();
     term_col  = 0;
     term_row  = 0;
     term_fg   = VBE_COLOR_LIGHT_GREY;
@@ -174,13 +212,13 @@ void vbe_terminal_putchar(char c)
             term_row--;
             term_col = term_cols - 1u;
         }
-        vbe_draw_char(term_col * VBE_FONT_W, term_row * VBE_FONT_H,
+        vbe_draw_char(term_col * cur_font_w(), term_row * cur_font_h(),
                       ' ', term_fg, term_bg);
         return;
     }
     if ((unsigned char)c < 0x20u) return;  /* skip other control chars */
 
-    vbe_draw_char(term_col * VBE_FONT_W, term_row * VBE_FONT_H,
+    vbe_draw_char(term_col * cur_font_w(), term_row * cur_font_h(),
                   c, term_fg, term_bg);
 
     if (++term_col >= term_cols) {
@@ -201,6 +239,49 @@ void vbe_terminal_write(const char *data, size_t len)
 void vbe_terminal_writestring(const char *s)
 {
     while (*s) vbe_terminal_putchar(*s++);
+}
+
+void vbe_terminal_set_cursor(uint32_t row, uint32_t col)
+{
+    if (!vbe_ready) return;
+    term_row = (row < term_rows) ? row : term_rows - 1u;
+    term_col = (col < term_cols) ? col : term_cols - 1u;
+}
+
+void vbe_terminal_get_cursor(uint32_t *row, uint32_t *col)
+{
+    *row = vbe_ready ? term_row : 0u;
+    *col = vbe_ready ? term_col : 0u;
+}
+
+void vbe_terminal_clear_screen(void)
+{
+    if (!vbe_ready) return;
+    vbe_fill_rect(0, 0, vbe.width, vbe.height, term_bg);
+    /* cursor position intentionally unchanged */
+}
+
+void vbe_terminal_erase_line(int mode)
+{
+    if (!vbe_ready) return;
+    uint32_t fw = cur_font_w();
+    uint32_t fh = cur_font_h();
+    uint32_t x, w;
+    switch (mode) {
+    case 1:  /* from start of line to cursor */
+        x = 0;
+        w = (term_col + 1u) * fw;
+        break;
+    case 2:  /* entire line */
+        x = 0;
+        w = term_cols * fw;
+        break;
+    default: /* 0: from cursor to end of line */
+        x = term_col * fw;
+        w = (term_cols - term_col) * fw;
+        break;
+    }
+    vbe_fill_rect(x, term_row * fh, w, fh, term_bg);
 }
 
 /* ── Initialization ─────────────────────────────────────────────────────── */
@@ -281,10 +362,12 @@ void vbe_demo(void)
         vbe_fill_rect(8u + i * (sw + 4u), swatch_y, sw, sh, swatches[i]);
 
     /* ── 4. Font/info header ────────────────────────────────────────────── */
+    uint32_t fw = cur_font_w();
+    uint32_t fh = cur_font_h();
     uint32_t ty = swatch_y + sh + 12;
     vbe_draw_string(8, ty, "Quilon VBE terminal  (section 10.4)",
                     VBE_COLOR_YELLOW, VBE_COLOR_DARK_BLUE);
-    ty += VBE_FONT_H + 2;
+    ty += fh + 2;
 
     char info_buf[64];
     /* Print framebuffer info using the existing kernel printf convention. */
@@ -324,10 +407,10 @@ void vbe_demo(void)
     info_buf[pos] = '\0';
 
     vbe_draw_string(8, ty, info_buf, VBE_COLOR_CYAN, VBE_COLOR_DARK_BLUE);
-    ty += VBE_FONT_H + 4;
+    ty += fh + 4;
 
     /* Terminal dimensions. */
-    uint32_t tc = vbe_term_cols(W), tr = vbe_term_rows(H);
+    uint32_t tc = W / fw, tr = H / fh;
     /* Reuse info_buf for "Terminal: CCxRR chars" */
     pos = 0;
     static const char term_prefix[] = "Terminal: ";
@@ -343,23 +426,23 @@ void vbe_demo(void)
     for (int k = 0; chars_suffix[k]; k++) info_buf[pos++] = chars_suffix[k];
     info_buf[pos] = '\0';
     vbe_draw_string(8, ty, info_buf, VBE_COLOR_GREEN, VBE_COLOR_DARK_BLUE);
-    ty += VBE_FONT_H + 8;
+    ty += fh + 8;
 
     /* ── 5. Full printable ASCII glyph table ────────────────────────────── */
     vbe_draw_string(8, ty, "Printable ASCII (0x20-0x7E):",
                     VBE_COLOR_WHITE, VBE_COLOR_DARK_BLUE);
-    ty += VBE_FONT_H + 2;
+    ty += fh + 2;
 
     uint32_t gx = 8, gy = ty;
     for (unsigned char ch = 0x20; ch <= 0x7Eu; ch++) {
         vbe_draw_char(gx, gy, (char)ch, VBE_COLOR_WHITE, VBE_COLOR_DARK_BLUE);
-        gx += VBE_FONT_W + 1;
-        if (gx + VBE_FONT_W + 1 >= W - 8u) {
+        gx += fw + 1u;
+        if (gx + fw + 1u >= W - 8u) {
             gx = 8;
-            gy += VBE_FONT_H + 1;
+            gy += fh + 1u;
         }
     }
-    ty = gy + VBE_FONT_H + 12;
+    ty = gy + fh + 12;
 
     /* ── 6. Progress bar ────────────────────────────────────────────────── */
     uint32_t bar_w = W - 16u, bar_filled = bar_w * 3u / 4u;
@@ -371,7 +454,7 @@ void vbe_demo(void)
      * Restore the VBE terminal cursor below all the drawn graphics so that
      * subsequent printf() calls do not overwrite the demo.
      */
-    uint32_t new_row = (ty + 20) / VBE_FONT_H;
+    uint32_t new_row = (ty + 20) / fh;
     if (new_row >= term_rows) new_row = term_rows - 1u;
     term_row = new_row;
     term_col = 0;

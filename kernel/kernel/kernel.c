@@ -26,6 +26,7 @@
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
 #include <kernel/vbe.h>
+#include <kernel/psf.h>
 #include <kernel/apic.h>
 #include <kernel/smp.h>
 
@@ -154,6 +155,25 @@ void kernel_main(void) {
 				vfs_mount(&initrd_vfs_ops, &grub_initrd_ctx);
 				printf("initrd: mounted %d file(s) from Multiboot module\r\n",
 				       (int)grub_initrd_ctx.file_count);
+
+				/* Auto-load PSF2 bitmap font if present in the initrd. */
+				for (uint32_t _fi = 0; _fi < grub_initrd_ctx.file_count; _fi++) {
+					initrd_entry_t *fe = &grub_initrd_ctx.files[_fi];
+					const char *fn = fe->name;
+					if (fn[0]=='F' && fn[1]=='O' && fn[2]=='N' && fn[3]=='T' &&
+					    fn[4]=='.' && fn[5]=='P' && fn[6]=='S' && fn[7]=='F' &&
+					    fn[8]=='\0') {
+						if (psf2_load(fe->data, fe->size) == 0) {
+							const psf2_font_t *pf = psf2_get_font();
+							printf("psf: loaded FONT.PSF: %dx%d  %d glyphs\r\n",
+							       (int)pf->width, (int)pf->height,
+							       (int)pf->glyph_count);
+						} else {
+							printf("psf: FONT.PSF parse failed\r\n");
+						}
+						break;
+					}
+				}
 			} else {
 				printf("initrd: module is not a valid initrd image\r\n");
 			}

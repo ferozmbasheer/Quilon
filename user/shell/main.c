@@ -97,6 +97,8 @@ static void cmd_help(void)
     printf("  ping <a.b.c.d>         - ICMP echo request\r\n");
     printf("  vga                    - show VBE framebuffer info (section 10.4)\r\n");
     printf("  smp                    - show CPU/SMP info via CPUID (section 10.5)\r\n");
+    printf("  ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
+    printf("  psf                    - PSF2 font loader info    (section 11.2)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -299,9 +301,7 @@ static void cmd_initrd(void)
 
 static void cmd_clear(void)
 {
-    int i;
-    for (i = 0; i < 25; i++)
-        write(STDOUT_FILENO, "\r\n", 2);
+    write(STDOUT_FILENO, "\033[2J\033[H", 7);
 }
 
 /*
@@ -710,6 +710,78 @@ static void cmd_vga(void)
     printf("vga: framebuffer %ux%u  bpp=%u\r\n", info[0], info[1], info[2]);
 }
 
+static void cmd_ansitest(void)
+{
+    printf("=== ANSI Escape Code Demo (section 11.1) ===\r\n\r\n");
+
+    printf("Standard colors:\r\n");
+    printf("  \033[30mBlack\033[0m   \033[31mRed\033[0m     "
+           "\033[32mGreen\033[0m   \033[33mYellow\033[0m\r\n");
+    printf("  \033[34mBlue\033[0m    \033[35mMagenta\033[0m "
+           "\033[36mCyan\033[0m    \033[37mWhite\033[0m\r\n\r\n");
+
+    printf("Bright colors:\r\n");
+    printf("  \033[90mDk Grey\033[0m \033[91mBr Red\033[0m  "
+           "\033[92mBr Green\033[0m \033[93mBr Yellow\033[0m\r\n");
+    printf("  \033[94mBr Blue\033[0m \033[95mBr Magenta\033[0m "
+           "\033[96mBr Cyan\033[0m \033[97mBr White\033[0m\r\n\r\n");
+
+    printf("Attributes:\r\n");
+    printf("  \033[1mBold\033[0m  "
+           "\033[1;31mBold Red\033[0m  "
+           "\033[1;32mBold Green\033[0m  "
+           "\033[1;33mBold Yellow\033[0m\r\n\r\n");
+
+    printf("Background colors:\r\n");
+    printf("  \033[41m Red \033[0m "
+           "\033[42m Green \033[0m "
+           "\033[44m Blue \033[0m "
+           "\033[45m Magenta \033[0m "
+           "\033[46m Cyan \033[0m\r\n\r\n");
+
+    printf("Erase-to-EOL (text after '|' erased):\r\n");
+    printf("  visible text | ERASED_TEXT");
+    printf("\033[12D\033[K");
+    printf("\r\n\r\n");
+
+    printf("Cursor save/restore:\r\n");
+    printf("  before ");
+    printf("\033[s");
+    printf("OVERWRITTEN");
+    printf("\033[u");
+    printf("after\r\n\r\n");
+
+    printf("=== done ===\r\n");
+}
+
+static void cmd_psf(void)
+{
+    /* The PSF2 font loader lives entirely in the kernel (ring-0).
+     * From ring-3 we can only query VBE framebuffer state via vbe_info_u().
+     * If VBE is active the kernel-side psf2_load() will have been called
+     * from the 'psf' shell command or at boot when a font is found on initrd. */
+    unsigned int info[3];
+    int active = vbe_info_u(info);
+
+    printf("=== PSF2 Bitmap Font Loader (section 11.2) ===\r\n");
+    if (!active) {
+        printf("VBE framebuffer: not active (text mode)\r\n");
+        printf("PSF2 font rendering requires VBE graphical mode.\r\n");
+        printf("(add 'set gfxmode=800x600x32' to grub.cfg)\r\n");
+    } else {
+        printf("VBE framebuffer: %ux%u bpp=%u\r\n",
+               info[0], info[1], info[2]);
+        printf("PSF2 font loader: kernel-side (use 'psf' in the ring-0 shell\r\n");
+        printf("  to load a synthetic font from the built-in 8x8 bitmaps).\r\n");
+        printf("\r\nFormat overview:\r\n");
+        printf("  32-byte header: magic=0x864AB572, version=0,\r\n");
+        printf("                  glyph_count, bytes_per_glyph, height, width\r\n");
+        printf("  Glyph data: glyph[c] at offset c * bytes_per_glyph\r\n");
+        printf("  Each row: ceil(width/8) bytes, MSB = leftmost pixel\r\n");
+    }
+    printf("=== done ===\r\n");
+}
+
 static void cmd_smp(void)
 {
     /* Read CPUID leaf 1 for APIC ID and feature flags (ring-3 safe).
@@ -797,8 +869,10 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "dhcp")   == 0) cmd_dhcp();
     else if (strcmp(cmd, "ip")     == 0) cmd_ip();
     else if (strcmp(cmd, "ping")   == 0) cmd_ping(arg);
-    else if (strcmp(cmd, "vga")    == 0) cmd_vga();
-    else if (strcmp(cmd, "smp")    == 0) cmd_smp();
+    else if (strcmp(cmd, "vga")      == 0) cmd_vga();
+    else if (strcmp(cmd, "smp")      == 0) cmd_smp();
+    else if (strcmp(cmd, "ansitest") == 0) cmd_ansitest();
+    else if (strcmp(cmd, "psf")      == 0) cmd_psf();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);
