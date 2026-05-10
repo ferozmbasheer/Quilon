@@ -515,7 +515,7 @@ void syscall_handler(syscall_regs_t *regs)
              * eager allocation since there is no VMA table to populate.
              */
             uint32_t active_cr3;
-            asm volatile("mov %%cr3, %0" : "=r"(active_cr3));
+            asm volatile("mov %%cr3, %%eax" : "=a"(active_cr3));
             uint32_t *active_pd = (uint32_t *)(uintptr_t)active_cr3;
 
             uint32_t page_addr = old_brk & ~(PAGE_SIZE - 1u);
@@ -814,6 +814,109 @@ void syscall_handler(syscall_regs_t *regs)
         }
 #else
         ret = 0;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_STAT (26) — query file or directory metadata.
+     *   EBX = pointer to null-terminated path string.
+     *   ECX = pointer to vfs_stat_t in user space
+     *         { uint32_t size; uint8_t type; }
+     *   Returns: 0 on success, -1 if not found or no driver support.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_STAT: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        vfs_stat_t *st   = (vfs_stat_t *)(uintptr_t)regs->ecx;
+        if (!path || !st) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_stat(path, st);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_MKDIR (27) — create a new directory.
+     *   EBX = pointer to null-terminated path string.
+     *   Returns: 0 on success, -1 on failure.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_MKDIR: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        ret = (path) ? (uint32_t)vfs_mkdir(path) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_CHDIR (28) — change the working directory.
+     *   EBX = pointer to null-terminated path string.
+     *   Returns: 0 on success, -1 on failure (not a directory, not found).
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_CHDIR: {
+#ifdef __is_kernel
+        const char *path = (const char *)(uintptr_t)regs->ebx;
+        ret = (path) ? (uint32_t)vfs_chdir(path) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_GETCWD (29) — get the current working directory.
+     *   EBX = pointer to output buffer in user space.
+     *   ECX = buffer length.
+     *   Returns: 0 on success, -1 on failure.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_GETCWD: {
+#ifdef __is_kernel
+        char    *buf = (char *)(uintptr_t)regs->ebx;
+        uint32_t len = regs->ecx;
+        ret = (buf && len > 0) ? (uint32_t)vfs_getcwd(buf, len) : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_LSEEK (30) — reposition the file offset.
+     *   EBX = fd.
+     *   ECX = offset (treated as signed int32_t).
+     *   EDX = whence: 0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END.
+     *   Returns: new absolute offset on success, -1 on error.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_LSEEK: {
+#ifdef __is_kernel
+        ret = (uint32_t)vfs_lseek((int)regs->ebx,
+                                  (int32_t)regs->ecx,
+                                  (int)regs->edx);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ────────────────────────────────────────────────────────────────────────
+     * SYS_RENAME (31) — rename a file or directory.
+     *   EBX = pointer to old path (null-terminated).
+     *   ECX = pointer to new path (null-terminated).
+     *   Returns: 0 on success, -1 on failure.
+     * ──────────────────────────────────────────────────────────────────────── */
+    case SYS_RENAME: {
+#ifdef __is_kernel
+        const char *oldpath = (const char *)(uintptr_t)regs->ebx;
+        const char *newpath = (const char *)(uintptr_t)regs->ecx;
+        ret = (oldpath && newpath)
+              ? (uint32_t)vfs_rename(oldpath, newpath)
+              : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
 #endif
         break;
     }

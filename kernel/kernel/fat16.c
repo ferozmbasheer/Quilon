@@ -402,15 +402,59 @@ static int fat16_read(void *ctx, vfs_node_t *node, uint32_t offset,
 }
 
 /*
- * fat16_readdir — return the `index`-th valid root directory entry.
+ * fat16_readdir — return the `index`-th valid directory entry at `path`.
  *
- * Skips deleted entries, LFN helpers, and volume labels.
+ * path "/" (or empty) → lists the FAT16 root directory.
+ * path "DIRNAME"      → finds that entry in root, then lists its cluster.
+ *                        If first_cluster == 0 the directory is empty.
  * Returns 0 on success, -1 on end-of-directory or I/O error.
  */
-static int fat16_readdir(void *ctx, uint32_t index, vfs_dirent_t *out)
+static int fat16_readdir(void *ctx, const char *path, uint32_t index,
+                          vfs_dirent_t *out)
 {
     fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
 
+    int list_root = (!path || path[0] == '\0' ||
+                     (path[0] == '/' && path[1] == '\0'));
+
+    if (!list_root) {
+        /* Locate the subdirectory entry in the root to get first_cluster. */
+        const char *dname = (path[0] == '/') ? path + 1 : path;
+        char name83[8], ext83[3];
+        if (path_to_83(dname, name83, ext83) < 0) return -1;
+
+        uint32_t root_sectors =
+            ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
+        uint16_t first_cluster = 0xFFFF;
+
+        for (uint32_t sec = 0; sec < root_sectors; sec++) {
+            if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+                return -1;
+            fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+            int ppe = 512 / (int)sizeof(fat16_dirent_t);
+            for (int i = 0; i < ppe; i++) {
+                int v = is_valid_entry(&dir[i]);
+                if (v < 0) goto dir_not_found;
+                if (v == 0) continue;
+                if ((dir[i].attr & FAT_ATTR_DIRECTORY) &&
+                    memcmp(dir[i].name, name83, 8) == 0 &&
+                    memcmp(dir[i].ext,  ext83,  3) == 0) {
+                    first_cluster = dir[i].first_cluster;
+                    goto dir_found;
+                }
+            }
+        }
+dir_not_found:
+        return -1;
+dir_found:
+        /* Directories created by fat16_mkdir have first_cluster == 0 (empty). */
+        if (first_cluster == 0) return -1;
+        /* Non-zero cluster chains are not yet traversed — empty listing. */
+        (void)first_cluster;
+        return -1;
+    }
+
+    /* ── Root directory listing (original behaviour) ────────────────────── */
     uint32_t root_sectors =
         ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
     uint32_t count = 0;
@@ -728,6 +772,197 @@ static int fat16_remove(void *ctx, const char *path)
     return -1;   /* not found */
 }
 
+/*
+ * fat16_stat — return metadata for the file/directory at `path`.
+ *
+ * Scans the root directory; "/" is handled as a special case (root dir).
+ * Returns 0 and fills `out` on success, -1 if not found.
+ */
+static int fat16_stat(void *ctx, const char *path, vfs_stat_t *out)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+
+    /* "/" is always the root directory */
+    if (path[0] == '/' && path[1] == '\0') {
+        out->size = 0;
+        out->type = VFS_TYPE_DIR;
+        return 0;
+    }
+
+    char name83[8], ext83[3];
+    if (path_to_83(path, name83, ext83) < 0) return -1;
+
+    uint32_t root_sectors =
+        ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
+
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+
+        for (int i = 0; i < ppe; i++) {
+            int v = is_valid_entry(&dir[i]);
+            if (v < 0) return -1;
+            if (v == 0) continue;
+
+            if (memcmp(dir[i].name, name83, 8) == 0 &&
+                memcmp(dir[i].ext,  ext83,  3) == 0) {
+                out->size = dir[i].file_size;
+                out->type = (dir[i].attr & FAT_ATTR_DIRECTORY)
+                              ? VFS_TYPE_DIR : VFS_TYPE_FILE;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
+/*
+ * fat16_mkdir — create a new empty directory entry in the root directory.
+ *
+ * Sets attr = FAT_ATTR_DIRECTORY with first_cluster = 0 (empty dir).
+ * Subdirectory content ("." and ".." entries) is omitted for simplicity;
+ * the dir entry is visible in ls and stat.
+ *
+ * Returns 0 on success, -1 on duplicate name, disk full, or I/O error.
+ */
+static int fat16_mkdir(void *ctx, const char *path)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+    if (!fs->sector_write) return -1;
+
+    char name83[8], ext83[3];
+    if (path_to_83(path, name83, ext83) < 0) return -1;
+
+    uint32_t root_sectors =
+        ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
+
+    /* Pass 1: check for duplicate name. */
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first == 0x00) goto mkdir_find_free;
+            if (first == 0xE5) continue;
+            if (dir[i].attr == FAT_ATTR_LFN) continue;
+            if (dir[i].attr & FAT_ATTR_VOLUME_ID) continue;
+            if (memcmp(dir[i].name, name83, 8) == 0 &&
+                memcmp(dir[i].ext,  ext83,  3) == 0)
+                return -1;   /* already exists */
+        }
+    }
+
+mkdir_find_free:;
+    /* Pass 2: find a free directory slot and write the entry. */
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first != 0x00 && first != 0xE5) continue;
+
+            memset(&dir[i], 0, sizeof(fat16_dirent_t));
+            memcpy(dir[i].name, name83, 8);
+            memcpy(dir[i].ext,  ext83,  3);
+            dir[i].attr          = FAT_ATTR_DIRECTORY;
+            dir[i].first_cluster = 0;
+            dir[i].file_size     = 0;
+
+            if (fs->sector_write(fs->ctx, fs->root_dir_lba + sec,
+                                  sector_buf) < 0)
+                return -1;
+
+            return 0;
+        }
+    }
+    return -1;   /* root directory full */
+}
+
+/*
+ * fat16_rename — rename the file or directory at `oldpath` to `newpath`.
+ *
+ * Finds the old directory entry and updates the name/ext fields in-place.
+ * Returns -1 if the old name is not found, the new name already exists,
+ * or an I/O error occurs.
+ */
+static int fat16_rename(void *ctx, const char *oldpath, const char *newpath)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+    if (!fs->sector_write) return -1;
+
+    char old83[8], oldext83[3];
+    char new83[8], newext83[3];
+    if (path_to_83(oldpath, old83, oldext83) < 0) return -1;
+    if (path_to_83(newpath, new83, newext83) < 0) return -1;
+
+    uint32_t root_sectors =
+        ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
+
+    /* Pass 1: reject if destination already exists (avoids duplicate entries). */
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first == 0x00) goto rename_check_done;
+            if (first == 0xE5) continue;
+            if (dir[i].attr == FAT_ATTR_LFN) continue;
+            if (dir[i].attr & FAT_ATTR_VOLUME_ID) continue;
+            if (memcmp(dir[i].name, new83,    8) == 0 &&
+                memcmp(dir[i].ext,  newext83, 3) == 0)
+                return -1;   /* destination already exists */
+        }
+    }
+rename_check_done:
+
+    /* Pass 2: find the old entry and rename it. */
+    for (uint32_t sec = 0; sec < root_sectors; sec++) {
+        if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
+            return -1;
+
+        fat16_dirent_t *dir = (fat16_dirent_t *)(void *)sector_buf;
+        int ppe = 512 / (int)sizeof(fat16_dirent_t);
+        int found = 0;
+
+        for (int i = 0; i < ppe; i++) {
+            uint8_t first = (uint8_t)dir[i].name[0];
+            if (first == 0x00) return -1;   /* end of directory */
+            if (first == 0xE5) continue;
+            if (dir[i].attr == FAT_ATTR_LFN) continue;
+            if (dir[i].attr & FAT_ATTR_VOLUME_ID) continue;
+
+            if (memcmp(dir[i].name, old83, 8) == 0 &&
+                memcmp(dir[i].ext, oldext83, 3) == 0) {
+                memcpy(dir[i].name, new83, 8);
+                memcpy(dir[i].ext, newext83, 3);
+                found = 1;
+                break;
+            }
+        }
+
+        if (found) {
+            if (fs->sector_write(fs->ctx, fs->root_dir_lba + sec,
+                                  sector_buf) < 0)
+                return -1;
+            return 0;
+        }
+    }
+    return -1;   /* not found */
+}
+
 static void fat16_close(void *ctx, vfs_node_t *node)
 {
     (void)ctx;
@@ -745,6 +980,9 @@ const vfs_ops_t fat16_vfs_ops = {
     .close   = fat16_close,
     .create  = fat16_create,
     .remove  = fat16_remove,
+    .stat    = fat16_stat,
+    .mkdir   = fat16_mkdir,
+    .rename  = fat16_rename,
 };
 
 /* ── Public API ──────────────────────────────────────────────────────────── */

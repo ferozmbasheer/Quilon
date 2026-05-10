@@ -261,3 +261,78 @@ vbe_info_u:
     int   $0x80
     popl  %ebx
     ret
+
+/* ── stat(const char *path, stat_t *out) → int ──────────────────────────── */
+.global stat
+stat:
+    pushl %ebx
+    movl  $26,       %eax    /* SYS_STAT */
+    movl  8(%esp),   %ebx    /* path */
+    movl  12(%esp),  %ecx    /* stat_t* out */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── mkdir(const char *path) → int ─────────────────────────────────────── */
+.global mkdir
+mkdir:
+    pushl %ebx
+    movl  $27,      %eax     /* SYS_MKDIR */
+    movl  8(%esp),  %ebx     /* path */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── chdir(const char *path) → int ─────────────────────────────────────── */
+.global chdir
+chdir:
+    pushl %ebx
+    movl  $28,      %eax     /* SYS_CHDIR */
+    movl  8(%esp),  %ebx     /* path */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── getcwd(char *buf, unsigned int len) → char* ────────────────────────── */
+/* Returns buf on success (kernel writes path into buf and returns 0),       */
+/* or NULL on failure.  Wrapper translates 0→buf, -1→NULL.                  */
+.global getcwd
+getcwd:
+    pushl %ebx
+    movl  $29,       %eax    /* SYS_GETCWD */
+    movl  8(%esp),   %ebx    /* buf */
+    movl  12(%esp),  %ecx    /* len */
+    int   $0x80
+    /* eax = 0 (ok) or -1 (err); convert to buf or NULL */
+    testl %eax, %eax
+    jl    .Lgetcwd_fail
+    movl  8(%esp),   %eax    /* return buf */
+    popl  %ebx
+    ret
+.Lgetcwd_fail:
+    xorl  %eax, %eax         /* return NULL */
+    popl  %ebx
+    ret
+
+/* ── lseek(int fd, int offset, int whence) → int ────────────────────────── */
+.global lseek
+lseek:
+    pushl %ebx
+    movl  $30,       %eax    /* SYS_LSEEK */
+    movl  8(%esp),   %ebx    /* fd */
+    movl  12(%esp),  %ecx    /* offset */
+    movl  16(%esp),  %edx    /* whence */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* ── rename(const char *oldpath, const char *newpath) → int ─────────────── */
+.global rename
+rename:
+    pushl %ebx
+    movl  $31,       %eax    /* SYS_RENAME */
+    movl  8(%esp),   %ebx    /* oldpath */
+    movl  12(%esp),  %ecx    /* newpath */
+    int   $0x80
+    popl  %ebx
+    ret

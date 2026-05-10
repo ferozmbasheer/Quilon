@@ -67,9 +67,10 @@ static int mock_read(void *ctx, vfs_node_t *node, uint32_t offset,
     return (int)size;
 }
 
-static int mock_readdir(void *ctx, uint32_t index, vfs_dirent_t *out)
+static int mock_readdir(void *ctx, const char *path, uint32_t index,
+                         vfs_dirent_t *out)
 {
-    (void)ctx;
+    (void)ctx; (void)path;   /* mock is a flat filesystem */
     if (index >= MOCK_FILE_COUNT) return -1;
 
     /* Use fw_streq's cousin to copy the name */
@@ -137,6 +138,58 @@ static const vfs_ops_t mock_rw_ops = {
     .close   = mock_close,
     .create  = mock_create_fn,
     .remove  = mock_remove_fn,
+};
+
+/* ── Section-12.1 mock: stat / mkdir / rename ────────────────────────────── */
+
+static int mock_stat_fn(void *ctx, const char *path, vfs_stat_t *out)
+{
+    (void)ctx;
+    if (*path == '/') path++;
+    if (*path == '\0') {   /* root "/" */
+        out->size = 0;
+        out->type = VFS_TYPE_DIR;
+        return 0;
+    }
+    for (int i = 0; i < MOCK_FILE_COUNT; i++) {
+        if (fw_streq(path, mock_files[i].name)) {
+            out->size = mock_files[i].size;
+            out->type = VFS_TYPE_FILE;
+            return 0;
+        }
+    }
+    if (fw_streq(path, "TESTDIR")) {
+        out->size = 0;
+        out->type = VFS_TYPE_DIR;
+        return 0;
+    }
+    return -1;
+}
+
+static int mock_mkdir_fn(void *ctx, const char *path)
+{
+    (void)ctx; (void)path;
+    return 0;
+}
+
+static int mock_rename_fn(void *ctx, const char *oldpath, const char *newpath)
+{
+    (void)ctx; (void)newpath;
+    const char *name = (*oldpath == '/') ? oldpath + 1 : oldpath;
+    return (fw_streq(name, "README.TXT") || fw_streq(name, "NOTES.TXT")) ? 0 : -1;
+}
+
+static const vfs_ops_t mock_full_ops = {
+    .open    = mock_open,
+    .read    = mock_read,
+    .write   = mock_write_fn,
+    .readdir = mock_readdir,
+    .close   = mock_close,
+    .create  = mock_create_fn,
+    .remove  = mock_remove_fn,
+    .stat    = mock_stat_fn,
+    .mkdir   = mock_mkdir_fn,
+    .rename  = mock_rename_fn,
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -485,6 +538,293 @@ static void test_fd_table_full(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * 9. vfs_lseek  (section 12.1)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_lseek_set(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int fd = vfs_open("README.TXT");  /* size = 11 */
+    ASSERT(fd >= VFS_FD_BASE, "open README.TXT for lseek test");
+
+    int pos = vfs_lseek(fd, 4, VFS_SEEK_SET);
+    ASSERT_EQ(pos, 4, "SEEK_SET to 4 returns 4");
+
+    char buf[8];
+    int n = vfs_read(fd, buf, 4);
+    ASSERT_EQ(n, 4, "read 4 bytes from offset 4");
+    buf[4] = '\0';
+    /* "Hello, VFS!" offset 4 = "o, V" */
+    ASSERT_STR_EQ(buf, "o, V", "read after SEEK_SET returns correct bytes");
+    vfs_close(fd);
+}
+
+static void test_lseek_set_zero(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int fd = vfs_open("README.TXT");
+
+    /* Read a few bytes, then rewind. */
+    char tmp[4];
+    vfs_read(fd, tmp, 4);
+
+    int pos = vfs_lseek(fd, 0, VFS_SEEK_SET);
+    ASSERT_EQ(pos, 0, "SEEK_SET 0 rewinds to beginning");
+
+    char buf[8];
+    int n = vfs_read(fd, buf, 5);
+    buf[n] = '\0';
+    ASSERT_STR_EQ(buf, "Hello", "read from rewound position returns start of file");
+    vfs_close(fd);
+}
+
+static void test_lseek_cur_forward(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int fd = vfs_open("README.TXT");
+
+    vfs_lseek(fd, 2, VFS_SEEK_SET);          /* pos = 2 */
+    int pos = vfs_lseek(fd, 3, VFS_SEEK_CUR); /* pos = 5 */
+    ASSERT_EQ(pos, 5, "SEEK_CUR +3 from offset 2 = 5");
+    vfs_close(fd);
+}
+
+static void test_lseek_cur_backward(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int fd = vfs_open("README.TXT");
+
+    vfs_lseek(fd, 6, VFS_SEEK_SET);
+    int pos = vfs_lseek(fd, -4, VFS_SEEK_CUR);
+    ASSERT_EQ(pos, 2, "SEEK_CUR -4 from offset 6 = 2");
+    vfs_close(fd);
+}
+
+static void test_lseek_end(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int fd = vfs_open("README.TXT");   /* size = 11 */
+
+    int pos = vfs_lseek(fd, -3, VFS_SEEK_END);
+    ASSERT_EQ(pos, 8, "SEEK_END -3 on 11-byte file = 8");
+
+    char buf[4];
+    int n = vfs_read(fd, buf, 3);
+    ASSERT_EQ(n, 3, "read 3 bytes from offset 8");
+    buf[3] = '\0';
+    ASSERT_STR_EQ(buf, "FS!", "last 3 bytes of 'Hello, VFS!'");
+    vfs_close(fd);
+}
+
+static void test_lseek_invalid_fd(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int pos = vfs_lseek(99, 0, VFS_SEEK_SET);
+    ASSERT_EQ(pos, -1, "lseek with invalid fd returns -1");
+}
+
+static void test_lseek_negative_set(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int fd = vfs_open("README.TXT");
+    int pos = vfs_lseek(fd, -1, VFS_SEEK_SET);
+    ASSERT_EQ(pos, -1, "SEEK_SET with negative offset returns -1");
+    vfs_close(fd);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 10. vfs_stat  (section 12.1)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_stat_known_file(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_stat_t st;
+    int r = vfs_stat("README.TXT", &st);
+    ASSERT_EQ(r, 0, "stat of README.TXT returns 0");
+    ASSERT_EQ(st.type, (uint8_t)VFS_TYPE_FILE, "README.TXT type is FILE");
+    ASSERT_EQ(st.size, (uint32_t)(sizeof(mock_readme) - 1), "README.TXT size matches");
+}
+
+static void test_stat_root_dir(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_stat_t st;
+    int r = vfs_stat("/", &st);
+    ASSERT_EQ(r, 0, "stat of '/' returns 0");
+    ASSERT_EQ(st.type, (uint8_t)VFS_TYPE_DIR, "'/' type is DIR");
+}
+
+static void test_stat_mock_directory(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_stat_t st;
+    int r = vfs_stat("TESTDIR", &st);
+    ASSERT_EQ(r, 0, "stat of TESTDIR returns 0");
+    ASSERT_EQ(st.type, (uint8_t)VFS_TYPE_DIR, "TESTDIR type is DIR");
+}
+
+static void test_stat_unknown_path(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_stat_t st;
+    int r = vfs_stat("GHOST.TXT", &st);
+    ASSERT_EQ(r, -1, "stat of unknown path returns -1");
+}
+
+static void test_stat_not_mounted(void)
+{
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    vfs_stat_t st;
+    int r = vfs_stat("README.TXT", &st);
+    ASSERT_EQ(r, -1, "stat returns -1 when not mounted");
+    vfs_mount(&mock_full_ops, (void *)0);
+}
+
+static void test_stat_no_driver_support(void)
+{
+    vfs_mount(&mock_ops, (void *)0);   /* mock_ops has no .stat */
+    vfs_stat_t st;
+    int r = vfs_stat("README.TXT", &st);
+    ASSERT_EQ(r, -1, "stat returns -1 when driver has no stat support");
+    vfs_mount(&mock_full_ops, (void *)0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 11. vfs_mkdir  (section 12.1)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_mkdir_succeeds(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int r = vfs_mkdir("NEWDIR");
+    ASSERT_EQ(r, 0, "vfs_mkdir returns 0 on success");
+}
+
+static void test_mkdir_not_mounted(void)
+{
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    int r = vfs_mkdir("NEWDIR");
+    ASSERT_EQ(r, -1, "vfs_mkdir returns -1 when not mounted");
+    vfs_mount(&mock_full_ops, (void *)0);
+}
+
+static void test_mkdir_no_driver_support(void)
+{
+    vfs_mount(&mock_ops, (void *)0);
+    int r = vfs_mkdir("NEWDIR");
+    ASSERT_EQ(r, -1, "vfs_mkdir returns -1 when driver has no mkdir support");
+    vfs_mount(&mock_full_ops, (void *)0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 12. vfs_rename  (section 12.1)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_rename_succeeds(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int r = vfs_rename("README.TXT", "READNEW.TXT");
+    ASSERT_EQ(r, 0, "vfs_rename returns 0 for known old path");
+}
+
+static void test_rename_fails_unknown_old(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int r = vfs_rename("GHOST.TXT", "OTHER.TXT");
+    ASSERT_EQ(r, -1, "vfs_rename returns -1 for unknown old path");
+}
+
+static void test_rename_not_mounted(void)
+{
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    int r = vfs_rename("README.TXT", "OTHER.TXT");
+    ASSERT_EQ(r, -1, "vfs_rename returns -1 when not mounted");
+    vfs_mount(&mock_full_ops, (void *)0);
+}
+
+static void test_rename_no_driver_support(void)
+{
+    vfs_mount(&mock_ops, (void *)0);
+    int r = vfs_rename("README.TXT", "OTHER.TXT");
+    ASSERT_EQ(r, -1, "vfs_rename returns -1 when driver has no rename support");
+    vfs_mount(&mock_full_ops, (void *)0);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 13. vfs_chdir / vfs_getcwd  (section 12.1)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static void test_getcwd_initial(void)
+{
+    /* Reset to root by calling chdir — tests may run in any order. */
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_chdir("/");
+
+    char buf[64];
+    int r = vfs_getcwd(buf, sizeof(buf));
+    ASSERT_EQ(r, 0, "vfs_getcwd returns 0");
+    ASSERT_STR_EQ(buf, "/", "initial CWD is '/'");
+}
+
+static void test_chdir_root_always_succeeds(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int r = vfs_chdir("/");
+    ASSERT_EQ(r, 0, "chdir('/') always returns 0");
+
+    char buf[64];
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "/", "CWD is '/' after chdir('/')");
+}
+
+static void test_chdir_to_directory(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_chdir("/");   /* reset */
+
+    int r = vfs_chdir("TESTDIR");
+    ASSERT_EQ(r, 0, "chdir to known directory returns 0");
+
+    char buf[64];
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "TESTDIR", "CWD updated to TESTDIR");
+
+    vfs_chdir("/");   /* reset for other tests */
+}
+
+static void test_chdir_to_file_fails(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_chdir("/");
+
+    int r = vfs_chdir("README.TXT");
+    ASSERT_EQ(r, -1, "chdir to a regular file returns -1");
+}
+
+static void test_chdir_to_unknown_path_fails(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int r = vfs_chdir("NOSUCHDIR");
+    ASSERT_EQ(r, -1, "chdir to unknown path returns -1");
+}
+
+static void test_getcwd_null_buf(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    int r = vfs_getcwd((char *)0, 64);
+    ASSERT_EQ(r, -1, "vfs_getcwd with NULL buf returns -1");
+}
+
+static void test_getcwd_zero_len(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    char buf[4];
+    int r = vfs_getcwd(buf, 0);
+    ASSERT_EQ(r, -1, "vfs_getcwd with len=0 returns -1");
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * main
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -537,6 +877,43 @@ int main(void)
 
     /* fd table limits */
     RUN_SUITE(test_fd_table_full);
+
+    /* vfs_lseek (section 12.1) */
+    RUN_SUITE(test_lseek_set);
+    RUN_SUITE(test_lseek_set_zero);
+    RUN_SUITE(test_lseek_cur_forward);
+    RUN_SUITE(test_lseek_cur_backward);
+    RUN_SUITE(test_lseek_end);
+    RUN_SUITE(test_lseek_invalid_fd);
+    RUN_SUITE(test_lseek_negative_set);
+
+    /* vfs_stat (section 12.1) */
+    RUN_SUITE(test_stat_known_file);
+    RUN_SUITE(test_stat_root_dir);
+    RUN_SUITE(test_stat_mock_directory);
+    RUN_SUITE(test_stat_unknown_path);
+    RUN_SUITE(test_stat_not_mounted);
+    RUN_SUITE(test_stat_no_driver_support);
+
+    /* vfs_mkdir (section 12.1) */
+    RUN_SUITE(test_mkdir_succeeds);
+    RUN_SUITE(test_mkdir_not_mounted);
+    RUN_SUITE(test_mkdir_no_driver_support);
+
+    /* vfs_rename (section 12.1) */
+    RUN_SUITE(test_rename_succeeds);
+    RUN_SUITE(test_rename_fails_unknown_old);
+    RUN_SUITE(test_rename_not_mounted);
+    RUN_SUITE(test_rename_no_driver_support);
+
+    /* vfs_chdir / vfs_getcwd (section 12.1) */
+    RUN_SUITE(test_getcwd_initial);
+    RUN_SUITE(test_chdir_root_always_succeeds);
+    RUN_SUITE(test_chdir_to_directory);
+    RUN_SUITE(test_chdir_to_file_fails);
+    RUN_SUITE(test_chdir_to_unknown_path_fails);
+    RUN_SUITE(test_getcwd_null_buf);
+    RUN_SUITE(test_getcwd_zero_len);
 
     TEST_SUMMARY();
 }

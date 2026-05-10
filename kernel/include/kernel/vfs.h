@@ -15,6 +15,22 @@
 #define VFS_TYPE_FILE  0
 #define VFS_TYPE_DIR   1
 
+/* vfs_lseek whence constants */
+#define VFS_SEEK_SET  0   /* seek from start of file   */
+#define VFS_SEEK_CUR  1   /* seek from current position */
+#define VFS_SEEK_END  2   /* seek from end of file      */
+
+/*
+ * vfs_stat_t — minimal file metadata returned by vfs_stat().
+ *
+ * Layout must match the user-space stat_t in user/libc/include/sys/stat.h
+ * exactly, because SYS_STAT writes this struct to a user-space pointer.
+ */
+typedef struct {
+    uint32_t size;   /* file size in bytes (0 for directories) */
+    uint8_t  type;   /* VFS_TYPE_FILE or VFS_TYPE_DIR          */
+} vfs_stat_t;
+
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
 /*
@@ -80,11 +96,15 @@ typedef struct {
     int  (*read)   (void *ctx, vfs_node_t *node, uint32_t offset,
                     uint32_t size, uint8_t *buf);
     int  (*write)  (void *ctx, vfs_node_t *node, uint32_t offset,
-                    uint32_t size, const uint8_t *buf);           /* NEW */
-    int  (*readdir)(void *ctx, uint32_t index, vfs_dirent_t *out);
+                    uint32_t size, const uint8_t *buf);
+    int  (*readdir)(void *ctx, const char *path, uint32_t index, vfs_dirent_t *out);
     void (*close)  (void *ctx, vfs_node_t *node);
-    int  (*create) (void *ctx, const char *path);                 /* NEW */
-    int  (*remove) (void *ctx, const char *path);                 /* NEW */
+    int  (*create) (void *ctx, const char *path);
+    int  (*remove) (void *ctx, const char *path);
+    /* Section 12.1 — file metadata & directory ops */
+    int  (*stat)   (void *ctx, const char *path, vfs_stat_t *out);
+    int  (*mkdir)  (void *ctx, const char *path);
+    int  (*rename) (void *ctx, const char *oldpath, const char *newpath);
 } vfs_ops_t;
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
@@ -149,6 +169,61 @@ int  vfs_remove(const char *path);
  * index = 0 is the first entry.
  */
 int  vfs_readdir(uint32_t index, vfs_dirent_t *out);
+
+/*
+ * vfs_lseek — reposition the read/write offset of an open file descriptor.
+ *
+ * whence:
+ *   VFS_SEEK_SET (0): new offset = offset
+ *   VFS_SEEK_CUR (1): new offset = current + offset
+ *   VFS_SEEK_END (2): new offset = file_size + offset
+ *
+ * Returns the new absolute offset on success, -1 on error (invalid fd,
+ * pipe fd, out-of-bounds offset, or unknown whence).
+ */
+int  vfs_lseek(int fd, int32_t offset, int whence);
+
+/*
+ * vfs_stat — query metadata for the file or directory at `path`.
+ *
+ * Fills `out` with size and type.  Does not require an open fd.
+ * Returns 0 on success, -1 if not found or driver has no stat support.
+ */
+int  vfs_stat(const char *path, vfs_stat_t *out);
+
+/*
+ * vfs_mkdir — create a new empty directory at `path`.
+ *
+ * Returns 0 on success, -1 on failure (already exists, disk full, or
+ * driver has no mkdir support).
+ */
+int  vfs_mkdir(const char *path);
+
+/*
+ * vfs_rename — rename the file or directory at `oldpath` to `newpath`.
+ *
+ * Returns 0 on success, -1 on failure (not found, invalid names, or
+ * driver has no rename support).
+ */
+int  vfs_rename(const char *oldpath, const char *newpath);
+
+/*
+ * vfs_chdir — change the kernel working directory to `path`.
+ *
+ * If the filesystem has a stat op the path is validated as an existing
+ * directory; otherwise the CWD string is updated unconditionally.
+ * The CWD is kernel-global (shared by all processes in the current
+ * single-mount design).  Returns 0 on success, -1 on failure.
+ */
+int  vfs_chdir(const char *path);
+
+/*
+ * vfs_getcwd — copy the current working directory string into `buf`.
+ *
+ * At most `len`-1 bytes are copied; the result is always NUL-terminated.
+ * Returns 0 on success, -1 if buf is NULL or len is 0.
+ */
+int  vfs_getcwd(char *buf, uint32_t len);
 
 /*
  * vfs_pipe — create an anonymous pipe and return two file descriptors.

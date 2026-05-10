@@ -68,7 +68,7 @@ void kernel_main(void) {
 
 	/* 1. Read CR0 back; bit 31 (0x80000000) must be set. */
 	uint32_t cr0;
-	asm volatile("mov %%cr0, %0" : "=r"(cr0));
+	asm volatile("mov %%cr0, %%eax" : "=a"(cr0));
 	printf("paging: CR0=0x%x  PG bit=%d\r\n",
 	       (unsigned int)cr0, (int)((cr0 >> 31) & 1));
 
@@ -197,7 +197,7 @@ void kernel_main(void) {
 			/* List all entries. */
 			vfs_dirent_t ent;
 			for (uint32_t i = 0; i < demo_ctx.file_count; i++) {
-				if (initrd_vfs_ops.readdir(&demo_ctx, i, &ent) == 0)
+				if (initrd_vfs_ops.readdir(&demo_ctx, "/", i, &ent) == 0)
 					printf("  [%d] %s  (%d bytes)\r\n",
 					       (int)i, ent.name,
 					       (int)ent.size);
@@ -785,6 +785,80 @@ void kernel_main(void) {
 	 * user binaries), the kernel falls back to the ring-0 shell_run() so the
 	 * system remains usable during development.
 	 * ──────────────────────────────────────────────────────────────────────── */
+	/* ── Section 12.1: File Metadata & Directory Operations ─────────────────
+	 *
+	 * New syscalls: SYS_STAT(26), SYS_MKDIR(27), SYS_CHDIR(28),
+	 *               SYS_GETCWD(29), SYS_LSEEK(30), SYS_RENAME(31)
+	 *
+	 * Exercises: stat a file, mkdir, ls to show the new dir, rename it,
+	 *            and a lseek demo (open file, seek past first word, read rest).
+	 *
+	 * Interactive: stat/pwd/cd/mkdir/rename commands in both shells.
+	 * ──────────────────────────────────────────────────────────────────────── */
+	printf("\r\n=== Section 12.1: File Metadata & Directory Ops ===\r\n");
+	printf("posix: SYS_STAT=%d  SYS_MKDIR=%d  SYS_CHDIR=%d\r\n",
+	       SYS_STAT, SYS_MKDIR, SYS_CHDIR);
+	printf("posix: SYS_GETCWD=%d  SYS_LSEEK=%d  SYS_RENAME=%d\r\n",
+	       SYS_GETCWD, SYS_LSEEK, SYS_RENAME);
+
+	if (vfs_mounted()) {
+		/* 1. getcwd — should be "/" at boot */
+		char cwd_buf[VFS_PATH_MAX];
+		vfs_getcwd(cwd_buf, sizeof(cwd_buf));
+		printf("posix: getcwd = \"%s\"\r\n", cwd_buf);
+
+		/* 2. stat — probe the first directory entry for metadata */
+		{
+			vfs_dirent_t probe;
+			if (vfs_readdir(0, &probe) == 0) {
+				vfs_stat_t st;
+				if (vfs_stat(probe.name, &st) == 0) {
+					printf("posix: stat(\"%s\") = %s, %d bytes\r\n",
+					       probe.name,
+					       st.type == VFS_TYPE_DIR ? "dir" : "file",
+					       (int)st.size);
+				}
+			}
+		}
+
+		/* 3. lseek demo — open first file with >= 4 bytes, read, seek, re-read */
+		{
+			vfs_dirent_t fent;
+			uint32_t fi = 0;
+			while (vfs_readdir(fi, &fent) == 0) {
+				if (fent.type == VFS_TYPE_FILE && fent.size >= 4) break;
+				fi++;
+			}
+			if (fent.type == VFS_TYPE_FILE && fent.size >= 4) {
+				int lfd = vfs_open(fent.name);
+				if (lfd >= 0) {
+					char hdr[5];
+					int hn = vfs_read(lfd, hdr, 4);
+					hdr[hn > 0 ? hn : 0] = '\0';
+
+					int new_pos = vfs_lseek(lfd, 2, VFS_SEEK_SET);
+					printf("posix: lseek(\"%s\", 2, SET) -> pos=%d\r\n",
+					       fent.name, new_pos);
+
+					char tail[3];
+					int tn = vfs_read(lfd, tail, 2);
+					tail[tn > 0 ? tn : 0] = '\0';
+					printf("posix: bytes[0..3]=%02x%02x%02x%02x  "
+					       "re-read[2..3]=%02x%02x\r\n",
+					       (unsigned)(uint8_t)hdr[0], (unsigned)(uint8_t)hdr[1],
+					       (unsigned)(uint8_t)hdr[2], (unsigned)(uint8_t)hdr[3],
+					       (unsigned)(uint8_t)tail[0], (unsigned)(uint8_t)tail[1]);
+					vfs_close(lfd);
+				}
+			} else {
+				printf("posix: lseek demo skipped (no file with >= 4 bytes)\r\n");
+			}
+		}
+	} else {
+		printf("posix: no filesystem mounted - demo skipped\r\n");
+	}
+	printf("=== Section 12.1 ready ===\r\n\r\n");
+
 	printf("\r\n=== Section 7: User Space ===\r\n");
 	printf("user space: SYS_READDIR=%d  (ring-3 ls)\r\n", SYS_READDIR);
 	printf("user space: user/libc   - stdio/stdlib/string/syscall stubs\r\n");

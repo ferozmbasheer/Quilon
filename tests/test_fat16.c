@@ -236,7 +236,7 @@ static void test_readdir_entry0(void)
     fat16_mount(&g_fs);
 
     vfs_dirent_t ent;
-    int r = fat16_vfs_ops.readdir(&g_fs, 0, &ent);
+    int r = fat16_vfs_ops.readdir(&g_fs, "/", 0, &ent);
     ASSERT_EQ(r, 0,  "readdir[0] returns 0");
     ASSERT_STR_EQ(ent.name, "HELLO.TXT", "readdir[0] name is HELLO.TXT");
     ASSERT_EQ(ent.size, (uint32_t)13,    "readdir[0] size is 13");
@@ -249,7 +249,7 @@ static void test_readdir_entry1(void)
     fat16_mount(&g_fs);
 
     vfs_dirent_t ent;
-    int r = fat16_vfs_ops.readdir(&g_fs, 1, &ent);
+    int r = fat16_vfs_ops.readdir(&g_fs, "/", 1, &ent);
     ASSERT_EQ(r, 0,  "readdir[1] returns 0");
     ASSERT_STR_EQ(ent.name, "WORLD.TXT", "readdir[1] name is WORLD.TXT");
     ASSERT_EQ(ent.size, (uint32_t)12,    "readdir[1] size is 12");
@@ -261,7 +261,7 @@ static void test_readdir_past_end(void)
     fat16_mount(&g_fs);
 
     vfs_dirent_t ent;
-    int r = fat16_vfs_ops.readdir(&g_fs, 2, &ent);
+    int r = fat16_vfs_ops.readdir(&g_fs, "/", 2, &ent);
     ASSERT_EQ(r, -1, "readdir[2] returns -1 (end of directory)");
 }
 
@@ -441,7 +441,7 @@ static void test_create_appears_in_readdir(void)
 
     vfs_dirent_t ent;
     int found = 0;
-    for (uint32_t i = 0; fat16_vfs_ops.readdir(&g_fs, i, &ent) == 0; i++) {
+    for (uint32_t i = 0; fat16_vfs_ops.readdir(&g_fs, "/", i, &ent) == 0; i++) {
         if (fw_streq(ent.name, "THIRD.TXT")) { found = 1; break; }
     }
     ASSERT_EQ(found, 1, "created file appears in readdir");

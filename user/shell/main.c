@@ -76,7 +76,7 @@ static void cmd_help(void)
     printf("  cat <file>             - print file contents\r\n");
     printf("  touch <file>           - create an empty file\r\n");
     printf("  write <file> <data>    - write text to a file\r\n");
-    printf("  rm <file>              - delete a file\r\n");
+    printf("  rm <file|dir>          - delete a file or empty directory\r\n");
     printf("  fstest                 - FAT16 write/read/remove demo\r\n");
     printf("  initrd                 - list initrd/RAM filesystem contents\r\n");
     printf("  exec <file.elf>        - run an ELF program\r\n");
@@ -99,6 +99,11 @@ static void cmd_help(void)
     printf("  smp                    - show CPU/SMP info via CPUID (section 10.5)\r\n");
     printf("  ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
     printf("  psf                    - PSF2 font loader info    (section 11.2)\r\n");
+    printf("  stat <file>            - show file/dir metadata   (section 12.1)\r\n");
+    printf("  pwd                    - print working directory   (section 12.1)\r\n");
+    printf("  cd <path>              - change working directory  (section 12.1)\r\n");
+    printf("  mkdir <dir>            - create directory          (section 12.1)\r\n");
+    printf("  rename <old> <new>     - rename file or directory  (section 12.1)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -208,7 +213,7 @@ static void cmd_write(const char *args)
 
 static void cmd_rm(const char *path)
 {
-    if (!path || path[0] == '\0') { printf("Usage: rm <file>\r\n"); return; }
+    if (!path || path[0] == '\0') { printf("Usage: rm <file|dir>\r\n"); return; }
     if (fremove(path) == 0)
         printf("Removed '%s'\r\n", path);
     else
@@ -809,6 +814,69 @@ static void cmd_smp(void)
     printf("(kernel SMP state visible via 'smp' in the ring-0 shell)\r\n");
 }
 
+/* ── Section 12.1: File Metadata & Directory Operations ──────────────────── */
+
+static void cmd_stat(const char *path)
+{
+    if (!path || path[0] == '\0') { printf("Usage: stat <file>\r\n"); return; }
+    stat_t st;
+    if (stat(path, &st) != 0) {
+        printf("stat: '%s': not found\r\n", path);
+        return;
+    }
+    printf("  name:  %s\r\n", path);
+    printf("  type:  %s\r\n", S_ISDIR(st.st_type) ? "directory" : "regular file");
+    printf("  size:  %u bytes\r\n", st.st_size);
+}
+
+static void cmd_pwd(void)
+{
+    char buf[128];
+    if (getcwd(buf, sizeof(buf)))
+        printf("%s\r\n", buf);
+    else
+        printf("pwd: failed\r\n");
+}
+
+static void cmd_cd(const char *path)
+{
+    if (!path || path[0] == '\0') { printf("Usage: cd <path>\r\n"); return; }
+    if (chdir(path) != 0)
+        printf("cd: '%s': not found or not a directory\r\n", path);
+}
+
+static void cmd_mkdir_dir(const char *path)
+{
+    if (!path || path[0] == '\0') { printf("Usage: mkdir <dir>\r\n"); return; }
+    if (mkdir(path) == 0)
+        printf("mkdir: created '%s'\r\n", path);
+    else
+        printf("mkdir: '%s': failed (exists or disk full)\r\n", path);
+}
+
+static void cmd_rename_file(const char *args)
+{
+    if (!args || args[0] == '\0') { printf("Usage: rename <old> <new>\r\n"); return; }
+    const char *p = args;
+    while (*p && *p != ' ') p++;
+    if (*p == '\0' || *(p + 1) == '\0') { printf("Usage: rename <old> <new>\r\n"); return; }
+
+    char oldname[64];
+    int len = (int)(p - args);
+    if (len >= (int)sizeof(oldname)) len = (int)sizeof(oldname) - 1;
+    int i;
+    for (i = 0; i < len; i++) oldname[i] = args[i];
+    oldname[i] = '\0';
+
+    const char *newname = p + 1;
+    while (*newname == ' ') newname++;
+
+    if (rename(oldname, newname) == 0)
+        printf("rename: '%s' -> '%s'\r\n", oldname, newname);
+    else
+        printf("rename: failed (src not found or dst exists)\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -873,6 +941,11 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "smp")      == 0) cmd_smp();
     else if (strcmp(cmd, "ansitest") == 0) cmd_ansitest();
     else if (strcmp(cmd, "psf")      == 0) cmd_psf();
+    else if (strcmp(cmd, "stat")   == 0) cmd_stat(arg);
+    else if (strcmp(cmd, "pwd")    == 0) cmd_pwd();
+    else if (strcmp(cmd, "cd")     == 0) cmd_cd(arg);
+    else if (strcmp(cmd, "mkdir")  == 0) cmd_mkdir_dir(arg);
+    else if (strcmp(cmd, "rename") == 0) cmd_rename_file(arg);
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

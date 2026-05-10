@@ -1,5 +1,6 @@
 /*
  * Quilon OS — Virtual File System (VFS)
+ * Section 12.1: File Metadata & Directory Operations
  *
  * Design
  * ──────
@@ -27,6 +28,10 @@
 
 static const vfs_ops_t *mounted_ops = (const vfs_ops_t *)0;
 static void *mounted_ctx = (void *)0;
+
+/* ── Working directory (section 12.1) ──────────────────────────────────────── */
+
+static char vfs_cwd[VFS_PATH_MAX] = "/";
 
 /* ── File descriptor table ──────────────────────────────────────────────── */
 
@@ -172,8 +177,106 @@ int vfs_remove(const char *path)
 
 int vfs_readdir(uint32_t index, vfs_dirent_t *out)
 {
-    if (!vfs_mounted()) return -1;
-    return mounted_ops->readdir(mounted_ctx, index, out);
+    if (!vfs_mounted() || !out) return -1;
+    if (!mounted_ops->readdir) return -1;
+    return mounted_ops->readdir(mounted_ctx, vfs_cwd, index, out);
+}
+
+/* ── Section 12.1 — file metadata & directory ops ───────────────────────── */
+
+int vfs_lseek(int fd, int32_t offset, int whence)
+{
+    int idx = fd_to_idx(fd);
+    if (idx < 0) return -1;
+
+    vfs_node_t *node = &fd_table[idx];
+    if (node->is_pipe) return -1;
+
+    uint32_t new_pos;
+    switch (whence) {
+    case VFS_SEEK_SET:
+        if (offset < 0) return -1;
+        new_pos = (uint32_t)offset;
+        break;
+    case VFS_SEEK_CUR:
+        if (offset < 0) {
+            uint32_t abs = (uint32_t)(-offset);
+            if (abs > node->offset) return -1;
+            new_pos = node->offset - abs;
+        } else {
+            new_pos = node->offset + (uint32_t)offset;
+        }
+        break;
+    case VFS_SEEK_END:
+        if (offset < 0) {
+            uint32_t abs = (uint32_t)(-offset);
+            if (abs > node->size) return -1;
+            new_pos = node->size - abs;
+        } else {
+            new_pos = node->size + (uint32_t)offset;
+        }
+        break;
+    default:
+        return -1;
+    }
+
+    node->offset = new_pos;
+    return (int)new_pos;
+}
+
+int vfs_stat(const char *path, vfs_stat_t *out)
+{
+    if (!vfs_mounted() || !path || !out) return -1;
+    if (!mounted_ops->stat) return -1;
+    return mounted_ops->stat(mounted_ctx, path, out);
+}
+
+int vfs_mkdir(const char *path)
+{
+    if (!vfs_mounted() || !path) return -1;
+    if (!mounted_ops->mkdir) return -1;
+    return mounted_ops->mkdir(mounted_ctx, path);
+}
+
+int vfs_rename(const char *oldpath, const char *newpath)
+{
+    if (!vfs_mounted() || !oldpath || !newpath) return -1;
+    if (!mounted_ops->rename) return -1;
+    return mounted_ops->rename(mounted_ctx, oldpath, newpath);
+}
+
+int vfs_chdir(const char *path)
+{
+    if (!path) return -1;
+
+    if (path[0] == '/' && path[1] == '\0') {
+        vfs_cwd[0] = '/'; vfs_cwd[1] = '\0';
+        return 0;
+    }
+
+    /* Validate the directory exists if the driver supports stat. */
+    if (vfs_mounted() && mounted_ops->stat) {
+        vfs_stat_t st;
+        if (mounted_ops->stat(mounted_ctx, path, &st) != 0) return -1;
+        if (st.type != VFS_TYPE_DIR) return -1;
+    }
+
+    uint32_t i = 0;
+    while (i < VFS_PATH_MAX - 1 && path[i]) {
+        vfs_cwd[i] = path[i];
+        i++;
+    }
+    vfs_cwd[i] = '\0';
+    return 0;
+}
+
+int vfs_getcwd(char *buf, uint32_t len)
+{
+    if (!buf || len == 0) return -1;
+    uint32_t i = 0;
+    while (i < len - 1 && vfs_cwd[i]) { buf[i] = vfs_cwd[i]; i++; }
+    buf[i] = '\0';
+    return 0;
 }
 
 int vfs_pipe(int fds[2])

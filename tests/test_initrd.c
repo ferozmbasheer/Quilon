@@ -350,7 +350,7 @@ static void test_readdir_first(void)
     initrd_mount(&ctx, img, sz);
 
     vfs_dirent_t ent;
-    int r = initrd_vfs_ops.readdir(&ctx, 0, &ent);
+    int r = initrd_vfs_ops.readdir(&ctx, "/", 0, &ent);
     ASSERT_EQ(r, 0, "readdir[0] returns 0");
     ASSERT_STR_EQ(ent.name, "ALPHA.TXT", "readdir[0] name is ALPHA.TXT");
     ASSERT_EQ((int)ent.size, 1, "readdir[0] size is 1");
@@ -368,7 +368,7 @@ static void test_readdir_second(void)
     initrd_mount(&ctx, img, sz);
 
     vfs_dirent_t ent;
-    int r = initrd_vfs_ops.readdir(&ctx, 1, &ent);
+    int r = initrd_vfs_ops.readdir(&ctx, "/", 1, &ent);
     ASSERT_EQ(r, 0, "readdir[1] returns 0");
     ASSERT_STR_EQ(ent.name, "BETA.TXT", "readdir[1] name is BETA.TXT");
 }
@@ -384,7 +384,7 @@ static void test_readdir_past_end(void)
     initrd_mount(&ctx, img, sz);
 
     vfs_dirent_t ent;
-    int r = initrd_vfs_ops.readdir(&ctx, 1, &ent);
+    int r = initrd_vfs_ops.readdir(&ctx, "/", 1, &ent);
     ASSERT_EQ(r, -1, "readdir past last entry returns -1");
 }
 

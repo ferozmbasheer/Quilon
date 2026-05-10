@@ -58,8 +58,10 @@ static int initrd_read(void *ctx, vfs_node_t *node, uint32_t offset,
     return (int)size;
 }
 
-static int initrd_readdir(void *ctx, uint32_t index, vfs_dirent_t *out)
+static int initrd_readdir(void *ctx, const char *path, uint32_t index,
+                           vfs_dirent_t *out)
 {
+    (void)path;   /* initrd is a flat filesystem — path is always "/" */
     initrd_ctx_t *rd = (initrd_ctx_t *)ctx;
     if (index >= rd->file_count) return -1;
 

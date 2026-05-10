@@ -174,7 +174,7 @@ static void shell_cmd_write_file(const char *args)
 static void shell_cmd_rm(const char *path)
 {
     if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
-    if (path[0] == '\0') { printf("Usage: rm <file>\r\n"); return; }
+    if (path[0] == '\0') { printf("Usage: rm <file|dir>\r\n"); return; }
     if (vfs_remove(path) == 0)
         printf("Removed '%s'\r\n", path);
     else
@@ -322,7 +322,7 @@ static void shell_cmd_initrd(void)
     /* List all entries via readdir. */
     vfs_dirent_t ent;
     uint32_t idx = 0;
-    while (initrd_vfs_ops.readdir(&ctx, idx, &ent) == 0) {
+    while (initrd_vfs_ops.readdir(&ctx, "/", idx, &ent) == 0) {
         printf("   [%d] %s  (%d bytes)\r\n", (int)idx,
                ent.name, (int)ent.size);
         idx++;
@@ -803,6 +803,69 @@ static void shell_cmd_ansitest(void)
     printf("=== done ===\r\n");
 }
 
+/* ── Section 12.1 shell commands ──────────────────────────────────────────── */
+
+static void shell_cmd_stat(const char *path)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+    if (path[0] == '\0') { printf("Usage: stat <file>\r\n"); return; }
+    vfs_stat_t st;
+    if (vfs_stat(path, &st) != 0) {
+        printf("stat: %s: not found\r\n", path);
+        return;
+    }
+    printf("%s: %s, %d bytes\r\n", path,
+           st.type == VFS_TYPE_DIR ? "directory" : "regular file",
+           (int)st.size);
+}
+
+static void shell_cmd_pwd(void)
+{
+    char buf[VFS_PATH_MAX];
+    if (vfs_getcwd(buf, sizeof(buf)) == 0)
+        printf("%s\r\n", buf);
+    else
+        printf("pwd: error\r\n");
+}
+
+static void shell_cmd_cd(const char *path)
+{
+    if (path[0] == '\0') { printf("Usage: cd <path>\r\n"); return; }
+    if (vfs_chdir(path) != 0)
+        printf("cd: %s: no such directory\r\n", path);
+}
+
+static void shell_cmd_mkdir(const char *path)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+    if (path[0] == '\0') { printf("Usage: mkdir <dir>\r\n"); return; }
+    if (vfs_mkdir(path) == 0)
+        printf("mkdir: created '%s'\r\n", path);
+    else
+        printf("mkdir: '%s': already exists or disk full\r\n", path);
+}
+
+static void shell_cmd_rename(const char *args)
+{
+    if (!vfs_mounted()) { printf("No filesystem mounted.\r\n"); return; }
+    const char *p = args;
+    while (*p && *p != ' ') p++;
+    if (*p == '\0' || *(p + 1) == '\0') {
+        printf("Usage: rename <old> <new>\r\n"); return;
+    }
+    char oldname[VFS_PATH_MAX];
+    int len = (int)(p - args);
+    if (len >= VFS_PATH_MAX) len = VFS_PATH_MAX - 1;
+    int i;
+    for (i = 0; i < len; i++) oldname[i] = args[i];
+    oldname[i] = '\0';
+    const char *newname = p + 1;
+    if (vfs_rename(oldname, newname) == 0)
+        printf("rename: '%s' -> '%s'\r\n", oldname, newname);
+    else
+        printf("rename: '%s': not found or error\r\n", oldname);
+}
+
 static void shell_cmd_vga(void)
 {
     if (!vbe_active()) {
@@ -822,12 +885,17 @@ static void shell_execute(const char *cmd) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, cow, ps, ls,\r\n");
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
-        printf("          rm <file>, fstest, pipetest, initrd, pci,\r\n");
+        printf("          rm <file|dir>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
         printf("          dhcp, ping <ip>, arp, tcpip, vga\r\n");
         printf("          smp                    - SMP CPU status (section 10.5)\r\n");
         printf("          ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
         printf("          psf                    - PSF2 font loader demo  (section 11.2)\r\n");
+        printf("          stat <file>            - file metadata (section 12.1)\r\n");
+        printf("          pwd                    - print working directory (section 12.1)\r\n");
+        printf("          cd <path>              - change directory        (section 12.1)\r\n");
+        printf("          mkdir <dir>            - create directory        (section 12.1)\r\n");
+        printf("          rename <old> <new>     - rename file/dir         (section 12.1)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -907,6 +975,16 @@ static void shell_execute(const char *cmd) {
         shell_cmd_vga();
     } else if (strcmp(cmd, "smp") == 0) {
         shell_cmd_smp();
+    } else if (strncmp(cmd, "stat ", 5) == 0) {
+        shell_cmd_stat(cmd + 5);
+    } else if (strcmp(cmd, "pwd") == 0) {
+        shell_cmd_pwd();
+    } else if (strncmp(cmd, "cd ", 3) == 0) {
+        shell_cmd_cd(cmd + 3);
+    } else if (strncmp(cmd, "mkdir ", 6) == 0) {
+        shell_cmd_mkdir(cmd + 6);
+    } else if (strncmp(cmd, "rename ", 7) == 0) {
+        shell_cmd_rename(cmd + 7);
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

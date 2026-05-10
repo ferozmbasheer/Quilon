@@ -42,6 +42,12 @@
 #define SYS_NET_DHCP   23  /* net_dhcp() → 0=ok, -1=timeout               */
 #define SYS_NET_GETIP  24  /* net_getip() → host-order IP (0 if not set)  */
 #define SYS_VBE_INFO   25  /* vbe_info_u(uint32_t out[3]) → 1=active, 0=text */
+#define SYS_STAT    26  /* stat(path, stat_t*) → 0 or -1                   */
+#define SYS_MKDIR   27  /* mkdir(path) → 0 or -1                            */
+#define SYS_CHDIR   28  /* chdir(path) → 0 or -1                            */
+#define SYS_GETCWD  29  /* getcwd(buf, len) → 0 or -1                       */
+#define SYS_LSEEK   30  /* lseek(fd, offset, whence) → new position or -1  */
+#define SYS_RENAME  31  /* rename(oldpath, newpath) → 0 or -1               */
 
 /* ── Well-known file descriptors ──────────────────────────────────────── */
 #define STDIN_FILENO  0
@@ -101,5 +107,21 @@ unsigned int net_getip(void);           /* current IPv4 addr (0 if not set)    *
 /* Fills out[0]=width, out[1]=height, out[2]=bpp.
  * Returns 1 if VBE is active, 0 if in text mode.                             */
 int vbe_info_u(unsigned int out[3]);
+
+/* ── File metadata & directory ops (section 12.1) ─────────────────────────── */
+
+#define SEEK_SET  0   /* seek from start of file    */
+#define SEEK_CUR  1   /* seek from current position */
+#define SEEK_END  2   /* seek from end of file      */
+
+#include <sys/stat.h>
+
+int   lseek(int fd, int offset, int whence);  /* SYS_LSEEK */
+int   stat(const char *path, stat_t *out);    /* SYS_STAT  */
+int   mkdir(const char *path);                /* SYS_MKDIR */
+int   chdir(const char *path);                /* SYS_CHDIR */
+char *getcwd(char *buf, unsigned int len);    /* SYS_GETCWD → buf or NULL */
+int   rename(const char *oldpath,
+             const char *newpath);            /* SYS_RENAME */
 
 #endif /* _UNISTD_H */
