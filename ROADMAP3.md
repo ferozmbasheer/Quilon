@@ -16,9 +16,9 @@ feature-complete hobby kernel. Here is what we now have:
 - VBE/VESA 32 bpp linear framebuffer with a bitmap-font text renderer
 
 The theme of this roadmap is **turning a working OS into a usable one**: a
-real terminal, POSIX-compatible I/O, a socket API user programs can use, more
-hardware support, and the ability to run (and eventually build) real programs
-inside Quilon.
+real terminal, POSIX-compatible I/O, a graphical desktop, a socket API user
+programs can use, more hardware support, and the ability to run (and eventually
+build) real programs inside Quilon.
 
 ---
 
@@ -34,20 +34,27 @@ inside Quilon.
     - 12.2 Blocking I/O — Sleep/Wakeup Instead of Spin-Wait
     - 12.3 Kernel Threads (clone)
 
-13. [BSD Socket API for User Space](#13-bsd-socket-api-for-user-space)
-    - 13.1 Socket System Calls
-    - 13.2 DNS Resolver
-    - 13.3 HTTP Demo Utility
+13. [PS/2 Mouse Driver](#13-ps2-mouse-driver)
 
-14. [More Device Drivers](#14-more-device-drivers)
-    - 14.1 PS/2 Mouse Driver
-    - 14.2 ATA Bus Master DMA
-    - 14.3 Ext2 Filesystem
+14. [Graphical Shell & Desktop Environment](#14-graphical-shell--desktop-environment)
+    - 14.1 2D Graphics Library
+    - 14.2 Window Manager & Compositor
+    - 14.3 Graphical Terminal
+    - 14.4 Simple GUI Apps
 
-15. [Porting & Self-Hosting](#15-porting--self-hosting)
-    - 15.1 Porting Lua
-    - 15.2 Porting a Text Editor
-    - 15.3 Self-Hosting: Compiling on Quilon
+15. [BSD Socket API for User Space](#15-bsd-socket-api-for-user-space)
+    - 15.1 Socket System Calls
+    - 15.2 DNS Resolver
+    - 15.3 HTTP Demo Utility
+
+16. [More Device Drivers](#16-more-device-drivers)
+    - 16.1 ATA Bus Master DMA
+    - 16.2 Ext2 Filesystem
+
+17. [Porting & Self-Hosting](#17-porting--self-hosting)
+    - 17.1 Porting Lua
+    - 17.2 Porting a Text Editor
+    - 17.3 Self-Hosting: Compiling on Quilon
 
 ---
 
@@ -64,7 +71,7 @@ inside Quilon.
 | User libc | `user/libc/` | ✓ Partial — missing stat, threads |
 | FAT16 R/W, VFS, pipes | `fat16.c`, `vfs.c`, `pipe.c` | ✓ Complete |
 | TCP/IP stack | `net.c`, `rtl8139.c` | ✓ Partial — no user-space sockets |
-| VBE framebuffer | `vbe.c` | ✓ Partial — no ANSI codes, no double-buffer |
+| VBE framebuffer | `vbe.c` | ✓ Complete — ANSI codes, PSF2 font, double-buffer |
 
 ---
 
@@ -391,158 +398,7 @@ With `clone` working, `user/libc/pthread.c` can wrap it to provide
 
 ---
 
-## 13. BSD Socket API for User Space
-
-### 13.1 Socket System Calls
-
-**Why it matters:** Quilon currently has `SYS_NET_SEND` and `SYS_NET_RECV` for
-raw Ethernet frames — these are too low-level for user programs. The BSD socket
-API (`socket`, `bind`, `connect`, `send`, `recv`, `close`) is what every network
-program expects.
-
-**New syscalls:**
-
-```c
-/* syscall.h */
-#define SYS_SOCKET   33  /* socket(domain, type, proto) → fd or -1 */
-#define SYS_BIND     34  /* bind(fd, port) → 0 or -1               */
-#define SYS_CONNECT  35  /* connect(fd, ip, port) → 0 or -1        */
-#define SYS_SEND     36  /* send(fd, buf, len) → bytes or -1        */
-#define SYS_RECV     37  /* recv(fd, buf, len) → bytes or -1        */
-#define SYS_LISTEN   38  /* listen(fd) → 0 or -1                    */
-#define SYS_ACCEPT   39  /* accept(fd) → new fd or -1               */
-
-/* socket domains */
-#define AF_INET    2
-
-/* socket types */
-#define SOCK_STREAM  1   /* TCP */
-#define SOCK_DGRAM   2   /* UDP */
-```
-
-**Kernel side:** A `socket_t` object lives in the VFS `vfs_node_t` (the fd
-table already handles close/read/write generically). `SYS_SOCKET` allocates a
-`socket_t`, creates a VFS node for it, and returns an fd. `SYS_CONNECT` calls
-`net_tcp_connect()` (which you will add to `net.c`). `SYS_RECV` on a TCP socket
-calls `net_tcp_recv()` and sleeps on a wait queue if no data is ready.
-
-**User-space side** (`user/libc/include/sys/socket.h`):
-
-```c
-int socket(int domain, int type, int protocol);
-int bind(int fd, uint32_t ip, uint16_t port);
-int connect(int fd, uint32_t ip, uint16_t port);
-int send(int fd, const void *buf, int len);
-int recv(int fd, void *buf, int len);
-int listen(int fd);
-int accept(int fd);
-```
-
-Each function is a thin `int $0x80` wrapper — the same pattern as `write()` in
-`user/libc/syscall.S`.
-
-> **Learning note:** Sockets look like files to user programs because the VFS
-> abstracts them behind `read`/`write`/`close`. The kernel's fd table already
-> stores per-fd function pointers (`vfs_ops_t`); a socket just provides its own
-> implementation of those ops.
-
----
-
-### 13.2 DNS Resolver
-
-**Why it matters:** Every networked program uses hostnames, not raw IP addresses.
-A stub resolver translates `"quilon.local"` → `192.168.1.1` by sending a UDP
-query to a DNS server.
-
-DNS is a binary protocol over UDP port 53. A minimal resolver handles only type
-A queries (IPv4 addresses) and ignores everything else.
-
-```c
-/* kernel/net.c — add: */
-int net_dns_lookup(const char *hostname, uint32_t dns_server_ip,
-                   uint32_t *out_ip);
-```
-
-**Wire format (minimal):** A DNS query is a 12-byte header followed by the
-encoded hostname and a 4-byte type/class trailer. The reply is the same
-structure with an answer section appended.
-
-```c
-typedef struct {
-    uint16_t id;
-    uint16_t flags;      /* 0x0100 = standard query, recursion desired */
-    uint16_t qdcount;    /* number of questions (1) */
-    uint16_t ancount;    /* number of answers in reply */
-    uint16_t nscount;
-    uint16_t arcount;
-} __attribute__((packed)) dns_hdr_t;
-```
-
-The hostname `"api.example.com"` encodes as
-`\x03api\x07example\x03com\x00`. Parse the response's answer section for an
-`A` record (type 1, class 1) and read the 4-byte IP.
-
-With DNS working, add `SYS_GETADDRINFO` (or implement it in user-space libc
-using `SYS_NET_SEND`/`SYS_NET_RECV` directly).
-
----
-
-### 13.3 HTTP Demo Utility
-
-**Why it matters:** It is a concrete, testable milestone: `wget http://...` or
-`curl http://...` running on Quilon and printing a response is something you can
-demo, and it exercises everything in sections 13.1 and 13.2.
-
-A minimal HTTP/1.0 GET request is four lines:
-
-```
-GET /path HTTP/1.0\r\n
-Host: example.com\r\n
-\r\n
-```
-
-**User-space implementation** (`user/wget/main.c`):
-
-```c
-#include <sys/socket.h>
-#include <stdio.h>
-#include <string.h>
-
-int main(int argc, char *argv[]) {
-    /* 1. DNS lookup */
-    uint32_t ip;
-    if (dns_resolve(argv[1], &ip) != 0) { puts("DNS failed"); return 1; }
-
-    /* 2. TCP connect to port 80 */
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (connect(fd, ip, 80) != 0) { puts("connect failed"); return 1; }
-
-    /* 3. Send request */
-    char req[256];
-    snprintf(req, sizeof(req), "GET / HTTP/1.0\r\nHost: %s\r\n\r\n", argv[1]);
-    send(fd, req, strlen(req));
-
-    /* 4. Print response */
-    char buf[512];
-    int n;
-    while ((n = recv(fd, buf, sizeof(buf))) > 0)
-        write(1, buf, n);
-
-    close(fd);
-    return 0;
-}
-```
-
-> **Learning note:** HTTP/1.0 is the right target — no persistent connections,
-> no chunked transfer encoding, no header compression. The server sends headers,
-> a blank line, then the body, then closes the connection. This simplicity means
-> `recv` in a loop is all you need.
-
----
-
-## 14. More Device Drivers
-
-### 14.1 PS/2 Mouse Driver
+## 13. PS/2 Mouse Driver
 
 **Why it matters:** A graphical environment needs a pointing device. QEMU
 emulates a PS/2 mouse on IRQ12 (the second PS/2 port), and the PS/2 controller
@@ -608,7 +464,625 @@ written by the IRQ handler.
 
 ---
 
-### 14.2 ATA Bus Master DMA
+## 14. Graphical Shell & Desktop Environment
+
+**Prerequisites:** sections 11.2 (PSF2 font), 11.3 (double-buffered
+framebuffer), 12.2 (blocking I/O), and 13 (PS/2 mouse). All four must be
+working before starting this section — together they give you pixel-accurate
+text, a tear-free display, a sleeping event loop, and a pointing device.
+
+The goal is a minimal but usable graphical environment: a desktop background, a
+windowed terminal that runs the existing ring-3 shell, and a handful of small
+apps. The design stays as simple as possible — no compositor protocol, no GPU
+acceleration — so every line of it is understandable.
+
+---
+
+### 14.1 2D Graphics Library
+
+**Why it matters:** Drawing directly into `shadow_buf` in every application leads
+to duplicated coordinate arithmetic, no clipping, and nothing to reuse. A thin
+`libgfx` built on top of `vbe.c` gives all user programs the same drawing
+primitives and makes the window manager straightforward to write.
+
+**Kernel additions — three new syscalls:**
+
+```c
+/* syscall.h */
+#define SYS_GFX_INFO   40  /* gfx_info(gfx_info_t *out) → 0 or -1 */
+#define SYS_GFX_MAP    41  /* gfx_map() → user-space VA of shadow buffer, or -1 */
+#define SYS_GFX_FLUSH  42  /* gfx_flush() → 0; copies shadow buf → hw framebuffer */
+```
+
+`SYS_GFX_MAP` maps the kernel's shadow buffer read-write into the calling
+process's address space so that the window manager can write pixels without a
+syscall per pixel. Only one process should call `SYS_GFX_MAP` (the compositor);
+all other apps draw into their own off-screen buffers and hand them to the
+compositor via shared memory or a pipe.
+
+```c
+/* include/kernel/gfx.h — passed from kernel to user via SYS_GFX_INFO */
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;      /* bytes per scanline */
+    uint32_t bpp;        /* bits per pixel — always 32 for VBE */
+} gfx_info_t;
+```
+
+**User-space library — `user/libgfx/`:**
+
+```c
+/* user/libgfx/include/gfx.h */
+
+typedef struct { uint32_t *pixels; int w, h, pitch; } canvas_t;
+typedef struct { int x, y, w, h; }                    rect_t;
+typedef uint32_t                                       color_t;
+
+#define GFX_RGB(r,g,b) (((r)<<16)|((g)<<8)|(b))
+#define GFX_RGBA(r,g,b,a) (((a)<<24)|((r)<<16)|((g)<<8)|(b))
+
+/* Create an off-screen canvas backed by malloc'd memory. */
+canvas_t *canvas_create(int w, int h);
+void      canvas_free(canvas_t *c);
+
+/* Primitives — all respect the clip rectangle. */
+void gfx_fill(canvas_t *c, color_t col);
+void gfx_fill_rect(canvas_t *c, rect_t r, color_t col);
+void gfx_draw_rect(canvas_t *c, rect_t r, color_t col);
+void gfx_blit(canvas_t *dst, int dx, int dy,
+              const canvas_t *src, rect_t src_rect);
+void gfx_draw_text(canvas_t *c, int x, int y,
+                   const char *str, color_t fg, color_t bg);
+
+/* Clip rectangle — drawing outside it is silently discarded. */
+void gfx_set_clip(canvas_t *c, rect_t clip);
+void gfx_clear_clip(canvas_t *c);
+```
+
+**Implementation of `gfx_fill_rect`** (the foundation of everything else):
+
+```c
+/* user/libgfx/gfx.c */
+void gfx_fill_rect(canvas_t *c, rect_t r, color_t col)
+{
+    /* Intersect r with the clip rect if one is active. */
+    int x0 = r.x < 0 ? 0 : r.x;
+    int y0 = r.y < 0 ? 0 : r.y;
+    int x1 = r.x + r.w > c->w ? c->w : r.x + r.w;
+    int y1 = r.y + r.h > c->h ? c->h : r.y + r.h;
+    if (x0 >= x1 || y0 >= y1) return;
+
+    for (int y = y0; y < y1; y++) {
+        uint32_t *row = c->pixels + y * c->pitch + x0;
+        for (int x = x0; x < x1; x++)
+            *row++ = col;
+    }
+}
+```
+
+`gfx_blit` is equally simple — a double loop that copies a rectangle from one
+canvas to another, respecting both clip rects.
+
+`gfx_draw_text` calls the PSF2 renderer from section 11.2 (exposed to user space
+either via a syscall or by mapping the font glyph data read-only into user space).
+
+> **Learning note:** The clip rectangle turns rendering into a safe operation:
+> even if a window thinks it is at (−10, −10) with size 100×100, no pixel outside
+> the visible screen is ever written. This makes the window manager trivially safe
+> to compose — it sets each window's clip to its on-screen bounds before blitting.
+
+---
+
+### 14.2 Window Manager & Compositor
+
+**Why it matters:** A window manager is the process that owns the screen. It
+decides which window is in front, draws decorations (title bars, close buttons),
+routes mouse clicks to the right window, and composites everything into the final
+frame before flushing.
+
+Quilon's WM is a single-process compositor. It uses `SYS_GFX_MAP` to get
+exclusive write access to the shadow framebuffer, then composites all registered
+windows on every frame.
+
+**Window descriptor:**
+
+```c
+/* user/wm/wm.h */
+#define WM_MAX_WINDOWS  16
+#define WM_TITLE_LEN    32
+#define TITLEBAR_H      20   /* pixels */
+
+typedef struct {
+    int        id;
+    rect_t     bounds;       /* position and size on screen, excluding title bar */
+    char       title[WM_TITLE_LEN];
+    canvas_t  *backbuf;      /* the app draws here */
+    int        focused;
+    int        active;
+} window_t;
+```
+
+**Compositor loop:**
+
+```c
+/* user/wm/wm.c */
+
+static canvas_t screen;      /* wraps the kernel shadow buffer via SYS_GFX_MAP */
+static window_t windows[WM_MAX_WINDOWS];
+static int      num_windows;
+
+void wm_composite(void)
+{
+    /* 1. Clear the desktop with a background colour. */
+    gfx_fill(&screen, GFX_RGB(30, 30, 60));   /* dark blue desktop */
+
+    /* 2. Composite windows back-to-front (painter's algorithm). */
+    for (int i = 0; i < num_windows; i++) {
+        window_t *w = &windows[i];
+        if (!w->active) continue;
+
+        /* Draw title bar. */
+        rect_t tbar = { w->bounds.x, w->bounds.y - TITLEBAR_H,
+                        w->bounds.w, TITLEBAR_H };
+        color_t tbar_col = w->focused ? GFX_RGB(80,80,200) : GFX_RGB(60,60,60);
+        gfx_fill_rect(&screen, tbar, tbar_col);
+        gfx_draw_text(&screen, tbar.x + 4, tbar.y + 4, w->title,
+                      GFX_RGB(255,255,255), tbar_col);
+
+        /* Close button — red square in top-right corner. */
+        rect_t close_btn = { tbar.x + tbar.w - 18, tbar.y + 2, 16, 16 };
+        gfx_fill_rect(&screen, close_btn, GFX_RGB(200,40,40));
+
+        /* Blit the app's back-buffer into its content area. */
+        gfx_set_clip(&screen, w->bounds);
+        gfx_blit(&screen, w->bounds.x, w->bounds.y,
+                 w->backbuf, (rect_t){0, 0, w->backbuf->w, w->backbuf->h});
+        gfx_clear_clip(&screen);
+
+        /* Window border. */
+        gfx_draw_rect(&screen, (rect_t){tbar.x, tbar.y,
+                                        tbar.w, tbar.h + w->bounds.h},
+                      GFX_RGB(100,100,100));
+    }
+
+    /* 3. Draw the mouse cursor. */
+    wm_draw_cursor();
+
+    /* 4. Flush shadow buffer to hardware framebuffer. */
+    syscall(SYS_GFX_FLUSH, 0, 0, 0);
+}
+```
+
+**Mouse hit-testing** (called in the main event loop when a click arrives):
+
+```c
+static int wm_hittest(int mx, int my)
+{
+    /* Iterate windows front-to-back; first hit wins. */
+    for (int i = num_windows - 1; i >= 0; i--) {
+        window_t *w = &windows[i];
+        if (!w->active) continue;
+        rect_t full = { w->bounds.x, w->bounds.y - TITLEBAR_H,
+                        w->bounds.w, w->bounds.h + TITLEBAR_H };
+        if (mx >= full.x && mx < full.x + full.w &&
+            my >= full.y && my < full.y + full.h)
+            return i;
+    }
+    return -1;
+}
+```
+
+**Event loop structure:**
+
+```c
+void wm_run(void)
+{
+    int mouse_fd = open("/dev/mouse", O_RDONLY);
+    int kbd_fd   = open("/dev/kbd",   O_RDONLY);
+
+    while (1) {
+        /* Block until a mouse or keyboard event arrives (uses 12.2 wait queues). */
+        mouse_event_t me;
+        if (read(mouse_fd, &me, sizeof(me)) == sizeof(me))
+            wm_handle_mouse(&me);
+
+        kbd_event_t ke;
+        if (read(kbd_fd, &ke, sizeof(ke)) == sizeof(ke))
+            wm_handle_key(&ke);
+
+        /* Redraw apps that marked their back-buffer dirty. */
+        wm_composite();
+    }
+}
+```
+
+**IPC between WM and apps:** The simplest approach is a named pipe per window.
+When an app calls `wm_open_window(title, w, h)`, the WM creates a window entry
+and returns a file descriptor to a shared-memory region for the back-buffer. Apps
+write pixels directly into that region. A second "event pipe" carries keyboard
+and mouse events from the WM to the app. This avoids inventing a new IPC
+mechanism: pipes and shared memory are already in the kernel.
+
+> **Learning note:** The painter's algorithm (drawing windows back-to-front) is
+> the simplest correct compositing strategy. It overdraws every pixel on every
+> frame, but at 800×600×32 bpp the shadow buffer is only 1.83 MiB — a single
+> `memcpy` to flush is ~200 µs at 10 GB/s, well within a 60 Hz frame budget.
+> The 1980s Nintendo hardware used the same approach (background, then sprites,
+> front-to-back). Damage tracking (only redrawing changed regions) is an
+> optimization you can add later.
+
+---
+
+### 14.3 Graphical Terminal
+
+**Why it matters:** The ring-3 shell currently writes to the text-mode VGA
+buffer. Replacing that with a window managed by the compositor gives you a
+proper terminal application — one you can resize, move, and run alongside other
+apps.
+
+The graphical terminal (`user/gterm/`) is itself a user-space program. It:
+1. Registers a window with the WM.
+2. Forks a child running the existing `shell.elf`.
+3. Redirects the child's `stdin`/`stdout`/`stderr` to a pair of pipes.
+4. Reads the child's output, interprets ANSI sequences, and renders text into its
+   back-buffer using `libgfx`.
+5. Forwards keyboard events from the WM into the child's stdin.
+
+```c
+/* user/gterm/main.c — skeleton */
+
+#include <gfx.h>
+#include <wm_client.h>
+#include <stdio.h>
+#include <unistd.h>
+
+#define COLS  80
+#define ROWS  24
+#define CELL_W  8
+#define CELL_H 16
+
+static char  cell_char  [ROWS][COLS];
+static color_t cell_fg  [ROWS][COLS];
+static color_t cell_bg  [ROWS][COLS];
+static int   cursor_row, cursor_col;
+static canvas_t *backbuf;
+
+/* ANSI state machine (mirrors the kernel tty.c machine but runs in user space) */
+static void gterm_write(const char *data, int len) { /* ... */ }
+
+static void gterm_render(void)
+{
+    gfx_fill(backbuf, GFX_RGB(0, 0, 0));
+    for (int r = 0; r < ROWS; r++)
+    for (int c = 0; c < COLS; c++) {
+        char ch = cell_char[r][c] ? cell_char[r][c] : ' ';
+        gfx_draw_text(backbuf, c * CELL_W, r * CELL_H,
+                      (char[]){ch, 0}, cell_fg[r][c], cell_bg[r][c]);
+    }
+    /* Draw block cursor. */
+    gfx_fill_rect(backbuf,
+                  (rect_t){cursor_col*CELL_W, cursor_row*CELL_H, CELL_W, CELL_H},
+                  GFX_RGB(200, 200, 200));
+    wm_mark_dirty();
+}
+
+int main(void)
+{
+    int win = wm_open_window("Terminal", COLS*CELL_W, ROWS*CELL_H);
+    backbuf = wm_get_backbuf(win);
+
+    int to_shell[2], from_shell[2];
+    pipe(to_shell); pipe(from_shell);
+
+    if (fork() == 0) {
+        /* Child: rewire stdin/stdout/stderr to the pipes. */
+        dup2(to_shell[0],   0);
+        dup2(from_shell[1], 1);
+        dup2(from_shell[1], 2);
+        close(to_shell[0]); close(to_shell[1]);
+        close(from_shell[0]); close(from_shell[1]);
+        exec("/shell.elf");
+    }
+    close(to_shell[0]); close(from_shell[1]);
+
+    char buf[256];
+    while (1) {
+        /* Read shell output → render. */
+        int n = read(from_shell[0], buf, sizeof(buf));
+        if (n > 0) { gterm_write(buf, n); gterm_render(); }
+
+        /* Read WM keyboard events → forward to shell. */
+        kbd_event_t ke;
+        if (wm_read_key(win, &ke))
+            write(to_shell[1], &ke.ascii, 1);
+    }
+}
+```
+
+The ANSI state machine in `gterm_write` is identical in structure to the one
+described in section 11.1, but it updates the `cell_char`/`cell_fg`/`cell_bg`
+grid instead of writing to a kernel buffer. This separation keeps the terminal
+logic out of the kernel entirely.
+
+**Scrollback:** Add a ring buffer of `SCROLLBACK` rows above the visible grid.
+When the terminal scrolls up (a new line arrives at the bottom), copy row 0 into
+the scrollback buffer and shift the grid up by one. Mouse wheel events from the
+WM adjust a `scroll_offset` and re-render.
+
+> **Learning note:** Separating the terminal *emulator* (ANSI state machine +
+> cell grid) from the terminal *renderer* (drawing cells into a canvas) is the
+> same split used by every real terminal emulator (VTE, kitty, alacritty). The
+> emulator is pure logic with no rendering knowledge; the renderer is pure drawing
+> with no ANSI knowledge. This makes both independently testable.
+
+---
+
+### 14.4 Simple GUI Apps
+
+With the graphics library and WM in place, small apps are straightforward to
+write. Each registers a window, draws into its back-buffer, and handles events.
+
+---
+
+#### Clock
+
+The simplest possible app. It calls `SYS_GETTICKS` every second, converts to
+HH:MM:SS, and draws the string centred in a small window.
+
+```c
+/* user/clock/main.c */
+int main(void)
+{
+    int win = wm_open_window("Clock", 160, 40);
+    canvas_t *buf = wm_get_backbuf(win);
+
+    while (1) {
+        uint32_t ticks = getticks();   /* seconds since boot */
+        int h = (ticks / 3600) % 24, m = (ticks / 60) % 60, s = ticks % 60;
+        char str[9];
+        snprintf(str, sizeof(str), "%02d:%02d:%02d", h, m, s);
+        gfx_fill(buf, GFX_RGB(10, 10, 10));
+        gfx_draw_text(buf, 40, 12, str, GFX_RGB(0,255,128), GFX_RGB(10,10,10));
+        wm_mark_dirty();
+        sleep(1);
+    }
+}
+```
+
+---
+
+#### File Browser
+
+A scrollable list of the current directory. Clicking a directory entry navigates
+into it; clicking a file sends its path to a viewer app.
+
+```c
+/* user/filebr/main.c — key structs */
+
+#define LIST_ITEM_H  16
+#define MAX_ENTRIES  64
+
+static char entries[MAX_ENTRIES][256];
+static int  is_dir[MAX_ENTRIES];
+static int  num_entries, scroll_top, selected;
+
+static void fb_render(canvas_t *buf, int w, int h)
+{
+    gfx_fill(buf, GFX_RGB(20, 20, 20));
+    for (int i = scroll_top; i < num_entries; i++) {
+        int y = (i - scroll_top) * LIST_ITEM_H;
+        if (y + LIST_ITEM_H > h) break;
+        color_t bg = (i == selected) ? GFX_RGB(50,50,150) : GFX_RGB(20,20,20);
+        gfx_fill_rect(buf, (rect_t){0, y, w, LIST_ITEM_H}, bg);
+        color_t fg = is_dir[i] ? GFX_RGB(100,180,255) : GFX_RGB(220,220,220);
+        gfx_draw_text(buf, 4, y + 1, entries[i], fg, bg);
+    }
+}
+```
+
+Mouse click handling: convert Y coordinate to `(click_y / LIST_ITEM_H) +
+scroll_top` to find which entry was clicked. A double-click (two clicks within
+300 ms) on a directory calls `chdir` + re-reads the directory; on a file it
+launches the text viewer.
+
+---
+
+#### Text Viewer
+
+Opens a file, reads it into a buffer, and renders it one screen-height at a time.
+Mouse wheel or Page Up/Down adjust a line offset.
+
+```c
+/* user/textview/main.c — render loop */
+static void tv_render(canvas_t *buf, char **lines, int nlines,
+                      int scroll, int rows, int cols)
+{
+    gfx_fill(buf, GFX_RGB(15, 15, 15));
+    for (int r = 0; r < rows && scroll + r < nlines; r++) {
+        char line[256];
+        strncpy(line, lines[scroll + r], cols);
+        line[cols] = '\0';
+        gfx_draw_text(buf, 0, r * 16, line,
+                      GFX_RGB(200,200,200), GFX_RGB(15,15,15));
+    }
+}
+```
+
+**Suggested layout of `user/` after section 14:**
+
+```
+user/
+├── libgfx/         ← 2D graphics library (canvas, primitives, text)
+├── wm/             ← compositor (owns /dev/screen, dispatches events)
+├── wm_client/      ← thin client library for app ↔ WM IPC
+├── gterm/          ← graphical terminal (wraps shell.elf)
+├── clock/          ← digital clock app
+├── filebr/         ← file browser
+├── textview/       ← text file viewer
+└── shell/          ← existing ring-3 text shell (unchanged)
+```
+
+> **Learning note:** Every app in section 14 is a completely ordinary ring-3 user
+> program. None of them need kernel changes beyond the three syscalls added in
+> 14.1. This is the power of a clean user-space abstraction: once the kernel
+> exposes a framebuffer and flush, the entire desktop is user-space code. Writing
+> a new app is no different from writing any other Quilon program.
+
+---
+
+## 15. BSD Socket API for User Space
+
+### 15.1 Socket System Calls
+
+**Why it matters:** Quilon currently has `SYS_NET_SEND` and `SYS_NET_RECV` for
+raw Ethernet frames — these are too low-level for user programs. The BSD socket
+API (`socket`, `bind`, `connect`, `send`, `recv`, `close`) is what every network
+program expects.
+
+**New syscalls:**
+
+```c
+/* syscall.h */
+#define SYS_SOCKET   43  /* socket(domain, type, proto) → fd or -1 */
+#define SYS_BIND     44  /* bind(fd, port) → 0 or -1               */
+#define SYS_CONNECT  45  /* connect(fd, ip, port) → 0 or -1        */
+#define SYS_SEND     46  /* send(fd, buf, len) → bytes or -1        */
+#define SYS_RECV     47  /* recv(fd, buf, len) → bytes or -1        */
+#define SYS_LISTEN   48  /* listen(fd) → 0 or -1                    */
+#define SYS_ACCEPT   49  /* accept(fd) → new fd or -1               */
+
+/* socket domains */
+#define AF_INET    2
+
+/* socket types */
+#define SOCK_STREAM  1   /* TCP */
+#define SOCK_DGRAM   2   /* UDP */
+```
+
+**Kernel side:** A `socket_t` object lives in the VFS `vfs_node_t` (the fd
+table already handles close/read/write generically). `SYS_SOCKET` allocates a
+`socket_t`, creates a VFS node for it, and returns an fd. `SYS_CONNECT` calls
+`net_tcp_connect()` (which you will add to `net.c`). `SYS_RECV` on a TCP socket
+calls `net_tcp_recv()` and sleeps on a wait queue if no data is ready.
+
+**User-space side** (`user/libc/include/sys/socket.h`):
+
+```c
+int socket(int domain, int type, int protocol);
+int bind(int fd, uint32_t ip, uint16_t port);
+int connect(int fd, uint32_t ip, uint16_t port);
+int send(int fd, const void *buf, int len);
+int recv(int fd, void *buf, int len);
+int listen(int fd);
+int accept(int fd);
+```
+
+Each function is a thin `int $0x80` wrapper — the same pattern as `write()` in
+`user/libc/syscall.S`.
+
+> **Learning note:** Sockets look like files to user programs because the VFS
+> abstracts them behind `read`/`write`/`close`. The kernel's fd table already
+> stores per-fd function pointers (`vfs_ops_t`); a socket just provides its own
+> implementation of those ops.
+
+---
+
+### 15.2 DNS Resolver
+
+**Why it matters:** Every networked program uses hostnames, not raw IP addresses.
+A stub resolver translates `"quilon.local"` → `192.168.1.1` by sending a UDP
+query to a DNS server.
+
+DNS is a binary protocol over UDP port 53. A minimal resolver handles only type
+A queries (IPv4 addresses) and ignores everything else.
+
+```c
+/* kernel/net.c — add: */
+int net_dns_lookup(const char *hostname, uint32_t dns_server_ip,
+                   uint32_t *out_ip);
+```
+
+**Wire format (minimal):** A DNS query is a 12-byte header followed by the
+encoded hostname and a 4-byte type/class trailer. The reply is the same
+structure with an answer section appended.
+
+```c
+typedef struct {
+    uint16_t id;
+    uint16_t flags;      /* 0x0100 = standard query, recursion desired */
+    uint16_t qdcount;    /* number of questions (1) */
+    uint16_t ancount;    /* number of answers in reply */
+    uint16_t nscount;
+    uint16_t arcount;
+} __attribute__((packed)) dns_hdr_t;
+```
+
+The hostname `"api.example.com"` encodes as
+`\x03api\x07example\x03com\x00`. Parse the response's answer section for an
+`A` record (type 1, class 1) and read the 4-byte IP.
+
+With DNS working, add `SYS_GETADDRINFO` (or implement it in user-space libc
+using `SYS_NET_SEND`/`SYS_NET_RECV` directly).
+
+---
+
+### 15.3 HTTP Demo Utility
+
+**Why it matters:** It is a concrete, testable milestone: `wget http://...` or
+`curl http://...` running on Quilon and printing a response is something you can
+demo, and it exercises everything in sections 15.1 and 15.2.
+
+A minimal HTTP/1.0 GET request is four lines:
+
+```
+GET /path HTTP/1.0\r\n
+Host: example.com\r\n
+\r\n
+```
+
+**User-space implementation** (`user/wget/main.c`):
+
+```c
+#include <sys/socket.h>
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char *argv[]) {
+    /* 1. DNS lookup */
+    uint32_t ip;
+    if (dns_resolve(argv[1], &ip) != 0) { puts("DNS failed"); return 1; }
+
+    /* 2. TCP connect to port 80 */
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(fd, ip, 80) != 0) { puts("connect failed"); return 1; }
+
+    /* 3. Send request */
+    char req[256];
+    snprintf(req, sizeof(req), "GET / HTTP/1.0\r\nHost: %s\r\n\r\n", argv[1]);
+    send(fd, req, strlen(req));
+
+    /* 4. Print response */
+    char buf[512];
+    int n;
+    while ((n = recv(fd, buf, sizeof(buf))) > 0)
+        write(1, buf, n);
+
+    close(fd);
+    return 0;
+}
+```
+
+> **Learning note:** HTTP/1.0 is the right target — no persistent connections,
+> no chunked transfer encoding, no header compression. The server sends headers,
+> a blank line, then the body, then closes the connection. This simplicity means
+> `recv` in a loop is all you need.
+
+---
+
+## 16. More Device Drivers
+
+### 16.1 ATA Bus Master DMA
 
 **Why it matters:** The current ATA driver uses Programmed I/O (PIO): the CPU
 copies each 512-byte sector between the disk and memory one word at a time.
@@ -648,7 +1122,7 @@ void ata_dma_read(uint32_t lba, uint32_t count, void *buf)
 
 ---
 
-### 14.3 Ext2 Filesystem
+### 16.2 Ext2 Filesystem
 
 **Why it matters:** FAT16 has hard limits: 8.3 filenames, no permissions, no
 symbolic links, a maximum of 512 root directory entries. Ext2 (the classic Linux
@@ -689,9 +1163,9 @@ descriptor) follows the same pattern as FAT16 write but with more moving parts.
 
 ---
 
-## 15. Porting & Self-Hosting
+## 17. Porting & Self-Hosting
 
-### 15.1 Porting Lua
+### 17.1 Porting Lua
 
 **Why it matters:** Porting an existing program to Quilon is the acid test of
 POSIX compatibility. Lua 5.4 is a good first target: it is written in portable C,
@@ -719,7 +1193,7 @@ not support. Each stub either returns an error code or is a no-op.
 
 ---
 
-### 15.2 Porting a Text Editor
+### 17.2 Porting a Text Editor
 
 **Why it matters:** A text editor running inside Quilon closes the loop: you can
 write and edit files without leaving the OS. It also provides a real-world test
@@ -745,7 +1219,7 @@ buffering it.
 
 ---
 
-### 15.3 Self-Hosting: Compiling on Quilon
+### 17.3 Self-Hosting: Compiling on Quilon
 
 **Why it matters:** A self-hosting OS — one that can compile its own programs
 inside itself — is the classic milestone for a hobby OS project. Even a partial
@@ -787,11 +1261,14 @@ editing with the ported text editor, without ever leaving the virtual machine.
 | **Milestone 7 — Colour terminal** | 11.1 + 11.2 | ANSI colour output; ported tools look correct |
 | **Milestone 8 — Proper file I/O** | 12.1 | `cat`, `cp`, `ls -l` work from the ring-3 shell |
 | **Milestone 9 — Efficient scheduler** | 12.2 | CPU idles on `hlt` instead of spin-burning |
-| **Milestone 10 — Socket programs** | 13.1 + 13.2 + 13.3 | `wget` fetches a page over TCP from inside QEMU |
-| **Milestone 11 — Mouse & GUI foundation** | 11.3 + 14.1 | Cursor drawn on screen, moves with the mouse |
-| **Milestone 12 — Ext2** | 14.3 | Quilon boots from an ext2 disk image |
-| **Milestone 13 — Lua** | 15.1 | `exec lua.elf` at the shell prompt runs a Lua script |
-| **Milestone 14 — Self-hosting** | 15.2 + 15.3 | TinyCC compiles a C program inside Quilon |
+| **Milestone 10 — Mouse** | 13 | Cursor drawn on screen, moves with the mouse |
+| **Milestone 11 — Desktop** | 11.3 + 14.1 + 14.2 | Window manager composites windows; double-buffer eliminates tearing |
+| **Milestone 12 — Graphical terminal** | 14.3 | Shell runs inside a moveable terminal window |
+| **Milestone 13 — Apps** | 14.4 | Clock, file browser, and text viewer run alongside the terminal |
+| **Milestone 14 — Socket programs** | 15.1 + 15.2 + 15.3 | `wget` fetches a page over TCP from inside QEMU |
+| **Milestone 15 — Ext2** | 16.2 | Quilon boots from an ext2 disk image |
+| **Milestone 16 — Lua** | 17.1 | `exec lua.elf` at the shell prompt runs a Lua script |
+| **Milestone 17 — Self-hosting** | 17.2 + 17.3 | TinyCC compiles a C program inside Quilon |
 
 ---
 
@@ -802,6 +1279,9 @@ editing with the ported text editor, without ever leaving the virtual machine.
 | **VT100 / ANSI escape code reference** (vt100.net) | Complete escape sequence definitions. Start with the "Control Sequences" page. |
 | **PSF2 font format** (man 5 psfheader) | One page. The format is simpler than the man page makes it look. |
 | **Linux `clone(2)` man page** | Defines all the `CLONE_*` flags and their semantics. Quilon only needs `CLONE_VM`, `CLONE_FS`, `CLONE_FILES`. |
+| **serenityOS source** (github.com/SerenityOS/serenity) | A hobby OS with a full GUI written from scratch in C++. The LibGfx and WindowServer components are the clearest real-world reference for section 14's design. |
+| **Xlib protocol overview** (X.Org docs) | X11 client-server window model. Quilon's WM is far simpler, but reading the overview clarifies why Quilon's direct-mapped framebuffer design avoids a lot of complexity. |
+| **"Computer Graphics: Principles and Practice"** (Foley et al.) | Clipping, blitting, painter's algorithm, and compositing theory. Chapters 3 and 19 are directly relevant to libgfx. |
 | **RFC 1035** (DNS) | The DNS wire format. Section 3 (domain name encoding) and Section 4 (message format) are all you need. |
 | **ATA/ATAPI-6 specification** | Chapter 9 covers DMA and Bus Master operation. Free PDF from the T13 committee. |
 | **Ext2 OSDev Wiki** (wiki.osdev.org/Ext2) | Clear walk-through of every structure. More accessible than the original paper. |

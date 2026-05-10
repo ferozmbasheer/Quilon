@@ -119,6 +119,18 @@ void pmm_initialize(void *multiboot_info)
      * kernel_start/end are linked at high VA; subtract KERNEL_OFFSET for physical. */
     pmm_reserve_range((uint32_t)&kernel_start - KERNEL_OFFSET,
                       (uint32_t)&kernel_end - (uint32_t)&kernel_start);
+
+    /* Reserve Multiboot modules (e.g. the initrd image).
+     * Without this, pmm_alloc_page() hands out initrd pages to callers who
+     * then overwrite them — corrupting any zero-copy pointers (like the PSF
+     * font glyph data) that the kernel holds into the module.              */
+    if (mbi->flags & MULTIBOOT_FLAG_MODS) {
+        multiboot_module_t *mods = (multiboot_module_t *)(uintptr_t)mbi->mods_addr;
+        for (uint32_t i = 0; i < mbi->mods_count; i++) {
+            pmm_reserve_range(mods[i].mod_start,
+                              mods[i].mod_end - mods[i].mod_start);
+        }
+    }
 }
 
 void *pmm_alloc_page(void)
@@ -143,6 +155,42 @@ void *pmm_alloc_page(void)
 done:
     spinlock_release(&pmm_lock);
     return result;   /* NULL = out of memory */
+}
+
+/*
+ * pmm_alloc_page_above_4mib — allocate a page from physical RAM above 4 MiB.
+ *
+ * Shadow-buffer data pages and other large kernel buffers that are only ever
+ * accessed through virtual addresses (not via physical address directly) should
+ * use this variant so that the identity-mapped sub-4 MiB pages are kept in
+ * reserve for paging structures (page directories, page tables) which MUST be
+ * accessed through the identity map.
+ *
+ * Returns NULL only if no pages are available above 4 MiB.
+ */
+void *pmm_alloc_page_above_4mib(void)
+{
+    /* First word whose pages all start at or above 0x400000 (page 1024). */
+    static const uint32_t LOW_WORDS = (0x400000u / PAGE_SIZE) / 32u;  /* = 32 */
+
+    spinlock_acquire(&pmm_lock);
+    void *result = NULL;
+    for (uint32_t i = LOW_WORDS; i < BITMAP_WORDS; i++) {
+        if (bitmap[i] == 0xFFFFFFFFu) continue;
+        for (int bit = 0; bit < 32; bit++) {
+            uint32_t page = i * 32 + (uint32_t)bit;
+            if (!page_test(page)) {
+                page_set(page);
+                free_pages--;
+                refcount[page] = 1;
+                result = (void *)(uintptr_t)(page * PAGE_SIZE);
+                goto done;
+            }
+        }
+    }
+done:
+    spinlock_release(&pmm_lock);
+    return result;
 }
 
 void pmm_free_page(void *addr)

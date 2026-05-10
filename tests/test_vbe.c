@@ -15,6 +15,7 @@
 
 #include "framework.h"
 #include "../kernel/include/kernel/vbe.h"
+#include "../kernel/include/kernel/paging.h"
 
 /* ── Color constants ───────────────────────────────────────────────────────── */
 
@@ -172,6 +173,64 @@ static void test_glyph_printable_nonblank(void)
     ASSERT_NE(all_ok, 0, "every printable ASCII glyph (0x21-0x7E) is non-blank");
 }
 
+/* ── Double-buffer (section 11.3) ──────────────────────────────────────────── */
+
+static void test_shadow_vbase_pd_slot(void)
+{
+    /* VBE_SHADOW_VBASE must sit in PD[769], one slot above the kernel's
+     * 4-MiB window (PD[768] = KERNEL_PD_IDX).  If it were in PD[768] the
+     * shadow buffer would overlap the kernel heap at 0xC0000000-0xC03FFFFF. */
+    ASSERT_EQ((int)VIRT_PD_INDEX(VBE_SHADOW_VBASE), 769,
+              "VBE_SHADOW_VBASE maps to PD slot 769");
+    ASSERT_NE((int)VIRT_PD_INDEX(VBE_SHADOW_VBASE), (int)KERNEL_PD_IDX,
+              "VBE_SHADOW_VBASE is not in the kernel's PD slot (768)");
+}
+
+static void test_shadow_size_800x600x32(void)
+{
+    /* 800 x 600 @ 32 bpp = 1,920,000 bytes, ceiling to page boundary = 469 pages. */
+    uint32_t pitch  = 800u * 4u;
+    uint32_t height = 600u;
+    uint32_t bytes  = pitch * height;
+    uint32_t pages  = (bytes + (PAGE_SIZE - 1u)) / PAGE_SIZE;
+    ASSERT_EQ((int)bytes, 1920000, "800x600x32 framebuffer is 1,920,000 bytes");
+    ASSERT_EQ((int)pages, 469,     "800x600x32 shadow buffer needs 469 pages");
+}
+
+static void test_shadow_fits_in_pd769(void)
+{
+    /* PD[769] window is 4 MiB.  The 800x600x32 shadow (1.83 MiB) fits easily. */
+    uint32_t shadow_bytes = 800u * 4u * 600u;   /* 1,920,000 */
+    uint32_t window_bytes = 4u * 1024u * 1024u; /* 4 MiB */
+    ASSERT_EQ((int)(shadow_bytes < window_bytes), 1,
+              "800x600x32 shadow buffer fits within the 4 MiB PD[769] window");
+}
+
+static void test_shadow_larger_than_heap(void)
+{
+    /* Kernel heap is 1 MiB (kmalloc.h HEAP_SIZE).  The shadow buffer for
+     * 800x600x32 is ~1.83 MiB — too large for kmalloc, hence PMM alloc. */
+    uint32_t shadow_bytes = 800u * 4u * 600u;   /* 1,920,000 */
+    uint32_t heap_bytes   = 1u * 1024u * 1024u; /* 1,048,576 */
+    ASSERT_EQ((int)(shadow_bytes > heap_bytes), 1,
+              "shadow buffer exceeds the 1 MiB kernel heap (PMM allocation needed)");
+}
+
+static void test_shadow_vbase_alignment(void)
+{
+    /* VBE_SHADOW_VBASE must be page-aligned (low 12 bits zero). */
+    ASSERT_EQ((int)(VBE_SHADOW_VBASE & 0xFFFu), 0,
+              "VBE_SHADOW_VBASE is page-aligned");
+}
+
+static void test_shadow_vbase_above_kernel_heap(void)
+{
+    /* Kernel is at 0xC0100000; heap follows at 0xC0200000 (1 MiB).
+     * Shadow base at 0xC0500000 must be above that 4-MiB kernel window. */
+    ASSERT_EQ((int)(VBE_SHADOW_VBASE >= (KERNEL_OFFSET + 4u * 1024u * 1024u)), 1,
+              "VBE_SHADOW_VBASE is above the 4 MiB kernel window");
+}
+
 /* ── Main ──────────────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -188,5 +247,12 @@ int main(void)
     RUN_SUITE(test_glyph_line_spacing);
     RUN_SUITE(test_glyph_boundary);
     RUN_SUITE(test_glyph_printable_nonblank);
+    /* Double-buffer tests (section 11.3) */
+    RUN_SUITE(test_shadow_vbase_pd_slot);
+    RUN_SUITE(test_shadow_size_800x600x32);
+    RUN_SUITE(test_shadow_fits_in_pd769);
+    RUN_SUITE(test_shadow_larger_than_heap);
+    RUN_SUITE(test_shadow_vbase_alignment);
+    RUN_SUITE(test_shadow_vbase_above_kernel_heap);
     TEST_SUMMARY();
 }

@@ -28,6 +28,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* ── Double-buffer shadow base (section 11.3) ─────────────────────────── */
+/*
+ * VBE_SHADOW_VBASE — virtual base for the in-RAM shadow framebuffer.
+ *
+ * PD[769] covers 0xC0400000–0xC07FFFFF.  The shadow buffer starts at
+ * 0xC0500000 (1 MiB into that slot) so there is room for the standard
+ * 800×600×32 bpp footprint (469 pages, ~1.83 MiB).
+ *
+ * paging_initialize() pre-allocates the page table for PD[769] in BSS,
+ * so paging_map_page_alloc() never needs PMM for this slot.  All process
+ * page directories inherit the mapping via paging_create_address_space.
+ */
+#define VBE_SHADOW_VBASE 0xC0500000u
+
 /* ── Framebuffer geometry ──────────────────────────────────────────────── */
 
 typedef struct {
@@ -232,6 +246,21 @@ static inline int vbe_glyph_pixel(unsigned char c, uint32_t col, uint32_t row)
  */
 static inline uint32_t vbe_term_cols(uint32_t width)  { return width  / VBE_FONT_W; }
 static inline uint32_t vbe_term_rows(uint32_t height) { return height / VBE_FONT_H; }
+
+/* ── Double-buffer flush ────────────────────────────────────────────────── */
+
+/*
+ * vbe_flush — copy the shadow buffer to the hardware framebuffer in one shot.
+ *
+ * All drawing primitives write to an in-RAM shadow buffer; call this once
+ * after finishing a batch of writes to make them visible on screen.
+ * terminal_write() calls this automatically, so explicit calls are only
+ * needed for code that draws directly via vbe_fill_rect / vbe_draw_char
+ * without going through the terminal (e.g. vbe_demo).
+ *
+ * No-op if VBE is not active or if the shadow buffer was not allocated.
+ */
+void vbe_flush(void);
 
 /* ── Initialization ────────────────────────────────────────────────────── */
 

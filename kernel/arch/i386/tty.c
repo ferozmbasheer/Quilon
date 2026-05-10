@@ -6,6 +6,7 @@
 #include <kernel/tty.h>
 #include <kernel/vbe.h>
 #include <kernel/ansi.h>
+#include <kernel/spinlock.h>
 
 #include "vga.h"
 
@@ -298,9 +299,19 @@ static void ansi_execute(const ansi_event_t *ev)
     }
 }
 
+/* ── Terminal lock (SMP safety) ─────────────────────────────────────────── */
+/*
+ * All terminal output — putchar and write — is serialized through tty_lock.
+ * Without this, concurrent printf() calls from the BSP and APs interleave
+ * individual characters, producing garbled output like "spPinlock: PMM p]rotected".
+ */
+static spinlock_t tty_lock = SPINLOCK_INIT;
+
 /* ── Public terminal API ────────────────────────────────────────────────── */
 
-void terminal_putchar(char c) {
+/* Unlocked single-character output.  Must only be called with tty_lock held. */
+static void terminal_putchar_impl(char c)
+{
     ansi_event_t ev;
     int r = ansi_feed(&ansi_p, c, &ev);
 
@@ -309,7 +320,7 @@ void terminal_putchar(char c) {
         return;
     }
     if (r != ANSI_CHAR)
-        return;  /* ANSI_NONE: partial sequence, nothing to render */
+        return;
 
     c = ev.ch;
 
@@ -338,7 +349,7 @@ void terminal_putchar(char c) {
         update_cursor((int)terminal_column, (int)terminal_row);
         return;
     }
-    if (uc < 0x20u) return;  /* skip remaining control characters */
+    if (uc < 0x20u) return;
 
     terminal_putentryat(uc, terminal_color, terminal_column, terminal_row);
     if (++terminal_column == VGA_WIDTH) {
@@ -348,9 +359,18 @@ void terminal_putchar(char c) {
     update_cursor((int)terminal_column, (int)terminal_row);
 }
 
+void terminal_putchar(char c) {
+    spinlock_acquire(&tty_lock);
+    terminal_putchar_impl(c);
+    spinlock_release(&tty_lock);
+}
+
 void terminal_write(const char* data, size_t size) {
+    spinlock_acquire(&tty_lock);
     for (size_t i = 0; i < size; i++)
-        terminal_putchar(data[i]);
+        terminal_putchar_impl(data[i]);
+    if (vbe_active()) vbe_flush();
+    spinlock_release(&tty_lock);
 }
 
 void terminal_writestring(const char* data) {

@@ -13,6 +13,16 @@ void     pmm_initialize(void *multiboot_info);
 /* Returns a 4 KiB-aligned physical address, or NULL if out of memory. */
 void    *pmm_alloc_page(void);
 
+/*
+ * Like pmm_alloc_page() but only returns pages whose physical address is
+ * >= 4 MiB (i.e., not in the identity-mapped first 4 MiB).  Use this for
+ * large buffers (e.g. shadow framebuffer) that are only ever accessed via
+ * virtual addresses so that sub-4 MiB pages remain available for paging
+ * structures (page directories and page tables) which require identity-map
+ * access.  Returns NULL if no above-4 MiB pages are free.
+ */
+void    *pmm_alloc_page_above_4mib(void);
+
 /* addr must be a value previously returned by pmm_alloc_page. */
 void     pmm_free_page(void *addr);
 

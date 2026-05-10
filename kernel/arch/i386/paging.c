@@ -12,7 +12,25 @@
 /* Not static: paging_create_address_space() and paging_get_kernel_pd()
  * need access to copy the kernel entries into new page directories.     */
 uint32_t page_directory[1024] __attribute__((aligned(4096)));
-static uint32_t first_page_table[1024] __attribute__((aligned(4096)));
+static uint32_t first_page_table[1024]  __attribute__((aligned(4096)));
+static uint32_t second_page_table[1024] __attribute__((aligned(4096)));
+
+/*
+ * Static pool of page tables for kernel dynamic mappings (e.g. VBE framebuffer,
+ * APIC MMIO).  paging_map_page_alloc uses these instead of PMM because the PT
+ * must be accessible via its physical address (identity map).  By VBE init time
+ * the sub-4 MiB PMM pool may be exhausted; a BSS PT is always within 4 MiB.
+ * BSS is zero-initialised so every PTE starts as "not present" — no memset needed.
+ */
+#define KERNEL_PT_POOL_SIZE 8
+static uint32_t kernel_pt_pool[KERNEL_PT_POOL_SIZE][1024] __attribute__((aligned(4096)));
+static unsigned kernel_pt_pool_used = 0;
+
+static uint32_t *kpt_alloc(void)
+{
+    if (kernel_pt_pool_used >= KERNEL_PT_POOL_SIZE) return NULL;
+    return kernel_pt_pool[kernel_pt_pool_used++];
+}
 
 void paging_initialize(void)
 {
@@ -36,6 +54,15 @@ void paging_initialize(void)
     /* PD[768]: kernel-high map 0xC0000000-0xC03FFFFF → same physical pages. */
     page_directory[KERNEL_PD_IDX] = paging_make_entry(
         pt_phys, PAGE_PRESENT | PAGE_WRITABLE);
+
+    /* PD[769]: pre-wired page table for 0xC0400000-0xC07FFFFF.
+     * The VBE shadow buffer is mapped here (VBE_SHADOW_VBASE=0xC0500000).
+     * Using a static BSS table means paging_map_page_alloc() never needs
+     * PMM for this PD slot — by VBE init time free pages may be above the
+     * 4 MiB identity-mapped window and would crash if used as a PT.      */
+    uint32_t pt2_phys = (uint32_t)(uintptr_t)second_page_table - KERNEL_OFFSET;
+    page_directory[KERNEL_PD_IDX + 1] = paging_make_entry(
+        pt2_phys, PAGE_PRESENT | PAGE_WRITABLE);
 
     /* Switch CR3 to the physical address of the permanent kernel PD. */
     uint32_t pd_phys = (uint32_t)(uintptr_t)page_directory - KERNEL_OFFSET;
@@ -297,23 +324,23 @@ int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags)
     uint32_t pt_idx = VIRT_PT_INDEX(virt);
 
     if (!(page_directory[pd_idx] & PAGE_PRESENT)) {
-        /* No page table exists for this 4-MiB slot — allocate one.
-         *
-         * pmm_alloc_page() returns a 4 KiB-aligned physical page.
-         * Because the PMM only allocates pages within the first 4 MiB
-         * (the identity-mapped region), the physical address equals the
-         * virtual address and we can safely write to it via the kernel's
-         * identity mapping.                                               */
-        void *new_pt = pmm_alloc_page();
+        /* No page table exists for this 4-MiB slot — take one from the
+         * static BSS pool.  The pool lives within the first 4 MiB
+         * (physical = VA - KERNEL_OFFSET) so its physical address is
+         * always within the identity-mapped region and can be stored
+         * directly in the PDE.  BSS is zero-initialised, so every PTE
+         * starts as "not present" with no memset required.             */
+        uint32_t *new_pt = kpt_alloc();
         if (!new_pt) return -1;
 
-        /* Zero-initialise: every PTE starts as "not present". */
-        memset(new_pt, 0, PAGE_SIZE);
-
         page_directory[pd_idx] = paging_make_entry(
-            (uint32_t)(uintptr_t)new_pt, PAGE_PRESENT | PAGE_WRITABLE);
+            (uint32_t)(uintptr_t)new_pt - KERNEL_OFFSET,
+            PAGE_PRESENT | PAGE_WRITABLE);
     }
 
+    /* The PDE stores the PHYSICAL address of the PT.  Within the first
+     * 4 MiB the identity map makes phys == virt, so casting to a pointer
+     * and dereferencing works for all pool-backed PTs.                  */
     uint32_t *pt = (uint32_t *)(page_directory[pd_idx] & ~(uint32_t)0xFFF);
     pt[pt_idx] = paging_make_entry(phys, flags);
 

@@ -21,11 +21,41 @@
 #include <kernel/vbe.h>
 #include <kernel/psf.h>
 #include <kernel/paging.h>
+#include <kernel/pmm.h>
 
 /* ── Module state ───────────────────────────────────────────────────────── */
 
 static vbe_info_t vbe;           /* cached copy of the framebuffer geometry */
 static bool       vbe_ready = false;
+
+/*
+ * Double-buffer: render into shadow_buf (RAM), then flush to hardware in one
+ * memcpy.  Allocated from PMM pages mapped at VBE_SHADOW_VBASE so it lives
+ * outside the 4 MiB kernel heap window and is inherited by all process page
+ * directories via paging_create_address_space (which copies PD[768..1023]).
+ */
+static uint8_t *shadow_buf = NULL;
+
+/*
+ * Dirty-row tracking: record the pixel-row range [dirty_y_min, dirty_y_max)
+ * modified since the last vbe_flush().  vbe_flush() copies only that band,
+ * typically 16–32 pixel rows, instead of the full 4 MiB framebuffer.
+ * Sentinel dirty_y_min=0xFFFFFFFFu means "nothing dirty yet".
+ */
+static uint32_t dirty_y_min = 0xFFFFFFFFu;
+static uint32_t dirty_y_max = 0u;
+
+static inline void dirty_mark(uint32_t y)
+{
+    if (y < dirty_y_min) dirty_y_min = y;
+    if (y + 1u > dirty_y_max) dirty_y_max = y + 1u;
+}
+
+static inline void dirty_mark_all(void)
+{
+    dirty_y_min = 0;
+    dirty_y_max = vbe.height;
+}
 
 /* Terminal state */
 static uint32_t term_cols;
@@ -58,16 +88,21 @@ static inline uint32_t cur_font_h(void)
 
 /* ── Internal helpers ───────────────────────────────────────────────────── */
 
-/* Return a pointer to the start of pixel (x, y) in the framebuffer. */
+/* Return a pointer to the start of pixel (x, y).
+ * Writes go to the shadow buffer when it is available, otherwise directly
+ * to the hardware framebuffer (fallback before shadow_buf is set up). */
 static inline uint8_t *fb_ptr(uint32_t x, uint32_t y)
 {
-    return (uint8_t *)(uintptr_t)(uint32_t)vbe.addr
-           + vbe_pixel_offset(x, y, vbe.pitch, vbe.bpp >> 3u);
+    uint8_t *base = shadow_buf
+        ? shadow_buf
+        : (uint8_t *)(uintptr_t)(uint32_t)vbe.addr;
+    return base + vbe_pixel_offset(x, y, vbe.pitch, vbe.bpp >> 3u);
 }
 
 /* Write one pixel at (x, y).  Handles both 32 bpp and 24 bpp. */
 static inline void fb_write(uint32_t x, uint32_t y, uint32_t color)
 {
+    dirty_mark(y);
     uint8_t *p = fb_ptr(x, y);
     if (vbe.bpp == 32) {
         /* 32 bpp: BGRX layout — write as a native 32-bit dword. */
@@ -95,6 +130,9 @@ void vbe_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     if (x >= vbe.width  || y >= vbe.height) return;
     if (x + w > vbe.width)  w = vbe.width  - x;
     if (y + h > vbe.height) h = vbe.height - y;
+
+    dirty_mark(y);
+    if (h > 0) dirty_mark(y + h - 1u);
 
     if (vbe.bpp == 32) {
         for (uint32_t row = 0; row < h; row++) {
@@ -154,11 +192,16 @@ uint32_t vbe_draw_string(uint32_t x, uint32_t y, const char *s,
 
 static void vbe_scroll_up(void)
 {
-    uint8_t *fb    = (uint8_t *)(uintptr_t)(uint32_t)vbe.addr;
+    uint8_t *fb = shadow_buf
+        ? shadow_buf
+        : (uint8_t *)(uintptr_t)(uint32_t)vbe.addr;
     uint32_t fh    = cur_font_h();
     uint32_t row_b = vbe.pitch * fh;    /* bytes per text row */
     uint32_t total = row_b * (term_rows - 1u);
 
+    /* memmove shifts the whole framebuffer — mark entire screen dirty before
+     * the move so vbe_flush() copies the full updated content.             */
+    dirty_mark_all();
     memmove(fb, fb + row_b, total);
 
     /* Clear the last text row. */
@@ -284,6 +327,20 @@ void vbe_terminal_erase_line(int mode)
     vbe_fill_rect(x, term_row * fh, w, fh, term_bg);
 }
 
+/* ── Double-buffer flush ────────────────────────────────────────────────── */
+
+void vbe_flush(void)
+{
+    if (!vbe_ready || !shadow_buf) return;
+    if (dirty_y_min >= dirty_y_max) return;
+    uint32_t off  = dirty_y_min * vbe.pitch;
+    uint32_t size = (dirty_y_max - dirty_y_min) * vbe.pitch;
+    memcpy((uint8_t *)(uintptr_t)(uint32_t)vbe.addr + off,
+           shadow_buf + off, size);
+    dirty_y_min = 0xFFFFFFFFu;
+    dirty_y_max = 0u;
+}
+
 /* ── Initialization ─────────────────────────────────────────────────────── */
 
 bool vbe_init(const vbe_info_t *info)
@@ -309,8 +366,37 @@ bool vbe_init(const vbe_info_t *info)
         paging_map_page_alloc(pa, pa, PAGE_PRESENT | PAGE_WRITABLE);
     }
 
+    /*
+     * Allocate the shadow buffer: one PMM page per framebuffer page, mapped
+     * contiguously at VBE_SHADOW_VBASE (PD[769], outside the heap window).
+     * paging_create_address_space copies PD[768..1023], so all future
+     * process page directories inherit this mapping automatically.
+     */
+    {
+        uint32_t shadow_pages = (bytes + (PAGE_SIZE - 1u)) / PAGE_SIZE;
+        uint32_t virt = VBE_SHADOW_VBASE;
+        bool ok = true;
+        for (uint32_t i = 0; i < shadow_pages; i++) {
+            /* Prefer pages above 4 MiB: shadow buffer data is only ever
+             * accessed via virtual addresses, so the physical page can live
+             * anywhere.  Using high pages preserves the sub-4 MiB identity-
+             * mapped pool for paging structures (PDs and PTs).             */
+            void *pg = pmm_alloc_page_above_4mib();
+            if (!pg) pg = pmm_alloc_page();   /* fallback if high mem full */
+            if (!pg) { ok = false; break; }
+            paging_map_page_alloc(virt, (uint32_t)pg,
+                                  PAGE_PRESENT | PAGE_WRITABLE);
+            virt += PAGE_SIZE;
+        }
+        if (ok) {
+            shadow_buf = (uint8_t *)VBE_SHADOW_VBASE;
+            memset(shadow_buf, 0, bytes);
+        }
+    }
+
     vbe_ready = true;
     vbe_terminal_init();
+    vbe_flush();          /* push the cleared screen to hardware */
     return true;
 }
 
@@ -458,4 +544,6 @@ void vbe_demo(void)
     if (new_row >= term_rows) new_row = term_rows - 1u;
     term_row = new_row;
     term_col = 0;
+
+    vbe_flush();
 }
