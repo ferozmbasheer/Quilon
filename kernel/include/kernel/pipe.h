@@ -15,6 +15,7 @@
 #define _KERNEL_PIPE_H
 
 #include <stdint.h>
+#include <kernel/waitq.h>
 
 /* ── Constants ────────────────────────────────────────────────────────────── */
 
@@ -42,6 +43,7 @@ typedef struct {
     int       readers;            /* open read-end reference count      */
     int       writers;            /* open write-end reference count     */
     int       in_use;             /* 1 = allocated, 0 = free slot       */
+    waitq_t   wq;                 /* processes sleeping on this pipe    */
 } pipe_t;
 
 /* ── Pipe pool ─────────────────────────────────────────────────────────────

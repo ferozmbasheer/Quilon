@@ -19,6 +19,7 @@
 #include <kernel/psf.h>
 #include <kernel/apic.h>
 #include <kernel/smp.h>
+#include <kernel/waitq.h>
 
 static void shell_cmd_ls(void)
 {
@@ -880,6 +881,25 @@ static void shell_cmd_vga(void)
     vbe_demo();
 }
 
+static void shell_cmd_waitq(void)
+{
+    printf("Wait queue demo (section 12.2):\r\n");
+
+    waitq_t wq = WAITQ_INIT;
+    printf("  init:      head=%p (NULL expected)\r\n", (void*)wq.head);
+
+    waitq_wake_one(&wq);
+    printf("  wake_one on empty queue: no-op, ok\r\n");
+
+    waitq_wake_all(&wq);
+    printf("  wake_all on empty queue: no-op, ok\r\n");
+
+    printf("  keyboard_getchar: sleeps on kb_wq — IRQ wakes via waitq_wake_one\r\n");
+    printf("  pipe_read/write:  sleeps on pipe->wq — other side calls waitq_wake_all\r\n");
+    printf("  net_tcp_recv:     yields between polls via waitq_sleep on tcp.rx_wq\r\n");
+    printf("  (no CPU wasted spinning while waiting for I/O)\r\n");
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
@@ -896,6 +916,7 @@ static void shell_execute(const char *cmd) {
         printf("          cd <path>              - change directory        (section 12.1)\r\n");
         printf("          mkdir <dir>            - create directory        (section 12.1)\r\n");
         printf("          rename <old> <new>     - rename file/dir         (section 12.1)\r\n");
+        printf("          waitq                  - wait queue demo         (section 12.2)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -985,6 +1006,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_mkdir(cmd + 6);
     } else if (strncmp(cmd, "rename ", 7) == 0) {
         shell_cmd_rename(cmd + 7);
+    } else if (strcmp(cmd, "waitq") == 0) {
+        shell_cmd_waitq();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

@@ -143,7 +143,7 @@ process_t *process_pick_next(void)
     if (!current_process) return NULL;
 
     int start = (int)(current_process - process_table);
-    for (int i = 1; i <= PROCESS_MAX; i++) {
+    for (int i = 1; i < PROCESS_MAX; i++) {
         int idx = (start + i) % PROCESS_MAX;
         if (process_table[idx].state == PROC_READY)
             return &process_table[idx];

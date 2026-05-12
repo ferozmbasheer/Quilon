@@ -29,6 +29,7 @@
 #include <kernel/psf.h>
 #include <kernel/apic.h>
 #include <kernel/smp.h>
+#include <kernel/waitq.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -858,6 +859,43 @@ void kernel_main(void) {
 		printf("posix: no filesystem mounted - demo skipped\r\n");
 	}
 	printf("=== Section 12.1 ready ===\r\n\r\n");
+
+	/* ── Section 12.2: Blocking I/O — Sleep/Wakeup Instead of Spin-Wait ──
+	 *
+	 * waitq_t replaces busy-loops in three subsystems:
+	 *
+	 *   keyboard_getchar()  — sleeps on kb_wq; keyboard IRQ wakes via
+	 *                          waitq_wake_one().  No CPU burn while idle.
+	 *
+	 *   pipe_read/write()   — each pipe_t now has a wq field.  Blocked
+	 *                          readers/writers sleep on p->wq; the
+	 *                          opposite side calls waitq_wake_all().
+	 *
+	 *   net_tcp_recv()      — yields between net_poll() iterations via
+	 *                          waitq_sleep(&g_tcp.rx_wq).  handle_tcp
+	 *                          calls waitq_wake_all() when data arrives.
+	 *
+	 * The demo below exercises the API directly to confirm it is wired up.
+	 */
+	printf("\r\n=== Section 12.2: Wait Queues (Blocking I/O) ===\r\n");
+	{
+		waitq_t wq = WAITQ_INIT;
+		printf("waitq: init   head=%p (NULL)\r\n", (void*)wq.head);
+
+		/* wake_one on empty — must be a no-op */
+		waitq_wake_one(&wq);
+		printf("waitq: wake_one on empty queue — ok\r\n");
+
+		/* wake_all on empty — must be a no-op */
+		waitq_wake_all(&wq);
+		printf("waitq: wake_all on empty queue — ok\r\n");
+
+		printf("waitq: keyboard  now sleeps on kb_wq  (IRQ wakes)\r\n");
+		printf("waitq: pipe_read sleeps on pipe->wq\r\n");
+		printf("waitq: pipe_write sleeps on pipe->wq\r\n");
+		printf("waitq: tcp_recv  sleeps on tcp.rx_wq\r\n");
+	}
+	printf("=== Section 12.2 ready ===\r\n\r\n");
 
 	printf("\r\n=== Section 7: User Space ===\r\n");
 	printf("user space: SYS_READDIR=%d  (ring-3 ls)\r\n", SYS_READDIR);

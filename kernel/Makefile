@@ -32,6 +32,7 @@ $(KERNEL_ARCH_OBJS) \
 kernel/kernel.o \
 kernel/kmalloc.o \
 kernel/keyboard.o \
+kernel/waitq.o \
 kernel/shell.o \
 kernel/scheduler.o \
 kernel/process.o \

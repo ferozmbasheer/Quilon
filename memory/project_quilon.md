@@ -4,7 +4,7 @@ description: Current completion status of roadmap sections, next steps, and key 
 type: project
 ---
 
-Completed roadmap sections 4.1–4.12 (first roadmap) plus sections 5–8.1 of ROADMAP2.md.
+Completed roadmap sections 4.1–4.12 (first roadmap) plus sections 5–8.1 of ROADMAP2.md, and sections 12.1–12.2 of ROADMAP3.md.
 
 **Section 8.1 — FAT16 Write Support (completed 2026-05-01)**
 
@@ -152,4 +152,26 @@ Linear VESA framebuffer driver replacing the VGA text terminal when GRUB negotia
 - `tests/test_vbe.c` — 34 tests: color values/uniqueness, font metrics, `vbe_term_cols`/`vbe_term_rows`, `vbe_pixel_offset` (32bpp + 24bpp), glyph bitmap checks (space=blank, 'A' non-blank, line-spacing zero, OOB=0, all printable non-blank)
 - `tests/Makefile` — `$(BINDIR)/test_vbe` rule added; all 21 suites pass
 
-**Next section:** Check ROADMAP2.md for the next item after 10.4.
+**Section 12.2 — Blocking I/O: Sleep/Wakeup Instead of Spin-Wait (completed 2026-05-10)**
+
+Wait queues replace busy-loops in three subsystems:
+
+- `kernel/include/kernel/waitq.h` — `waitq_t`, `waitq_entry_t`, `WAITQ_INIT`, API: `waitq_sleep`, `waitq_wake_one`, `waitq_wake_all`
+- `kernel/kernel/waitq.c` — `waitq_sleep` stack-allocates a `waitq_entry_t`, sets PROC_BLOCKED, calls `scheduler_yield()`, then self-removes the entry on return (handles spurious wakeup when no other process is runnable); `waitq_wake_one` pops head and sets PROC_READY; `waitq_wake_all` steals the whole list atomically then wakes all
+- `kernel/kernel/keyboard.c` — `keyboard_getchar` loops `waitq_sleep(&kb_wq)`; `keyboard_handle_scancode` calls `waitq_wake_one(&kb_wq)` after each keypress; `waitq_sleep` is a no-op when `current_process==NULL` (early boot) so it degrades to spin
+- `kernel/include/kernel/pipe.h` — added `waitq_t wq` to `pipe_t`
+- `kernel/kernel/pipe.c` — removed global `wake_blocked()` (woke ALL blocked processes); replaced with `waitq_sleep(&p->wq)` / `waitq_wake_all(&p->wq)` per pipe
+- `kernel/kernel/net.c` — added `waitq_t rx_wq` to `g_tcp`; `handle_tcp` calls `waitq_wake_all` when data arrives; `net_tcp_recv` yields between `net_poll()` calls via `waitq_sleep`
+- `kernel/Makefile` — added `kernel/waitq.o`
+- `kernel/kernel/kernel.c` — Section 12.2 boot demo
+- `kernel/kernel/shell.c` — `waitq` command added
+- `tests/test_waitq.c` — 43 assertions: WAITQ_INIT, wake_one (empty, single, LIFO, drain, extra call), wake_all (empty, single, three, idempotent, 4-entry), sleep (NULL process, self-remove, state restore, twice-no-leak, other entries intact), combined sleep+wake_one/wake_all, partial wake
+- All 25 test suites pass (1,729 total assertions)
+
+**Key design:** `waitq_sleep` self-removes its stack-allocated entry after `scheduler_yield()` returns. This handles the single-process case (yield returns immediately) without accumulating stale entries. Callers wrap in `while (!condition) waitq_sleep(wq)`.
+
+**Bug fix (2026-05-12):** Kernel panic (Division by Zero at EIP=0x2b) on keyboard press.
+Root cause: two bugs: (1) `process_pick_next` loop used `i <= PROCESS_MAX` (should be `i < PROCESS_MAX`), causing it to wrap around and return `current_process` itself on the last iteration; (2) the shell's `kernel_esp` was stale (set by `process_create` to the initial frame at `esp0-20`, but never updated because `process_launch()` bypasses `context_switch`). When the keyboard IRQ fired between `current_process->state = PROC_BLOCKED` and `scheduler_yield()` in `waitq_sleep`, it set state back to `PROC_READY`. Then `scheduler_yield` called `context_switch(prev=shell, next=shell)`, loading the stale `kernel_esp`. The "initial frame" at `esp0-20` had been overwritten by the ring-3→ring-0 CPU save area (SS3/ESP3/EFLAGS/CS3/EIP3 pushed on `int $0x80`). `ret` in `context_switch` popped `SS3 = 0x2b` (user data segment, GDT entry 5, RPL=3) as EIP, jumping to address 0x2b.
+Fixes: (1) `process.c` `process_pick_next`: changed `i <= PROCESS_MAX` → `i < PROCESS_MAX`; (2) `scheduler.c` `scheduler_yield`: added `next == current_process` guard alongside the `!next` check.
+
+**Next section:** 12.3 Kernel Threads (clone) per ROADMAP3.md.

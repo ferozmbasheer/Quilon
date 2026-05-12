@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq
 
 .PHONY: all build run clean help
 
@@ -316,6 +316,25 @@ $(BINDIR)/test_ansi: test_ansi.c framework.h
 # synthetic PSF2 images in buffers and exercise header validation and pixel access.
 $(BINDIR)/test_psf: test_psf.c framework.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_psf.c
+
+# Wait queue tests (section 12.2)
+# waitq.c is pure C (list manipulation + scheduler_yield which is a no-op
+# on the host).  process.c and vma.c provide current_process and process_t.
+# scheduler.c provides the no-op scheduler_yield for the host build.
+WAITQ_SRC = ../kernel/kernel/waitq.c
+
+$(BINDIR)/test_waitq: test_waitq.c framework.h \
+                      $(WAITQ_SRC) \
+                      $(SCHEDULER_SRC) \
+                      $(PROCESS_SRC) \
+                      $(VMA_SRC) \
+                      $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_waitq.c $(WAITQ_SRC) \
+	    $(SCHEDULER_SRC) \
+	    $(PROCESS_SRC) \
+	    $(VMA_SRC) \
+	    $(LIBC_STRING)
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

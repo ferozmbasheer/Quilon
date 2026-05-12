@@ -159,7 +159,7 @@ void scheduler_yield(void)
     if (!current_process) return;
 
     process_t *next = process_pick_next();
-    if (!next) return;
+    if (!next || next == current_process) return;
 
     if (next->cr3 && next->cr3 != current_process->cr3)
         paging_switch(next->cr3);

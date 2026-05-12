@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <kernel/keyboard.h>
+#include <kernel/waitq.h>
 
 static const char keyboard_map[128] = {
       0,  27, '1', '2', '3', '4', '5', '6', '7', '8',
@@ -41,10 +42,12 @@ static const char keyboard_map[128] = {
 static char              kb_buffer[KEYBOARD_BUFFER_SIZE];
 static volatile uint8_t  kb_read_pos  = 0;
 static volatile uint8_t  kb_write_pos = 0;
+static waitq_t           kb_wq        = WAITQ_INIT;
 
 void keyboard_initialize(void) {
     kb_read_pos  = 0;
     kb_write_pos = 0;
+    kb_wq        = (waitq_t)WAITQ_INIT;
 }
 
 void keyboard_handle_scancode(uint8_t scancode) {
@@ -64,6 +67,9 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
     kb_buffer[kb_write_pos] = c;
     kb_write_pos = next;
+
+    /* Wake one process blocked in keyboard_getchar. */
+    waitq_wake_one(&kb_wq);
 }
 
 int keyboard_available(void) {
@@ -71,7 +77,12 @@ int keyboard_available(void) {
 }
 
 char keyboard_getchar(void) {
-    while (!keyboard_available()); /* spin until data arrives */
+    /* Sleep until a character is available.  waitq_sleep is a no-op
+     * when current_process is NULL (early boot), so the loop degrades
+     * to a busy-wait in that case. */
+    while (!keyboard_available())
+        waitq_sleep(&kb_wq);
+
     char c = kb_buffer[kb_read_pos];
     kb_read_pos = (kb_read_pos + 1) % KEYBOARD_BUFFER_SIZE;
     return c;

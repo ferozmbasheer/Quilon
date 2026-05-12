@@ -1,37 +1,30 @@
 /*
- * Quilon OS — Anonymous Pipe Ring Buffer (section 8.2)
+ * Quilon OS — Anonymous Pipe Ring Buffer (section 8.2 + 12.2)
  *
  * Implements the kernel-side ring buffer for anonymous pipes.
- * The blocking path (pipe_read / pipe_write when empty / full) uses
- * scheduler_yield() and is compiled only for the kernel build.
- * The ring-buffer arithmetic is unconditional so unit tests on the host
- * can exercise it without a scheduler.
  *
- * Wake-up policy
- * ──────────────
- * When pipe_write adds data it wakes any PROC_BLOCKED process in the
- * table so blocked readers can re-check the buffer.  Similarly,
- * pipe_close_write wakes blocked readers so they can detect EOF.
- * This "wake all blocked" approach is safe because every blocking caller
- * re-checks its own predicate after resuming (spurious wakeups are
- * harmless).
+ * Blocking design (section 12.2)
+ * ───────────────────────────────
+ * Each pipe_t carries a waitq_t.  When a reader or writer cannot make
+ * progress (buffer empty / full) it calls waitq_sleep(&p->wq) instead of
+ * spinning.  The opposite side calls waitq_wake_all(&p->wq) after every
+ * successful transfer, waking all sleepers so they can re-check the buffer.
+ *
+ * This replaces the earlier global wake_blocked() helper (which woke ALL
+ * PROC_BLOCKED processes in the table indiscriminately).  Per-pipe queues
+ * are more precise: only processes waiting on this specific pipe are woken.
+ *
+ * The ring-buffer arithmetic is unconditional so host-side unit tests can
+ * exercise it without a scheduler.  The waitq_sleep / waitq_wake_all calls
+ * are guarded by #ifdef __is_kernel (same pattern as before) so the host
+ * build remains non-blocking.
  */
 
 #include <kernel/pipe.h>
 #include <stddef.h>
 
 #ifdef __is_kernel
-#include <kernel/process.h>
-#include <kernel/scheduler.h>
-
-/* Wake every PROC_BLOCKED process so blocked readers/writers re-check. */
-static void wake_blocked(void)
-{
-    for (int i = 0; i < PROCESS_MAX; i++) {
-        if (process_table[i].state == PROC_BLOCKED)
-            process_table[i].state = PROC_READY;
-    }
-}
+#include <kernel/waitq.h>
 #endif /* __is_kernel */
 
 /* ── Pipe pool ──────────────────────────────────────────────────────────── */
@@ -49,6 +42,7 @@ int pipe_alloc(void)
             pipe_pool[i].readers   = 1;
             pipe_pool[i].writers   = 1;
             pipe_pool[i].in_use    = 1;
+            pipe_pool[i].wq        = (waitq_t)WAITQ_INIT;
             return i;
         }
     }
@@ -81,10 +75,8 @@ int pipe_write(int idx, const uint8_t *buf, uint32_t len)
         uint32_t space = pipe_space_available(idx);
         if (space == 0) {
 #ifdef __is_kernel
-            /* Buffer full — yield and retry. */
-            if (!current_process) break;
-            current_process->state = PROC_BLOCKED;
-            scheduler_yield();
+            /* Buffer full — sleep until a reader drains some bytes. */
+            waitq_sleep(&p->wq);
             continue;
 #else
             break;   /* non-blocking in host build */
@@ -101,7 +93,7 @@ int pipe_write(int idx, const uint8_t *buf, uint32_t len)
         written += chunk;
 
 #ifdef __is_kernel
-        wake_blocked();   /* wake any reader that was waiting for data */
+        waitq_wake_all(&p->wq);   /* wake any reader waiting for data */
 #endif
     }
 
@@ -119,11 +111,9 @@ int pipe_read(int idx, uint8_t *buf, uint32_t len)
     if (avail == 0) {
         if (p->writers == 0) return 0;   /* EOF: write end closed */
 #ifdef __is_kernel
-        /* Block until data arrives or all writers close. */
+        /* Sleep until data arrives or the last writer closes. */
         while (avail == 0 && p->writers > 0) {
-            if (!current_process) break;
-            current_process->state = PROC_BLOCKED;
-            scheduler_yield();
+            waitq_sleep(&p->wq);
             avail = pipe_bytes_available(idx);
         }
         if (avail == 0) return 0;   /* EOF after wakeup */
@@ -139,7 +129,7 @@ int pipe_read(int idx, uint8_t *buf, uint32_t len)
     }
 
 #ifdef __is_kernel
-    wake_blocked();   /* wake any writer that was waiting for space */
+    waitq_wake_all(&p->wq);   /* wake any writer waiting for space */
 #endif
 
     return (int)to_read;
@@ -158,7 +148,7 @@ void pipe_close_write(int idx)
     if (idx < 0 || idx >= PIPE_MAX || !pipe_pool[idx].in_use) return;
     pipe_pool[idx].writers--;
 #ifdef __is_kernel
-    wake_blocked();   /* let blocked readers detect EOF */
+    waitq_wake_all(&pipe_pool[idx].wq);   /* let blocked readers detect EOF */
 #endif
     if (pipe_pool[idx].readers <= 0 && pipe_pool[idx].writers <= 0)
         pipe_pool[idx].in_use = 0;

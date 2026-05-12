@@ -18,6 +18,7 @@
 
 #ifdef __is_kernel
 #include <kernel/rtl8139.h>
+#include <kernel/waitq.h>
 
 /* ── Constants ────────────────────────────────────────────────────────── */
 
@@ -61,6 +62,7 @@ static struct {
     uint8_t     rx_data[NET_TCP_RX_BUF];
     uint16_t    rx_len;
     int         rx_ready;
+    waitq_t     rx_wq;     /* processes sleeping on net_tcp_recv      */
 } g_tcp;
 
 /* ICMP ping state */
@@ -381,6 +383,7 @@ static void handle_tcp(const uint8_t *src_mac, uint32_t src_ip,
                     g_tcp.rx_data[i] = tcp_data[hdr_len + i];
                 g_tcp.rx_len   = (uint16_t)copy;
                 g_tcp.rx_ready = 1;
+                waitq_wake_all(&g_tcp.rx_wq);   /* wake net_tcp_recv sleepers */
             }
             g_tcp.ack += (uint32_t)data_len;
             send_tcp_segment(TCP_ACK, NULL, 0);
@@ -738,6 +741,7 @@ int net_tcp_listen(uint16_t port)
     g_tcp.local_port  = port;
     g_tcp.rx_ready    = 0;
     g_tcp.rx_len      = 0;
+    g_tcp.rx_wq       = (waitq_t)WAITQ_INIT;
     return 0;
 }
 
@@ -753,8 +757,18 @@ int net_tcp_send(const void *data, uint16_t len)
 
 int net_tcp_recv(void *buf, uint16_t maxlen)
 {
-    int poll;
-    for (poll = 0; poll < 100; poll++) net_poll();
+    /* Drain the NIC ring and sleep between polls instead of spinning.
+     * handle_tcp calls waitq_wake_all(&g_tcp.rx_wq) when data arrives,
+     * so if IRQ-driven networking is ever added we wake immediately.   */
+#ifdef __is_kernel
+    for (int iter = 0; iter < 100 && !g_tcp.rx_ready; iter++) {
+        net_poll();
+        if (!g_tcp.rx_ready)
+            waitq_sleep(&g_tcp.rx_wq);
+    }
+#else
+    for (int poll = 0; poll < 100; poll++) net_poll();
+#endif
 
     if (!g_tcp.rx_ready) return 0;
     uint16_t copy = g_tcp.rx_len;
