@@ -1,13 +1,13 @@
 /*
- * Quilon OS — Process Management (section 5.2 – 5.4)
+ * Quilon OS -- Process Management (section 5.2 – 5.4)
  *
  * This file implements the process table, PCB allocation, round-robin
  * scheduling, and the process_launch() function used by the first-run
  * trampoline to enter ring-3.
  *
  * Sections implemented here:
- *   5.2 — Process Control Block and Process Table
- *   5.4 — process_launch() (supports 5.4 exit/wait lifecycle)
+ *   5.2 -- Process Control Block and Process Table
+ *   5.4 -- process_launch() (supports 5.4 exit/wait lifecycle)
  *
  * Section 5.3 (context_switch assembly + scheduler_tick wiring) is in
  * boot.S and scheduler.c respectively.
@@ -27,12 +27,12 @@
 extern void process_first_run(void);
 #endif
 
-/* ── Global state ─────────────────────────────────────────────────────────── */
+/* -- Global state ----------------------------------------------------------- */
 
 process_t  process_table[PROCESS_MAX];
 process_t *current_process = NULL;
 
-/* ── Initialisation ───────────────────────────────────────────────────────── */
+/* -- Initialisation --------------------------------------------------------- */
 
 void process_init(void)
 {
@@ -40,6 +40,7 @@ void process_init(void)
         process_table[i].state           = PROC_UNUSED;
         process_table[i].pid             = (uint32_t)i;
         process_table[i].parent_pid      = 0;
+        process_table[i].thread_group    = 0;
         process_table[i].kernel_esp      = 0;
         process_table[i].cr3             = 0;
         process_table[i].entry           = 0;
@@ -54,7 +55,7 @@ void process_init(void)
     current_process = NULL;
 }
 
-/* ── PCB allocation ───────────────────────────────────────────────────────── */
+/* -- PCB allocation --------------------------------------------------------- */
 
 process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
 {
@@ -66,6 +67,7 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
 
         p->pid             = (uint32_t)i;
         p->parent_pid      = current_process ? current_process->pid : 0;
+        p->thread_group    = 0;
         p->state           = PROC_READY;
         p->entry           = entry;
         p->cr3             = cr3;
@@ -93,9 +95,9 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
          * For a brand-new process, we pre-fill those five words at the top
          * of kernel_stack[] so that the ret lands in process_first_run.
          *
-         * Layout (low address → high address, stack grows downward):
+         * Layout (low address -> high address, stack grows downward):
          *
-         *   kernel_esp → [edi=0][esi=0][ebx=0][ebp=0][ret=process_first_run]
+         *   kernel_esp -> [edi=0][esi=0][ebx=0][ebp=0][ret=process_first_run]
          *                  +0      +4     +8     +12    +16
          *
          * After pop edi/esi/ebx/ebp, ret pops the return address and jumps
@@ -118,7 +120,7 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
     return NULL;   /* all PROCESS_MAX slots are occupied */
 }
 
-/* ── Lookup ───────────────────────────────────────────────────────────────── */
+/* -- Lookup ----------------------------------------------------------------- */
 
 process_t *process_find(uint32_t pid)
 {
@@ -127,10 +129,10 @@ process_t *process_find(uint32_t pid)
     return &process_table[pid];
 }
 
-/* ── Round-robin scheduling helper ───────────────────────────────────────── */
+/* -- Round-robin scheduling helper ----------------------------------------- */
 
 /*
- * process_pick_next — find the next PROC_READY process after current_process.
+ * process_pick_next -- find the next PROC_READY process after current_process.
  *
  * Scans forward (wrapping around) from the slot after current_process.
  * Returns the first PROC_READY entry found, or NULL if none exists.
@@ -151,11 +153,11 @@ process_t *process_pick_next(void)
     return NULL;   /* no other runnable process */
 }
 
-/* ── First-run entry point ────────────────────────────────────────────────── */
+/* -- First-run entry point -------------------------------------------------- */
 
 #ifdef __is_kernel
 /*
- * process_launch — called by the process_first_run assembly trampoline.
+ * process_launch -- called by the process_first_run assembly trampoline.
  *
  * At this point, current_process has been set to the new process by the
  * scheduler.  We update the TSS kernel stack pointer so that any ring-3
@@ -169,7 +171,7 @@ void __attribute__((noreturn)) process_launch(void)
 {
     /*
      * Tell the CPU which kernel stack to use when this process causes a
-     * ring-3 → ring-0 transition (IRQ0, int $0x80, exceptions).
+     * ring-3 -> ring-0 transition (IRQ0, int $0x80, exceptions).
      *
      * The top of the kernel stack is kernel_stack[] + sizeof(kernel_stack[]).
      * We point the TSS esp0 there so that interrupts push the saved ring-3
@@ -182,7 +184,7 @@ void __attribute__((noreturn)) process_launch(void)
     gdt_set_kernel_stack(kstack_top);
 
     /*
-     * Load the TSS into TR (once only — ltr faults if called twice) and
+     * Load the TSS into TR (once only -- ltr faults if called twice) and
      * set PAGE_USER on the active page directory's first-4-MiB entry so
      * ring-3 code can access the user stack.
      *

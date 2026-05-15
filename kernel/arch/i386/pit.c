@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <kernel/pit.h>
 #include <kernel/scheduler.h>
+#include <kernel/vbe.h>
 
 extern void outb(unsigned short port, unsigned char data);
 extern char inb(unsigned short port);
@@ -19,7 +20,7 @@ static volatile uint32_t pit_ticks = 0;
 static          uint32_t pit_hz    = 0;
 
 /*
- * pit_initialize — program PIT channel 0 to fire IRQ0 at `hz` per second.
+ * pit_initialize -- program PIT channel 0 to fire IRQ0 at `hz` per second.
  * Call once during kernel startup before enabling interrupts.
  */
 void pit_initialize(uint32_t hz)
@@ -37,13 +38,16 @@ uint32_t pit_get_hz(void)
 }
 
 /*
- * pit_tick — called from the IRQ0 handler on every timer interrupt.
+ * pit_tick -- called from the IRQ0 handler on every timer interrupt.
  * Increments the tick counter and notifies the scheduler.
  */
 void pit_tick(void)
 {
     pit_ticks++;
     scheduler_tick();
+    /* Flush the VBE shadow buffer to the hardware framebuffer here, outside
+     * any terminal lock.  At 100 Hz the display lag is at most 10 ms. */
+    if (vbe_active()) vbe_flush();
 }
 
 /* Returns the number of timer ticks since pit_initialize(). */
@@ -53,7 +57,7 @@ uint32_t pit_get_ticks(void)
 }
 
 /*
- * pit_sleep_ticks — busy-wait for `ticks` timer interrupts.
+ * pit_sleep_ticks -- busy-wait for `ticks` timer interrupts.
  * Uses `hlt` to avoid spinning at full CPU speed; each IRQ wakes the CPU.
  */
 void pit_sleep_ticks(uint32_t ticks)

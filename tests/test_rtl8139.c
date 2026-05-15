@@ -1,15 +1,15 @@
 /*
- * Quilon OS — RTL8139 Unit Tests (Section 10.2)
+ * Quilon OS -- RTL8139 Unit Tests (Section 10.2)
  *
  * Tests the pure-C helpers in rtl8139.h that can run on the host without
  * x86 I/O instructions:
  *
- *   1. Constants      — register offsets, buffer sizes, flag bits
- *   2. rtl8139_bar0_iobase()    — I/O base extraction from a raw BAR0 value
- *   3. rtl8139_rx_advance()     — RX ring position advancement + wrap
- *   4. rtl8139_capr_value()     — CAPR register encoding (pos - 16 quirk)
- *   5. rtl8139_rx_aligned_len() — 4-byte alignment of a packet length
- *   6. RX header parsing logic  — simulate a crafted ring-buffer packet
+ *   1. Constants      -- register offsets, buffer sizes, flag bits
+ *   2. rtl8139_bar0_iobase()    -- I/O base extraction from a raw BAR0 value
+ *   3. rtl8139_rx_advance()     -- RX ring position advancement + wrap
+ *   4. rtl8139_capr_value()     -- CAPR register encoding (pos - 16 quirk)
+ *   5. rtl8139_rx_aligned_len() -- 4-byte alignment of a packet length
+ *   6. RX header parsing logic  -- simulate a crafted ring-buffer packet
  *
  * The hardware-dependent functions (rtl8139_init, rtl8139_send, rtl8139_recv,
  * rtl8139_get_mac) are guarded by #ifdef __is_kernel in rtl8139.c and are
@@ -24,9 +24,9 @@
 #include <string.h>
 #include <kernel/rtl8139.h>
 
-/* ═══════════════════════════════════════════════════════════════
- * 1. Constants — verify register offsets and flag bit values
- * ═══════════════════════════════════════════════════════════════ */
+/* ===============================================================
+ * 1. Constants -- verify register offsets and flag bit values
+ * =============================================================== */
 
 static void test_register_offsets(void)
 {
@@ -91,21 +91,21 @@ static void test_buffer_sizes(void)
            "TX buffer fits a max Ethernet frame");
 }
 
-/* ═══════════════════════════════════════════════════════════════
- * 2. rtl8139_bar0_iobase — I/O base extraction from BAR0
- * ═══════════════════════════════════════════════════════════════ */
+/* ===============================================================
+ * 2. rtl8139_bar0_iobase -- I/O base extraction from BAR0
+ * =============================================================== */
 
 static void test_bar0_iobase_basic(void)
 {
     /* Typical QEMU RTL8139 BAR0: I/O base 0xC100, bit 0 set (I/O indicator). */
     ASSERT_EQ((unsigned)rtl8139_bar0_iobase(0xC101u), 0xC100u,
-              "bar0=0xC101 → iobase=0xC100");
+              "bar0=0xC101 -> iobase=0xC100");
 }
 
 static void test_bar0_iobase_strips_low_bits(void)
 {
     /* Bits 0 and 1 must always be cleared in the result. */
-    /* 0x1235: bit 0 set → clear it → 0x1234 */
+    /* 0x1235: bit 0 set -> clear it -> 0x1234 */
     ASSERT_EQ((unsigned)rtl8139_bar0_iobase(0x1235u), 0x1234u,
               "bit 0 set: cleared to give aligned base");
     ASSERT_EQ((unsigned)rtl8139_bar0_iobase(0x5000u), 0x5000u,
@@ -118,23 +118,23 @@ static void test_bar0_iobase_zero(void)
 {
     /* BAR0 = 0 means I/O base = 0 (card absent or unconfigured). */
     ASSERT_EQ((unsigned)rtl8139_bar0_iobase(0u), 0u,
-              "bar0=0 → iobase=0");
+              "bar0=0 -> iobase=0");
 }
 
-/* ═══════════════════════════════════════════════════════════════
- * 3. rtl8139_rx_advance — RX ring position advancement
- * ═══════════════════════════════════════════════════════════════ */
+/* ===============================================================
+ * 3. rtl8139_rx_advance -- RX ring position advancement
+ * =============================================================== */
 
 static void test_rx_advance_simple(void)
 {
     /* pos=0, 64-byte packet: header(4) + data(60) = 64 bytes; aligned = 64. */
     uint16_t next = rtl8139_rx_advance(0, 64);
-    ASSERT_EQ((unsigned)next, 64u, "advance 64 from pos 0 → 64");
+    ASSERT_EQ((unsigned)next, 64u, "advance 64 from pos 0 -> 64");
 }
 
 static void test_rx_advance_alignment(void)
 {
-    /* hdr_plus_pkt not already 4-byte aligned → rounds up. */
+    /* hdr_plus_pkt not already 4-byte aligned -> rounds up. */
     /* pos=0, hdr_plus_pkt=61: (0+61+3)&~3 = 64 & 8191 = 64 */
     ASSERT_EQ((unsigned)rtl8139_rx_advance(0, 61), 64u,
               "61 bytes rounds up to 64");
@@ -154,7 +154,7 @@ static void test_rx_advance_wrap(void)
     /* RTL8139_RX_BUF_SIZE = 8192.
      * pos=8180, hdr_plus_pkt=20: (8180+20+3)&~3 = 8203&~3 = 8200 & 8191 = 8 */
     ASSERT_EQ((unsigned)rtl8139_rx_advance(8180, 20), 8u,
-              "wrap: pos=8180 + 20 → 8");
+              "wrap: pos=8180 + 20 -> 8");
 
     /* Exact wrap: pos=8188, hdr_plus_pkt=4: (8188+4+3)&~3 = 8195&~3 = 8192 & 8191 = 0 */
     ASSERT_EQ((unsigned)rtl8139_rx_advance(8188, 4), 0u,
@@ -171,54 +171,54 @@ static void test_rx_advance_mid_ring(void)
      * hdr_plus_pkt = 4 + 1518 = 1522; aligned = 1524.
      * next = (4096 + 1522 + 3) & ~3 = 5621 & ~3 = 5620 & 8191 = 5620 */
     ASSERT_EQ((unsigned)rtl8139_rx_advance(4096, 1522), 5620u,
-              "mid-ring advance: pos=4096 + 1522 → 5620");
+              "mid-ring advance: pos=4096 + 1522 -> 5620");
 }
 
-/* ═══════════════════════════════════════════════════════════════
- * 4. rtl8139_capr_value — CAPR register encoding
- * ═══════════════════════════════════════════════════════════════ */
+/* ===============================================================
+ * 4. rtl8139_capr_value -- CAPR register encoding
+ * =============================================================== */
 
 static void test_capr_value_zero(void)
 {
     /* After init, rx_pos=0: CAPR = (0-16) = 0xFFF0.
      * This is the RTL8139 initial state after reset.   */
     ASSERT_EQ((unsigned)rtl8139_capr_value(0), 0xFFF0u,
-              "rx_pos=0 → CAPR=0xFFF0 (hardware reset default)");
+              "rx_pos=0 -> CAPR=0xFFF0 (hardware reset default)");
 }
 
 static void test_capr_value_non_zero(void)
 {
-    ASSERT_EQ((unsigned)rtl8139_capr_value(16),  0u,     "rx_pos=16 → CAPR=0");
-    ASSERT_EQ((unsigned)rtl8139_capr_value(100), 84u,    "rx_pos=100 → CAPR=84");
-    ASSERT_EQ((unsigned)rtl8139_capr_value(8192), 8176u, "rx_pos=8192 → CAPR=8176");
+    ASSERT_EQ((unsigned)rtl8139_capr_value(16),  0u,     "rx_pos=16 -> CAPR=0");
+    ASSERT_EQ((unsigned)rtl8139_capr_value(100), 84u,    "rx_pos=100 -> CAPR=84");
+    ASSERT_EQ((unsigned)rtl8139_capr_value(8192), 8176u, "rx_pos=8192 -> CAPR=8176");
 }
 
 static void test_capr_value_wraps_16bit(void)
 {
     /* 16-bit arithmetic: (0 - 16) wraps to 0xFFF0, not negative. */
     uint16_t v = rtl8139_capr_value(0);
-    ASSERT(v == 0xFFF0u, "CAPR is a uint16_t — wraps on underflow");
+    ASSERT(v == 0xFFF0u, "CAPR is a uint16_t -- wraps on underflow");
 }
 
-/* ═══════════════════════════════════════════════════════════════
- * 5. rtl8139_rx_aligned_len — 4-byte alignment of packet length
- * ═══════════════════════════════════════════════════════════════ */
+/* ===============================================================
+ * 5. rtl8139_rx_aligned_len -- 4-byte alignment of packet length
+ * =============================================================== */
 
 static void test_rx_aligned_len(void)
 {
     ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(60),   60u,  "already aligned: 60");
-    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(61),   64u,  "61 → 64");
-    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(62),   64u,  "62 → 64");
-    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(63),   64u,  "63 → 64");
+    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(61),   64u,  "61 -> 64");
+    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(62),   64u,  "62 -> 64");
+    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(63),   64u,  "63 -> 64");
     ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(64),   64u,  "already aligned: 64");
     ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(100),  100u, "already aligned: 100");
-    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(1518), 1520u,"1518 → 1520");
+    ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(1518), 1520u,"1518 -> 1520");
     ASSERT_EQ((unsigned)rtl8139_rx_aligned_len(0),    0u,   "0 stays 0");
 }
 
-/* ═══════════════════════════════════════════════════════════════
- * 6. RX header parsing — simulate ring buffer with a crafted packet
- * ═══════════════════════════════════════════════════════════════ */
+/* ===============================================================
+ * 6. RX header parsing -- simulate ring buffer with a crafted packet
+ * =============================================================== */
 
 /*
  * Simulate what rtl8139_recv() does when reading the ring buffer.
@@ -264,7 +264,7 @@ static void test_rx_header_parse_normal(void)
     uint8_t first_byte = ring[(rx_pos + RTL8139_RXHDR_SIZE) & RTL8139_RX_BUF_MASK];
     ASSERT_EQ((unsigned)first_byte, 0x55u, "first data byte matches 0x55");
 
-    /* Advance rx_pos: header(4) + pkt_len(18) = 22 → aligned to 24. */
+    /* Advance rx_pos: header(4) + pkt_len(18) = 22 -> aligned to 24. */
     uint16_t new_pos = rtl8139_rx_advance(rx_pos,
                            (uint16_t)(RTL8139_RXHDR_SIZE + rlen));
     ASSERT_EQ((unsigned)new_pos, 24u, "rx_pos advances from 0 to 24");
@@ -290,7 +290,7 @@ static void test_rx_header_bad_status(void)
 
 static void test_rx_header_wrap_around(void)
 {
-    /* Place a packet header that spans the ring boundary (byte 8191→0). */
+    /* Place a packet header that spans the ring boundary (byte 8191->0). */
     static uint8_t ring[RTL8139_RX_BUF_SIZE + RTL8139_RX_BUF_PAD];
     memset(ring, 0, sizeof(ring));
 
@@ -308,9 +308,9 @@ static void test_rx_header_wrap_around(void)
     ASSERT_EQ((unsigned)pkt_len, 20u, "wrapped header: pkt_len = 20");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * 7. Configuration register values
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 static void test_rcr_value(void)
 {
@@ -319,7 +319,7 @@ static void test_rcr_value(void)
     ASSERT(RTL8139_RCR_VAL & (1u << 3),  "RCR has AB (accept broadcast)");
     ASSERT(RTL8139_RCR_VAL & (1u << 7),  "RCR has WRAP (ring wrap)");
 
-    /* RBLEN[12:11] = 00 → 8 KiB ring (bits must be 0). */
+    /* RBLEN[12:11] = 00 -> 8 KiB ring (bits must be 0). */
     ASSERT(!(RTL8139_RCR_VAL & (3u << 11)),
            "RCR RBLEN = 00 (8 KiB ring)");
 }
@@ -335,9 +335,9 @@ static void test_tcr_value(void)
               "TCR MXDMA = 111 (unlimited)");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * main
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 int main(void)
 {

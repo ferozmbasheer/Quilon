@@ -3,27 +3,27 @@
 
 #include <stdint.h>
 
-/* ── LAPIC physical address and kernel virtual mapping ──────────────────── */
+/* -- LAPIC physical address and kernel virtual mapping -------------------- */
 #define APIC_BASE_PHYS   0xFEE00000UL   /* standard LAPIC MMIO physical base */
 #define APIC_BASE_VIRT   0xFEE00000UL   /* mapped 1:1 in kernel address space */
 
-/* ── LAPIC register offsets (byte offsets, registers are 32-bit) ─────────── */
+/* -- LAPIC register offsets (byte offsets, registers are 32-bit) ----------- */
 #define APIC_REG_ID        0x020  /* Local APIC ID                         */
 #define APIC_REG_VER       0x030  /* Local APIC version                    */
 #define APIC_REG_EOI       0x0B0  /* End Of Interrupt (write 0 to signal)  */
 #define APIC_REG_SVR       0x0F0  /* Spurious Interrupt Vector Register    */
-#define APIC_REG_ICR_LO    0x300  /* Interrupt Command Register — low 32   */
-#define APIC_REG_ICR_HI    0x310  /* Interrupt Command Register — high 32  */
+#define APIC_REG_ICR_LO    0x300  /* Interrupt Command Register -- low 32   */
+#define APIC_REG_ICR_HI    0x310  /* Interrupt Command Register -- high 32  */
 #define APIC_REG_LVT_TIMER 0x320  /* LVT Timer entry                       */
 #define APIC_REG_TMR_INIT  0x380  /* Timer initial count                   */
 #define APIC_REG_TMR_CURR  0x390  /* Timer current count                   */
 #define APIC_REG_TMR_DIV   0x3E0  /* Timer divide configuration            */
 
-/* ── SVR (Spurious Vector Register) bits ─────────────────────────────────── */
+/* -- SVR (Spurious Vector Register) bits ----------------------------------- */
 #define APIC_SVR_ENABLE    (1u << 8)   /* APIC software-enable bit          */
 #define APIC_SPURIOUS_VEC  0xFF        /* IDT vector for spurious interrupts */
 
-/* ── ICR (Interrupt Command Register) delivery mode bits ─────────────────── */
+/* -- ICR (Interrupt Command Register) delivery mode bits ------------------- */
 #define APIC_ICR_FIXED     0x00000000u /* Fixed delivery (normal interrupt) */
 #define APIC_ICR_INIT      0x00000500u /* INIT IPI                          */
 #define APIC_ICR_SIPI      0x00000600u /* Startup IPI (SIPI)                */
@@ -35,7 +35,7 @@
 /* ICR destination shorthand */
 #define APIC_ICR_DEST_FIELD   0x00000000u  /* Use destination field in ICR_HI */
 
-/* ── Pure-C helpers (testable on host) ─────────────────────────────────────
+/* -- Pure-C helpers (testable on host) -------------------------------------
  *
  * These functions encode ICR values and compute SIPI vectors.
  * They have no side effects and can run on the host test harness.
@@ -82,7 +82,7 @@ static inline uint8_t apic_id_from_reg(uint32_t reg)
 
 #ifdef __is_kernel
 
-/* ── Kernel-only LAPIC API ─────────────────────────────────────────────── */
+/* -- Kernel-only LAPIC API ----------------------------------------------- */
 
 /* Map the LAPIC MMIO and enable the LAPIC via SVR.  Call once on the BSP. */
 void    apic_initialize(void);

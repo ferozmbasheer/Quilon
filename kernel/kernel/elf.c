@@ -5,7 +5,7 @@
  * returns the program's entry-point address.
  *
  * Background: what is ELF?
- * ────────────────────────
+ * ------------------------
  * ELF (Executable and Linkable Format) is the standard binary format on
  * Linux and most Unix-like systems.  A compiled program is an ELF file; so
  * are shared libraries and kernel modules.  An ELF file contains:
@@ -27,7 +27,7 @@
  *               The extra p_memsz − p_filesz bytes are BSS (zero-filled data).
  *
  * How this loader works
- * ─────────────────────
+ * ---------------------
  * 1. Read the entire ELF into a kmalloc heap buffer.
  *    (Small programs are at most a few KiB, so whole-file buffering is fine.)
  *
@@ -42,13 +42,13 @@
  *    The caller does:  usermode_enter((void(*)(void))(uintptr_t)entry);
  *
  * Why PAGE_USER on segment pages?
- * ────────────────────────────────
+ * --------------------------------
  * Ring-3 code needs the PAGE_USER bit set on every page it touches.
  * The loader maps them PAGE_USER here so usermode_enter() can jump straight
  * to e_entry without any additional page-table adjustments.
  *
  * Why allocate new physical pages instead of reusing existing mappings?
- * ──────────────────────────────────────────────────────────────────────
+ * ----------------------------------------------------------------------
  * Each process should own its memory privately.  If two processes loaded the
  * same binary, they must each get their own writable copy of BSS and data.
  * Allocating fresh pages guarantees isolation even in our single-process
@@ -75,10 +75,10 @@
  * 256 KiB fits any hello-world-scale user program.  Raise if needed.    */
 #define ELF_MAX_SIZE (256u * 1024u)
 
-/* ── Pure parsing helpers ────────────────────────────────────────────────────
+/* -- Pure parsing helpers ----------------------------------------------------
  * These functions depend only on the buffer pointer and arithmetic - no
  * kernel services.  They compile and run identically on the host for tests.
- * ─────────────────────────────────────────────────────────────────────────── */
+ * --------------------------------------------------------------------------- */
 
 int elf_validate(const uint8_t *buf, uint32_t size)
 {
@@ -87,7 +87,7 @@ int elf_validate(const uint8_t *buf, uint32_t size)
 
     const elf32_ehdr_t *h = (const elf32_ehdr_t *)buf;
 
-    /* ── e_ident field checks ─────────────────────────────────────────────── */
+    /* -- e_ident field checks ----------------------------------------------- */
 
     /* Bytes 0-3: ELF magic number */
     if (h->e_ident[0] != 0x7Fu ||
@@ -105,7 +105,7 @@ int elf_validate(const uint8_t *buf, uint32_t size)
     /* Byte 6: EI_VERSION - must equal EV_CURRENT */
     if (h->e_ident[6] != EV_CURRENT)  return -1;
 
-    /* ── Header field checks ─────────────────────────────────────────────── */
+    /* -- Header field checks ----------------------------------------------- */
 
     /* Must be an executable, not a shared library or object file */
     if (h->e_type    != ET_EXEC)           return -1;
@@ -136,20 +136,20 @@ const elf32_phdr_t *elf_phdr(const uint8_t *buf, uint16_t i)
         buf + h->e_phoff + (uint32_t)i * h->e_phentsize);
 }
 
-/* ── Kernel-only: full ELF loader ─────────────────────────────────────────── */
+/* -- Kernel-only: full ELF loader ------------------------------------------- */
 
 #ifdef __is_kernel
 
 uint32_t elf_load(const char *path)
 {
-    /* ── Step 1: open the file from VFS ──────────────────────────────────── */
+    /* -- Step 1: open the file from VFS ------------------------------------ */
     int fd = vfs_open(path);
     if (fd < 0) {
         printf("[elf] cannot open '%s'\r\n", path);
         return 0;
     }
 
-    /* ── Step 2: read the entire file into a heap buffer ─────────────────── */
+    /* -- Step 2: read the entire file into a heap buffer ------------------- */
     uint8_t *buf = (uint8_t *)kmalloc(ELF_MAX_SIZE);
     if (!buf) {
         printf("[elf] out of heap memory for '%s'\r\n", path);
@@ -170,7 +170,7 @@ uint32_t elf_load(const char *path)
         return 0;
     }
 
-    /* ── Step 3: validate the ELF header ─────────────────────────────────── */
+    /* -- Step 3: validate the ELF header ----------------------------------- */
     if (elf_validate(buf, total) != 0) {
         printf("[elf] '%s': not a valid ELF32 i386 executable\r\n", path);
         kfree(buf);
@@ -181,7 +181,7 @@ uint32_t elf_load(const char *path)
     printf("[elf] '%s': entry=0x%x  phnum=%d\r\n",
            path, (unsigned)ehdr->e_entry, (int)ehdr->e_phnum);
 
-    /* ── Step 4: map and populate each PT_LOAD segment ───────────────────── */
+    /* -- Step 4: map and populate each PT_LOAD segment --------------------- */
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         const elf32_phdr_t *ph = elf_phdr(buf, i);
 
@@ -204,7 +204,7 @@ uint32_t elf_load(const char *path)
          * Example: p_vaddr=0x401010, p_memsz=20
          *   virt_start = 0x401000 (page containing the segment start)
          *   virt_end   = 0x402000 (first page entirely past the segment end)
-         *   → one page to map: 0x401000
+         *   -> one page to map: 0x401000
          */
         uint32_t virt_start = ph->p_vaddr & ~(PAGE_SIZE - 1u);
         uint32_t virt_end   = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1u)
@@ -254,7 +254,7 @@ uint32_t elf_load(const char *path)
                    ph->p_filesz);
     }
 
-    /* ── Step 5: return the entry point ──────────────────────────────────── */
+    /* -- Step 5: return the entry point ------------------------------------ */
     uint32_t entry = ehdr->e_entry;
     kfree(buf);
 
@@ -278,24 +278,24 @@ uint32_t elf_load(const char *path)
  * the background, before the child is ever scheduled.
  */
 /*
- * STACK_VMA_PAGES — how many pages the stack VMA covers.
+ * STACK_VMA_PAGES -- how many pages the stack VMA covers.
  *
  * Only the top page (USER_STACK_TOP - PAGE_SIZE) is mapped eagerly.
  * The remaining STACK_VMA_PAGES-1 pages are demand-paged as the stack grows.
- * 64 pages = 256 KiB of maximum stack depth — generous for user programs.
+ * 64 pages = 256 KiB of maximum stack depth -- generous for user programs.
  */
 #define STACK_VMA_PAGES 64u
 
 uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
 {
-    /* ── Step 1: open the file ───────────────────────────────────────────── */
+    /* -- Step 1: open the file --------------------------------------------- */
     int fd = vfs_open(path);
     if (fd < 0) {
         printf("[elf] cannot open '%s'\r\n", path);
         return 0;
     }
 
-    /* ── Step 2: read into heap buffer ──────────────────────────────────── */
+    /* -- Step 2: read into heap buffer ------------------------------------ */
     uint8_t *buf = (uint8_t *)kmalloc(ELF_MAX_SIZE);
     if (!buf) {
         printf("[elf] out of heap memory for '%s'\r\n", path);
@@ -315,7 +315,7 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
         return 0;
     }
 
-    /* ── Step 3: validate ────────────────────────────────────────────────── */
+    /* -- Step 3: validate -------------------------------------------------- */
     if (elf_validate(buf, total) != 0) {
         printf("[elf] '%s': not a valid ELF32 i386 executable\r\n", path);
         kfree(buf);
@@ -327,7 +327,7 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
            path, (unsigned)(uintptr_t)target_pd,
            (unsigned)ehdr->e_entry, (int)ehdr->e_phnum);
 
-    /* ── Step 4: map segments into target_pd ─────────────────────────────── */
+    /* -- Step 4: map segments into target_pd ------------------------------- */
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         const elf32_phdr_t *ph = elf_phdr(buf, i);
 
@@ -372,7 +372,7 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
 
         for (uint32_t virt = virt_start; virt < virt_end; virt += PAGE_SIZE) {
 
-            /* Skip purely-BSS pages — demand-paged via VMA. */
+            /* Skip purely-BSS pages -- demand-paged via VMA. */
             if (virt >= file_page_end && ph->p_filesz < ph->p_memsz)
                 continue;
 
@@ -423,10 +423,10 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
         }
     }
 
-    /* ── Step 5: map the initial stack page and register the stack VMA ──── */
+    /* -- Step 5: map the initial stack page and register the stack VMA ---- */
     /*
      * Only the top page [USER_STACK_TOP - PAGE_SIZE, USER_STACK_TOP) is
-     * mapped eagerly — ESP starts here and grows downward into it.
+     * mapped eagerly -- ESP starts here and grows downward into it.
      *
      * The stack VMA covers [USER_STACK_TOP - STACK_VMA_PAGES * PAGE_SIZE,
      * USER_STACK_TOP).  Any access below the initial page but within the VMA

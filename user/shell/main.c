@@ -6,7 +6,7 @@
  * /bin/sh or init  - the first user-space process, PID 1.
  *
  * Commands
- * ────────
+ * --------
  *   help              - list available commands
  *   ls                - list files in the root directory (SYS_READDIR)
  *   cat <file>        - print a file to stdout (SYS_OPEN + SYS_READ)
@@ -15,8 +15,8 @@
  *   exit              - exit the shell (SYS_EXIT 0)
  *
  * Differences from the kernel ring-0 shell
- * ─────────────────────────────────────────
- *   • No access to kernel internals (printf → terminal_write, VFS pointers…).
+ * -----------------------------------------
+ *   • No access to kernel internals (printf -> terminal_write, VFS pointers…).
  *     Everything goes through syscalls.
  *   • exec spawns a proper child process (SYS_EXEC returns child PID); the
  *     shell waits for it with SYS_WAIT instead of using exec_setjmp.
@@ -28,8 +28,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <pthread.h>
 
-/* ── Terminal helpers ─────────────────────────────────────────────────── */
+/* -- Terminal helpers --------------------------------------------------- */
 
 /*
  * readline  - read one line of text from stdin, echoing characters back.
@@ -66,7 +67,7 @@ static int readline(char *buf, int size)
     return i;
 }
 
-/* ── Command implementations ──────────────────────────────────────────── */
+/* -- Command implementations -------------------------------------------- */
 
 static void cmd_help(void)
 {
@@ -104,6 +105,8 @@ static void cmd_help(void)
     printf("  cd <path>              - change working directory  (section 12.1)\r\n");
     printf("  mkdir <dir>            - create directory          (section 12.1)\r\n");
     printf("  rename <old> <new>     - rename file or directory  (section 12.1)\r\n");
+    printf("  thread                 - kernel thread demo (SYS_CLONE, section 12.3)\r\n");
+    printf("  mouse                  - PS/2 mouse position and buttons (section 13)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -290,7 +293,7 @@ static void cmd_initrd(void)
     if (count == 0)
         printf("  (empty)\r\n");
 
-    /* Try to read MOTD.TXT — present in demo initrd images. */
+    /* Try to read MOTD.TXT -- present in demo initrd images. */
     int fd = open("MOTD.TXT");
     if (fd >= 0) {
         char buf[64];
@@ -310,10 +313,10 @@ static void cmd_clear(void)
 }
 
 /*
- * cmd_heaptest — demand paging demo (section 9.2).
+ * cmd_heaptest -- demand paging demo (section 9.2).
  *
  * Allocates a 256 KiB buffer via malloc (which calls sbrk internally).
- * With demand paging, sbrk only creates a VMA — no physical pages are
+ * With demand paging, sbrk only creates a VMA -- no physical pages are
  * allocated yet.  Each write to a new page triggers a page-fault, and the
  * kernel prints "[demand] pid X: mapped page 0xXXXXX".  This makes the
  * lazy page-by-page allocation visible on the console.
@@ -327,7 +330,7 @@ static void cmd_heaptest(void)
     const int PAGE_SIZE = 4096;
 
     printf("=== Demand-paging heap test (section 9.2) ===\r\n");
-    printf("Allocating %d KiB via malloc (sbrk → VMA, no pages yet)...\r\n",
+    printf("Allocating %d KiB via malloc (sbrk -> VMA, no pages yet)...\r\n",
            BUF_SIZE / 1024);
 
     char *buf = (char *)malloc(BUF_SIZE);
@@ -353,8 +356,8 @@ static void cmd_heaptest(void)
         }
     }
 
-    printf("Result: %s\r\n", ok ? "PASS — all 64 pages demand-paged and verified"
-                                 : "FAIL — data mismatch");
+    printf("Result: %s\r\n", ok ? "PASS -- all 64 pages demand-paged and verified"
+                                 : "FAIL -- data mismatch");
     free(buf);
     printf("=== done ===\r\n");
 }
@@ -386,11 +389,11 @@ static void cmd_fork(void)
     }
 }
 
-/* cmd_cow — demonstrate copy-on-write fork (section 9.3).
+/* cmd_cow -- demonstrate copy-on-write fork (section 9.3).
  *
  * Allocates a buffer, writes "parent" into it, then forks.
  * The child overwrites it with "child" and exits.  Because CoW is in
- * effect, the parent still sees its original value — the write in the
+ * effect, the parent still sees its original value -- the write in the
  * child triggered a CoW fault, a new physical page was allocated for the
  * child, and the parent's page was left untouched.               */
 static void cmd_cow(void)
@@ -422,13 +425,49 @@ static void cmd_cow(void)
     } else {
         int code = 0;
         wait(pid, &code);
-        /* Parent's copy must be untouched — CoW preserved isolation. */
+        /* Parent's copy must be untouched -- CoW preserved isolation. */
         printf("cow: parent (PID=%d) shared=\"%s\"  "
                "(expect \"parent-data\")\r\n", getpid(), shared);
         printf("cow: %s\r\n",
                (shared[0] == 'p') ? "PASS: CoW preserved parent page"
                                   : "FAIL: parent page was corrupted");
     }
+}
+
+/* Thread function used by cmd_thread. */
+static void *thread_worker(void *arg)
+{
+    int n = (int)(unsigned)arg;
+    printf("thread: worker (tid=%d, arg=%d) running\r\n", getpid(), n);
+    return (void *)0;
+}
+
+static void cmd_thread(void)
+{
+    printf("=== Kernel Thread demo (section 12.3 -- SYS_CLONE) ===\r\n");
+    printf("thread: SYS_CLONE=%d  CLONE_VM=0x%x\r\n",
+           SYS_CLONE, CLONE_VM);
+    printf("thread: creating two threads via pthread_create...\r\n");
+
+    pthread_t t1, t2;
+    int r1 = pthread_create(&t1, NULL, thread_worker, (void *)1);
+    int r2 = pthread_create(&t2, NULL, thread_worker, (void *)2);
+
+    if (r1 != 0 || r2 != 0) {
+        printf("thread: pthread_create failed\r\n");
+        return;
+    }
+
+    printf("thread: parent (pid=%d) waiting for t1=%d t2=%d\r\n",
+           getpid(), (int)t1, (int)t2);
+
+    pthread_join(t1, NULL);
+    printf("thread: t1 joined\r\n");
+    pthread_join(t2, NULL);
+    printf("thread: t2 joined\r\n");
+
+    printf("thread: PASS -- both threads ran and returned\r\n");
+    printf("=== Thread demo done ===\r\n");
 }
 
 static void cmd_pipe(void)
@@ -473,7 +512,7 @@ static void cmd_pipe(void)
     printf("=== done ===\r\n");
 }
 
-/* ── PCI class code name — minimal inline table (no kernel headers needed) ── */
+/* -- PCI class code name -- minimal inline table (no kernel headers needed) -- */
 static const char *pci_cls(unsigned int code)
 {
     switch (code) {
@@ -660,7 +699,7 @@ static void cmd_dhcp(void)
     int r = net_dhcp();
     if (r == 0) {
         unsigned int ip = net_getip();
-        printf("dhcp: ACK — IP = %u.%u.%u.%u\r\n",
+        printf("dhcp: ACK -- IP = %u.%u.%u.%u\r\n",
                (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
                (ip >>  8) & 0xFF,  ip & 0xFF);
     } else {
@@ -698,7 +737,7 @@ static void cmd_ping(const char *arg)
     if (r > 0)
         printf("reply received\r\n");
     else if (r == 0)
-        printf("timeout — no reply\r\n");
+        printf("timeout -- no reply\r\n");
     else
         printf("error (NIC not ready or no IP configured)\r\n");
 }
@@ -814,7 +853,7 @@ static void cmd_smp(void)
     printf("(kernel SMP state visible via 'smp' in the ring-0 shell)\r\n");
 }
 
-/* ── Section 12.1: File Metadata & Directory Operations ──────────────────── */
+/* -- Section 12.1: File Metadata & Directory Operations -------------------- */
 
 static void cmd_stat(const char *path)
 {
@@ -877,6 +916,23 @@ static void cmd_rename_file(const char *args)
         printf("rename: failed (src not found or dst exists)\r\n");
 }
 
+static void cmd_mouse(void)
+{
+    mouse_event_t ev;
+    printf("=== PS/2 Mouse Driver (section 13) ===\r\n");
+    if (mouse_read(&ev) <= 0) {
+        printf("mouse: not available\r\n");
+        return;
+    }
+    printf("mouse: x=%d  y=%d  buttons=0x%02x\r\n",
+           ev.x, ev.y, (unsigned)ev.buttons);
+    printf("mouse: left=%s  right=%s  middle=%s\r\n",
+           (ev.buttons & MOUSE_BTN_LEFT)   ? "down" : "up",
+           (ev.buttons & MOUSE_BTN_RIGHT)  ? "down" : "up",
+           (ev.buttons & MOUSE_BTN_MIDDLE) ? "down" : "up");
+    printf("=== done ===\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -894,7 +950,7 @@ static void cmd_pid(void)
     printf("shell PID: %d\r\n", getpid());
 }
 
-/* ── Command dispatch ─────────────────────────────────────────────────── */
+/* -- Command dispatch --------------------------------------------------- */
 
 static void dispatch(char *line)
 {
@@ -946,6 +1002,8 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "cd")     == 0) cmd_cd(arg);
     else if (strcmp(cmd, "mkdir")  == 0) cmd_mkdir_dir(arg);
     else if (strcmp(cmd, "rename") == 0) cmd_rename_file(arg);
+    else if (strcmp(cmd, "thread") == 0) cmd_thread();
+    else if (strcmp(cmd, "mouse")  == 0) cmd_mouse();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);
@@ -955,7 +1013,7 @@ static void dispatch(char *line)
     }
 }
 
-/* ── Entry point ──────────────────────────────────────────────────────── */
+/* -- Entry point -------------------------------------------------------- */
 
 int main(void)
 {

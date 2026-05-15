@@ -1,9 +1,9 @@
 /*
- * Quilon OS — Virtual File System (VFS)
+ * Quilon OS -- Virtual File System (VFS)
  * Section 12.1: File Metadata & Directory Operations
  *
  * Design
- * ──────
+ * ------
  * The VFS is a thin dispatch layer between callers (shell, syscall handler)
  * and a concrete filesystem driver (FAT16, RAM disk, …).  It manages:
  *
@@ -24,21 +24,21 @@
 #include <kernel/pipe.h>
 #endif
 
-/* ── Mounted filesystem ─────────────────────────────────────────────────── */
+/* -- Mounted filesystem --------------------------------------------------- */
 
 static const vfs_ops_t *mounted_ops = (const vfs_ops_t *)0;
 static void *mounted_ctx = (void *)0;
 
-/* ── Working directory (section 12.1) ──────────────────────────────────────── */
+/* -- Working directory (section 12.1) ---------------------------------------- */
 
 static char vfs_cwd[VFS_PATH_MAX] = "/";
 
-/* ── File descriptor table ──────────────────────────────────────────────── */
+/* -- File descriptor table ------------------------------------------------ */
 
 static vfs_node_t fd_table[VFS_MAX_FDS];
 
 /*
- * fd_to_idx — translate a user-visible fd to a fd_table index.
+ * fd_to_idx -- translate a user-visible fd to a fd_table index.
  *
  * Returns -1 if the fd is out of range or the slot is not open.
  */
@@ -50,7 +50,7 @@ static int fd_to_idx(int fd)
     return idx;
 }
 
-/* ── Public API ─────────────────────────────────────────────────────────── */
+/* -- Public API ----------------------------------------------------------- */
 
 void vfs_mount(const vfs_ops_t *ops, void *ctx)
 {
@@ -182,7 +182,7 @@ int vfs_readdir(uint32_t index, vfs_dirent_t *out)
     return mounted_ops->readdir(mounted_ctx, vfs_cwd, index, out);
 }
 
-/* ── Section 12.1 — file metadata & directory ops ───────────────────────── */
+/* -- Section 12.1 -- file metadata & directory ops ------------------------- */
 
 int vfs_lseek(int fd, int32_t offset, int whence)
 {

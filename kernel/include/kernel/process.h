@@ -1,5 +1,5 @@
 /*
- * Quilon OS — Process Control Block and Process Table (section 5.2)
+ * Quilon OS -- Process Control Block and Process Table (section 5.2)
  *
  * A Process Control Block (PCB) is the kernel's record of one process.
  * Everything the kernel needs to suspend a process and resume it later
@@ -15,14 +15,14 @@
 #define _KERNEL_PROCESS_H
 
 #include <stdint.h>
-#include <kernel/signal.h>   /* NSIG, SIG_DFL — used in process_t below */
-#include <kernel/vma.h>      /* vma_t, PROC_VMA_MAX — demand paging (9.2) */
+#include <kernel/signal.h>   /* NSIG, SIG_DFL -- used in process_t below */
+#include <kernel/vma.h>      /* vma_t, PROC_VMA_MAX -- demand paging (9.2) */
 
 #define PROCESS_MAX        16    /* maximum concurrent processes               */
 #define PROCESS_NAME_LEN   16    /* max process name length (including NUL)    */
 
 /*
- * proc_state_t — lifecycle states of a process.
+ * proc_state_t -- lifecycle states of a process.
  *
  * PROC_UNUSED:  Slot is free; may be reused by process_create().
  * PROC_RUNNING: Currently executing on the CPU.
@@ -39,17 +39,17 @@ typedef enum {
 } proc_state_t;
 
 /*
- * process_t — Process Control Block.
+ * process_t -- Process Control Block.
  *
  * Every live process has one PCB in process_table[].  The fields used
  * for context switching are kernel_esp and cr3:
  *
- *   kernel_esp  — saved kernel stack pointer.  context_switch() writes
+ *   kernel_esp  -- saved kernel stack pointer.  context_switch() writes
  *                 the current ESP here when suspending the process, and
  *                 reads it back when resuming.  The value points inside
  *                 kernel_stack[].
  *
- *   cr3         — physical address of this process's page directory.
+ *   cr3         -- physical address of this process's page directory.
  *                 Loaded into CR3 on every context switch so the MMU
  *                 sees the correct virtual-to-physical mapping.
  *
@@ -58,6 +58,7 @@ typedef enum {
 typedef struct process {
     uint32_t     pid;              /* unique process ID (= slot index)          */
     uint32_t     parent_pid;       /* parent's PID (0 for the initial process)  */
+    uint32_t     thread_group;     /* 0 = process leader; leader pid for threads */
     proc_state_t state;            /* current lifecycle state                   */
 
     /*
@@ -93,7 +94,7 @@ typedef struct process {
     int          exit_code;
 
     /*
-     * User heap (section 6.3 — SYS_SBRK).
+     * User heap (section 6.3 -- SYS_SBRK).
      *
      * heap_end tracks the current program break (top of the heap).
      * Initialised to 0; the first SYS_SBRK call sets it to USER_HEAP_START
@@ -122,7 +123,7 @@ typedef struct process {
     char         name[PROCESS_NAME_LEN];
 
     /*
-     * Per-process kernel stack — one 4-KiB page, 16-byte aligned.
+     * Per-process kernel stack -- one 4-KiB page, 16-byte aligned.
      *
      * The stack grows downward from kernel_stack + sizeof(kernel_stack).
      * process_create() builds an initial context_switch frame at the top
@@ -133,7 +134,7 @@ typedef struct process {
     uint8_t      kernel_stack[4096] __attribute__((aligned(16)));
 
     /*
-     * Virtual Memory Areas (section 9.2 — demand paging).
+     * Virtual Memory Areas (section 9.2 -- demand paging).
      *
      * Each VMA records a contiguous virtual address range [start, end) and
      * its permission flags.  The page-fault handler uses this table to decide
@@ -146,15 +147,15 @@ typedef struct process {
     vma_t        vmas[PROC_VMA_MAX];
 } process_t;
 
-/* ── Global state ─────────────────────────────────────────────────────────── */
+/* -- Global state ----------------------------------------------------------- */
 
 extern process_t  process_table[PROCESS_MAX];  /* all PCBs               */
 extern process_t *current_process;             /* the running process     */
 
-/* ── API ──────────────────────────────────────────────────────────────────── */
+/* -- API -------------------------------------------------------------------- */
 
 /*
- * process_init — initialise the process table.
+ * process_init -- initialise the process table.
  *
  * Marks all slots PROC_UNUSED and clears current_process.
  * Call once during kernel startup before creating any processes.
@@ -162,11 +163,11 @@ extern process_t *current_process;             /* the running process     */
 void process_init(void);
 
 /*
- * process_create — allocate and initialise a new process slot.
+ * process_create -- allocate and initialise a new process slot.
  *
- *   name  — short human-readable label (e.g. ELF filename).
- *   entry — virtual address of the user program's first instruction (e_entry).
- *   cr3   — physical address of the new page directory, as returned by
+ *   name  -- short human-readable label (e.g. ELF filename).
+ *   entry -- virtual address of the user program's first instruction (e_entry).
+ *   cr3   -- physical address of the new page directory, as returned by
  *            paging_create_address_space().
  *
  * Sets up a fake context_switch frame on kernel_stack[] so that the
@@ -179,7 +180,7 @@ void process_init(void);
 process_t *process_create(const char *name, uint32_t entry, uint32_t cr3);
 
 /*
- * process_find — look up a process by PID.
+ * process_find -- look up a process by PID.
  *
  * Returns a pointer to the PCB, or NULL if the PID is out of range or
  * the slot is PROC_UNUSED.
@@ -187,19 +188,19 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3);
 process_t *process_find(uint32_t pid);
 
 /*
- * process_pick_next — round-robin scheduler helper.
+ * process_pick_next -- round-robin scheduler helper.
  *
  * Scans the process table for the next PROC_READY slot after
  * current_process and returns it.  Returns NULL if no other runnable
  * process exists.
  *
- * Pure C with no architecture-specific code — fully unit-testable on
+ * Pure C with no architecture-specific code -- fully unit-testable on
  * the host.
  */
 process_t *process_pick_next(void);
 
 /*
- * process_launch — enter user mode for the current process.
+ * process_launch -- enter user mode for the current process.
  *
  * Called by the process_first_run assembly trampoline in boot.S on a
  * process's very first scheduling.  Updates the TSS kernel stack pointer

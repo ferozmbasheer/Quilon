@@ -1,12 +1,12 @@
 /*
- * Quilon user-space libc — dirent.h
+ * Quilon user-space libc -- dirent.h
  *
  * Directory entry struct returned by readdir().  Layout must exactly
  * match vfs_dirent_t in kernel/include/kernel/vfs.h because SYS_READDIR
  * writes a vfs_dirent_t directly to the user-provided pointer.
  *
  * kernel vfs_dirent_t layout:
- *   char     name[VFS_NAME_MAX+1]  (VFS_NAME_MAX=12 → 13 bytes)
+ *   char     name[VFS_NAME_MAX+1]  (VFS_NAME_MAX=12 -> 13 bytes)
  *   uint32_t size
  *   uint8_t  type
  */

@@ -20,6 +20,8 @@
 #include <kernel/apic.h>
 #include <kernel/smp.h>
 #include <kernel/waitq.h>
+#include <kernel/syscall.h>
+#include <kernel/mouse.h>
 
 static void shell_cmd_ls(void)
 {
@@ -353,7 +355,7 @@ static void shell_cmd_cow(void)
 {
     printf("=== CoW fork demo (section 9.3) ===\r\n");
 
-    /* ── 1. PMM reference-count lifecycle ───────────────────────────── */
+    /* -- 1. PMM reference-count lifecycle ----------------------------- */
     uint32_t free0 = pmm_free_page_count();
     void *page_a = pmm_alloc_page();
     if (!page_a) { printf("cow: out of memory\r\n"); return; }
@@ -373,7 +375,7 @@ static void shell_cmd_cow(void)
     printf("4. second free   -> free count=%d  (restored to %d: page freed)\r\n",
            (int)pmm_free_page_count(), (int)free0);
 
-    /* ── 2. CoW fork: writable page shared, not copied ──────────────── */
+    /* -- 2. CoW fork: writable page shared, not copied ---------------- */
     printf("5. PAGE_COW=0x%x  (bit 9, OS-reserved PTE bit)\r\n",
            (unsigned)PAGE_COW);
 
@@ -737,7 +739,7 @@ static void shell_cmd_psf(void)
                (int)active->width, (int)active->height,
                (int)active->glyph_count, (int)active->bytes_per_glyph);
 
-        /* Reinitialize terminal — dimensions unchanged (still 8x16), but
+        /* Reinitialize terminal -- dimensions unchanged (still 8x16), but
          * subsequent draws will use the PSF2 path.
          * If you load a font with different dimensions, call vbe_terminal_init()
          * to recompute term_cols / term_rows. */
@@ -804,7 +806,7 @@ static void shell_cmd_ansitest(void)
     printf("=== done ===\r\n");
 }
 
-/* ── Section 12.1 shell commands ──────────────────────────────────────────── */
+/* -- Section 12.1 shell commands -------------------------------------------- */
 
 static void shell_cmd_stat(const char *path)
 {
@@ -881,6 +883,55 @@ static void shell_cmd_vga(void)
     vbe_demo();
 }
 
+static void shell_cmd_thread(void)
+{
+    printf("Kernel Threads demo (section 12.3 -- SYS_CLONE):\r\n");
+    printf("  SYS_CLONE  = %d\r\n", SYS_CLONE);
+    printf("  CLONE_VM   = 0x%x  (share address space)\r\n", (unsigned)CLONE_VM);
+    printf("  CLONE_FS   = 0x%x  (share cwd)\r\n", (unsigned)CLONE_FS);
+    printf("  CLONE_FILES= 0x%x  (share fd table)\r\n", (unsigned)CLONE_FILES);
+    printf("\r\n");
+    printf("  clone(fn, stack, flags) creates a new kernel thread that:\r\n");
+    printf("    - Shares the parent's cr3 (CLONE_VM) -- same address space.\r\n");
+    printf("    - Gets its own kernel_stack[] and PCB entry.\r\n");
+    printf("    - Starts executing at fn with the provided user-space stack.\r\n");
+    printf("    - Is scheduled by the same round-robin scheduler.\r\n");
+    printf("\r\n");
+
+    /* Show existing processes and their thread_group field. */
+    int shown = 0;
+    printf("  Current process table:\r\n");
+    for (int i = 0; i < PROCESS_MAX; i++) {
+        if (process_table[i].state != PROC_UNUSED) {
+            printf("    pid=%-2d  tgroup=%-2d  state=%d  name=%s\r\n",
+                   (int)process_table[i].pid,
+                   (int)process_table[i].thread_group,
+                   (int)process_table[i].state,
+                   process_table[i].name);
+            shown++;
+        }
+    }
+    if (shown == 0)
+        printf("    (no active processes)\r\n");
+
+    printf("\r\n");
+    printf("  pthread_create/join/exit in user/libc/pthread.c\r\n");
+    printf("  Run 'thread' in the ring-3 shell for a live demo.\r\n");
+}
+
+static void shell_cmd_mouse(void)
+{
+    printf("=== PS/2 Mouse Driver (section 13) ===\r\n");
+    printf("mouse: x=%d  y=%d  buttons=0x%02x\r\n",
+           mouse_get_x(), mouse_get_y(), (unsigned)mouse_get_buttons());
+    printf("mouse: left=%s  right=%s  middle=%s\r\n",
+           (mouse_get_buttons() & MOUSE_BTN_LEFT)   ? "down" : "up",
+           (mouse_get_buttons() & MOUSE_BTN_RIGHT)  ? "down" : "up",
+           (mouse_get_buttons() & MOUSE_BTN_MIDDLE) ? "down" : "up");
+    printf("mouse: SYS_MOUSE_READ=%d\r\n", SYS_MOUSE_READ);
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_waitq(void)
 {
     printf("Wait queue demo (section 12.2):\r\n");
@@ -894,8 +945,8 @@ static void shell_cmd_waitq(void)
     waitq_wake_all(&wq);
     printf("  wake_all on empty queue: no-op, ok\r\n");
 
-    printf("  keyboard_getchar: sleeps on kb_wq — IRQ wakes via waitq_wake_one\r\n");
-    printf("  pipe_read/write:  sleeps on pipe->wq — other side calls waitq_wake_all\r\n");
+    printf("  keyboard_getchar: sleeps on kb_wq -- IRQ wakes via waitq_wake_one\r\n");
+    printf("  pipe_read/write:  sleeps on pipe->wq -- other side calls waitq_wake_all\r\n");
     printf("  net_tcp_recv:     yields between polls via waitq_sleep on tcp.rx_wq\r\n");
     printf("  (no CPU wasted spinning while waiting for I/O)\r\n");
 }
@@ -917,6 +968,8 @@ static void shell_execute(const char *cmd) {
         printf("          mkdir <dir>            - create directory        (section 12.1)\r\n");
         printf("          rename <old> <new>     - rename file/dir         (section 12.1)\r\n");
         printf("          waitq                  - wait queue demo         (section 12.2)\r\n");
+        printf("          thread                 - kernel thread demo      (section 12.3)\r\n");
+        printf("          mouse                  - PS/2 mouse position     (section 13)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -1008,6 +1061,10 @@ static void shell_execute(const char *cmd) {
         shell_cmd_rename(cmd + 7);
     } else if (strcmp(cmd, "waitq") == 0) {
         shell_cmd_waitq();
+    } else if (strcmp(cmd, "thread") == 0) {
+        shell_cmd_thread();
+    } else if (strcmp(cmd, "mouse") == 0) {
+        shell_cmd_mouse();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

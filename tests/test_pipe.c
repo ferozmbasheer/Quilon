@@ -1,5 +1,5 @@
 /*
- * Quilon OS — Pipe Unit Tests (section 8.2)
+ * Quilon OS -- Pipe Unit Tests (section 8.2)
  *
  * Tests the ring-buffer logic in kernel/kernel/pipe.c compiled on the
  * host (no scheduler, no __is_kernel).  The blocking paths are guarded
@@ -18,16 +18,16 @@
 #include <kernel/pipe.h>
 #include <kernel/vfs.h>
 
-/* ── Helper: reset all pipe slots before each test ─────────────────────── */
+/* -- Helper: reset all pipe slots before each test ----------------------- */
 static void pipes_reset(void)
 {
     for (int i = 0; i < PIPE_MAX; i++)
         pipe_pool[i].in_use = 0;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 1. pipe_alloc
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_alloc_returns_valid_index(void)
 {
@@ -63,9 +63,9 @@ static void test_alloc_distinct_indices(void)
     ASSERT(a != b, "two allocs return distinct indices");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. pipe_bytes_available / pipe_space_available
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_empty_pipe_has_zero_bytes(void)
 {
@@ -95,9 +95,9 @@ static void test_bytes_plus_space_equals_capacity(void)
               "bytes_available + space_available == PIPE_BUF_SIZE - 1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 3. pipe_write / pipe_read — basic
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 3. pipe_write / pipe_read -- basic
+ * =========================================================================== */
 
 static void test_write_returns_bytes_written(void)
 {
@@ -184,9 +184,9 @@ static void test_write_broken_pipe(void)
     ASSERT_EQ(n, -1, "write with readers=0 returns -1 (broken pipe)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. Multiple writes and reads (FIFO order)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_fifo_order(void)
 {
@@ -223,9 +223,9 @@ static void test_drain_then_write_again(void)
     ASSERT_STR_EQ((char *)buf, "world", "second write content correct");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. Ring wrap-around
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_ring_wrap(void)
 {
@@ -239,7 +239,7 @@ static void test_ring_wrap(void)
     p->read_pos  = near_end;
     p->write_pos = near_end;
 
-    /* Write 6 bytes — must wrap at the end of buf[]. */
+    /* Write 6 bytes -- must wrap at the end of buf[]. */
     const uint8_t payload[] = {1, 2, 3, 4, 5, 6};
     int wn = pipe_write(idx, payload, 6);
     ASSERT_EQ(wn, 6, "write across wrap boundary returns 6");
@@ -253,9 +253,9 @@ static void test_ring_wrap(void)
     ASSERT_EQ((int)out[5], 6, "wrap byte 5 correct");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6. Reference counting
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_close_read_decrements_readers(void)
 {
@@ -296,9 +296,9 @@ static void test_freed_slot_reused(void)
     ASSERT_EQ(second, first, "freed slot reused by next alloc");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 7. Error handling
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_write_invalid_idx(void)
 {
@@ -345,9 +345,9 @@ static void test_write_zero_len(void)
     ASSERT_EQ(pipe_bytes_available(idx), 0u, "nothing written for len=0");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 8. vfs_pipe integration (host build: returns -1)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_vfs_pipe_null_fds(void)
 {
@@ -364,11 +364,11 @@ static void test_vfs_pipe_returns_minus1_in_host(void)
     ASSERT_EQ(r, -1, "vfs_pipe returns -1 in host build");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 9. SYS_PIPE constant
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
-/* syscall.h only defines constants — safe to include without linking syscall.c */
+/* syscall.h only defines constants -- safe to include without linking syscall.c */
 #include <kernel/syscall.h>
 
 static void test_sys_pipe_constant(void)
@@ -380,9 +380,9 @@ static void test_sys_pipe_constant(void)
     ASSERT(SYS_PIPE > 0u,          "SYS_PIPE > 0");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {

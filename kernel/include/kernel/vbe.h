@@ -1,11 +1,11 @@
 /*
- * Quilon OS — VGA Graphics Mode driver  (section 10.4)
+ * Quilon OS -- VGA Graphics Mode driver  (section 10.4)
  *
  * Provides a linear framebuffer terminal that replaces the VGA text-mode
  * driver when GRUB hands off a VESA/VBE framebuffer.
  *
  * How it fits together
- * ────────────────────
+ * --------------------
  * grub.cfg requests the mode:
  *   set gfxmode=800x600x32
  *   set gfxpayload=keep
@@ -28,9 +28,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* ── Double-buffer shadow base (section 11.3) ─────────────────────────── */
+/* -- Double-buffer shadow base (section 11.3) --------------------------- */
 /*
- * VBE_SHADOW_VBASE — virtual base for the in-RAM shadow framebuffer.
+ * VBE_SHADOW_VBASE -- virtual base for the in-RAM shadow framebuffer.
  *
  * PD[769] covers 0xC0400000–0xC07FFFFF.  The shadow buffer starts at
  * 0xC0500000 (1 MiB into that slot) so there is room for the standard
@@ -42,7 +42,7 @@
  */
 #define VBE_SHADOW_VBASE 0xC0500000u
 
-/* ── Framebuffer geometry ──────────────────────────────────────────────── */
+/* -- Framebuffer geometry ------------------------------------------------ */
 
 typedef struct {
     uint64_t addr;    /* physical base address of the linear framebuffer */
@@ -53,7 +53,7 @@ typedef struct {
     uint8_t  type;    /* 0 = indexed, 1 = RGB, 2 = EGA text              */
 } vbe_info_t;
 
-/* ── Standard 0x00RRGGBB colors ────────────────────────────────────────── */
+/* -- Standard 0x00RRGGBB colors ------------------------------------------ */
 #define VBE_COLOR_BLACK      0x00000000u
 #define VBE_COLOR_WHITE      0x00FFFFFFu
 #define VBE_COLOR_RED        0x00FF0000u
@@ -67,7 +67,7 @@ typedef struct {
 #define VBE_COLOR_LIGHT_GREY 0x00AAAAAAu
 #define VBE_COLOR_DARK_BLUE  0x00000088u
 
-/* ── Font metrics ──────────────────────────────────────────────────────── */
+/* -- Font metrics -------------------------------------------------------- */
 #define VBE_FONT_W  8   /* pixels wide per glyph cell */
 #define VBE_FONT_H  16  /* pixels tall per glyph cell (8 px data + 8 px gap) */
 
@@ -78,7 +78,7 @@ typedef struct {
  * Glyph data occupies rows 0–7 of the 16-row VBE_FONT_H cell; rows 8–15
  * are filled with the background colour to produce readable line spacing.
  *
- * Marked static so each translation unit gets its own copy — the 1 KiB
+ * Marked static so each translation unit gets its own copy -- the 1 KiB
  * duplication is acceptable because only two TUs ever include this header
  * (vbe.c in the kernel and test_vbe.c in the host tests).
  */
@@ -213,10 +213,10 @@ static const uint8_t vbe_font8x8[128][8] = {
     /* 0x7F DEL */ {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF},
 };
 
-/* ── Pure-C helpers (testable on the host) ─────────────────────────────── */
+/* -- Pure-C helpers (testable on the host) ------------------------------- */
 
 /*
- * vbe_pixel_offset — byte offset of pixel (x, y) in the linear framebuffer.
+ * vbe_pixel_offset -- byte offset of pixel (x, y) in the linear framebuffer.
  *
  * pitch     : bytes per scanline (framebuffer_pitch from multiboot)
  * bpp_bytes : bytes per pixel (e.g. 4 for 32 bpp, 3 for 24 bpp)
@@ -228,11 +228,11 @@ static inline uint32_t vbe_pixel_offset(uint32_t x, uint32_t y,
 }
 
 /*
- * vbe_glyph_pixel — true if pixel (col, row) is set in the glyph for c.
+ * vbe_glyph_pixel -- true if pixel (col, row) is set in the glyph for c.
  *
  * col  : 0 = leftmost, 7 = rightmost
  * row  : 0 = topmost, 7 = bottommost
- * Only the low 7 bits of c are used (ASCII); out-of-range col/row → 0.
+ * Only the low 7 bits of c are used (ASCII); out-of-range col/row -> 0.
  */
 static inline int vbe_glyph_pixel(unsigned char c, uint32_t col, uint32_t row)
 {
@@ -241,16 +241,16 @@ static inline int vbe_glyph_pixel(unsigned char c, uint32_t col, uint32_t row)
 }
 
 /*
- * vbe_term_cols — number of character columns for the given pixel width.
- * vbe_term_rows — number of character rows for the given pixel height.
+ * vbe_term_cols -- number of character columns for the given pixel width.
+ * vbe_term_rows -- number of character rows for the given pixel height.
  */
 static inline uint32_t vbe_term_cols(uint32_t width)  { return width  / VBE_FONT_W; }
 static inline uint32_t vbe_term_rows(uint32_t height) { return height / VBE_FONT_H; }
 
-/* ── Double-buffer flush ────────────────────────────────────────────────── */
+/* -- Double-buffer flush -------------------------------------------------- */
 
 /*
- * vbe_flush — copy the shadow buffer to the hardware framebuffer in one shot.
+ * vbe_flush -- copy the shadow buffer to the hardware framebuffer in one shot.
  *
  * All drawing primitives write to an in-RAM shadow buffer; call this once
  * after finishing a batch of writes to make them visible on screen.
@@ -262,10 +262,10 @@ static inline uint32_t vbe_term_rows(uint32_t height) { return height / VBE_FONT
  */
 void vbe_flush(void);
 
-/* ── Initialization ────────────────────────────────────────────────────── */
+/* -- Initialization ------------------------------------------------------ */
 
 /*
- * vbe_init — initialize the VBE framebuffer driver.
+ * vbe_init -- initialize the VBE framebuffer driver.
  *
  * Maps the framebuffer physical pages into the kernel virtual address space,
  * clears the screen with a dark-blue background, and sets up the VBE terminal.
@@ -284,7 +284,7 @@ bool vbe_active(void);
 /* Returns a pointer to the current framebuffer geometry (NULL if inactive). */
 const vbe_info_t *vbe_get_info(void);
 
-/* ── Drawing primitives ─────────────────────────────────────────────────── */
+/* -- Drawing primitives --------------------------------------------------- */
 
 /* Write pixel (x, y) with 0x00RRGGBB color. Clips to screen bounds. */
 void vbe_draw_pixel(uint32_t x, uint32_t y, uint32_t color);
@@ -302,7 +302,7 @@ void vbe_draw_char(uint32_t x, uint32_t y, char c, uint32_t fg, uint32_t bg);
 uint32_t vbe_draw_string(uint32_t x, uint32_t y, const char *s,
                          uint32_t fg, uint32_t bg);
 
-/* ── Terminal emulator ──────────────────────────────────────────────────── */
+/* -- Terminal emulator ---------------------------------------------------- */
 
 /* Initialize a full-screen VBE text terminal (clears the framebuffer). */
 void vbe_terminal_init(void);
@@ -335,10 +335,10 @@ void vbe_terminal_clear_screen(void);
  *   mode 2: entire line                              */
 void vbe_terminal_erase_line(int mode);
 
-/* ── Graphical demo ─────────────────────────────────────────────────────── */
+/* -- Graphical demo ------------------------------------------------------- */
 
 /*
- * vbe_demo — draw a colour gradient, colour swatches, and the ASCII glyph
+ * vbe_demo -- draw a colour gradient, colour swatches, and the ASCII glyph
  *            table to prove the font renderer and framebuffer are working.
  *
  * Called from the kernel shell's 'vga' command.

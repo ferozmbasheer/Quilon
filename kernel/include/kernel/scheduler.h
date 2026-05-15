@@ -15,7 +15,7 @@ typedef enum {
 
 typedef struct task {
     uint32_t     esp;           /* saved kernel stack pointer (x86) */
-    uint32_t     cr3;           /* page directory base — future use  */
+    uint32_t     cr3;           /* page directory base -- future use  */
     task_state_t state;
     uint32_t     id;
     uint8_t      stack[4096];   /* per-task kernel stack             */
@@ -29,7 +29,7 @@ void     scheduler_tick(void);
 uint32_t scheduler_task_count(void);
 
 /*
- * scheduler_yield — voluntarily relinquish the CPU.
+ * scheduler_yield -- voluntarily relinquish the CPU.
  *
  * In the kernel build this performs a real context switch to the next
  * PROC_READY process (via context_switch in boot.S).  The caller is

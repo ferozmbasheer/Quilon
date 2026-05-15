@@ -1,11 +1,11 @@
 /*
- * Quilon OS — User Mode (Ring 3) support
+ * Quilon OS -- User Mode (Ring 3) support
  *
  * This file implements the jump from kernel mode (CPL=0, ring 0) to user
  * mode (CPL=3, ring 3) using the x86 iret technique.
  *
  * Background
- * ──────────
+ * ----------
  * x86 has four privilege levels called "rings".  Ring 0 is the most
  * privileged (the kernel); ring 3 is the least privileged (user programs).
  * Hardware enforces this boundary:
@@ -23,7 +23,7 @@
  * and jumps to the exception handler.
  *
  * TSS requirement
- * ───────────────
+ * ---------------
  * The Task State Segment (TSS) must be loaded into the CPU's Task Register
  * (TR) via the LTR instruction before any ring switch happens.  Without it
  * the CPU has no way to find the kernel stack on a ring-3 exception and will
@@ -31,7 +31,7 @@
  * TSS; usermode_initialize() calls LTR to activate it.
  *
  * Demo vs production
- * ──────────────────
+ * ------------------
  * For this demo we mark the entire first 4 MiB PAGE_USER so that ring-3
  * code can call kernel functions (printf, terminal_write …).  A real OS
  * would give each process its own page directory with only its own pages
@@ -44,7 +44,7 @@
 #include <kernel/paging.h>
 #include <kernel/syscall.h>
 
-/* ── exec_setjmp / exec_longjmp global state ─────────────────────────────────
+/* -- exec_setjmp / exec_longjmp global state ---------------------------------
  * shell_cmd_exec sets exec_return_active = 1 before entering ring 3 and
  * expects exec_longjmp to fire when the user program calls SYS_EXIT.
  * syscall.c checks exec_return_active in the SYS_EXIT handler.
@@ -52,7 +52,7 @@
 exec_jmp_buf_t exec_return_buf;
 int            exec_return_active = 0;
 
-/* ── User-mode stack ─────────────────────────────────────────────────────────
+/* -- User-mode stack ---------------------------------------------------------
  * One 4-KiB page in .bss, 4-KiB aligned.
  * The kernel identity-maps the first 4 MiB (virt == phys), so this page's
  * virtual address IS its physical address.
@@ -63,7 +63,7 @@ static uint8_t user_stack_page[USER_STACK_SIZE]
 
 void usermode_initialize(void)
 {
-    /* ── Step 1: load the TSS into the task register (once only) ────────
+    /* -- Step 1: load the TSS into the task register (once only) --------
      * LTR marks the TSS descriptor in the GDT as "busy".  Issuing LTR a
      * second time on a busy TSS raises a General Protection Fault, so we
      * guard this step with a static flag.
@@ -74,9 +74,9 @@ void usermode_initialize(void)
         tss_loaded = 1;
     }
 
-    /* ── Step 2: make first 4 MiB user-accessible in the active PD ──────
+    /* -- Step 2: make first 4 MiB user-accessible in the active PD ------
      * paging_set_user_access() reads CR3, so it operates on whatever page
-     * directory is currently loaded — the calling process's private PD.
+     * directory is currently loaded -- the calling process's private PD.
      * This must run for EVERY process launch (not just the first), because
      * each process has its own PD and needs PAGE_USER on PD[0] before
      * ring-3 code can access the user stack in the first 4 MiB.
@@ -86,7 +86,7 @@ void usermode_initialize(void)
     /* After higher-half: mark the kernel-high region user-accessible so that
      * ring-3 demo tasks (compiled into kernel text at 0xC01xxxxx) can execute.
      * PD[0] and PD[KERNEL_PD_IDX] share the same page table, so the PTEs are
-     * already marked USER by the call above — this only adds PAGE_USER to
+     * already marked USER by the call above -- this only adds PAGE_USER to
      * the PD[KERNEL_PD_IDX] entry itself.                                   */
     paging_set_user_access(KERNEL_OFFSET, KERNEL_OFFSET + 0x00400000u);
 }
@@ -133,7 +133,7 @@ void usermode_enter_esp(void (*user_func)(void), uint32_t user_esp_top)
         : "memory"
     );
 
-    /* iret transfers control to ring 3 — this line is never reached. */
+    /* iret transfers control to ring 3 -- this line is never reached. */
     __builtin_unreachable();
 }
 
@@ -145,19 +145,19 @@ void usermode_enter(void (*user_func)(void))
     usermode_enter_esp(user_func, user_esp);
 }
 
-/* ── Ring-3 demo tasks ───────────────────────────────────────────────────────
+/* -- Ring-3 demo tasks -------------------------------------------------------
  *
  * These functions are compiled into the kernel image and are called at CPL=3
  * by usermode_enter().  They demonstrate two things:
  *   1. Ring-3 code CAN write to user-accessible memory (VGA framebuffer).
- *   2. Ring-3 code CANNOT execute privileged instructions (→ GPF).
+ *   2. Ring-3 code CANNOT execute privileged instructions (-> GPF).
  */
 
 void user_task_demo(void)
 {
     /* Write a message directly to the VGA text-mode framebuffer.
      * The VGA buffer is at physical 0xB8000, which is inside the
-     * identity-mapped first 4 MiB — and we have set PAGE_USER on it.
+     * identity-mapped first 4 MiB -- and we have set PAGE_USER on it.
      * Each cell is a 16-bit value: high byte = attribute, low byte = char.
      * Attribute 0x2F = white-on-green (stands out clearly as ring-3 output). */
     volatile uint16_t *vga = (volatile uint16_t *)0x000B8000u;
@@ -169,14 +169,14 @@ void user_task_demo(void)
      *
      * HLT is a privileged instruction (only ring 0 may halt the CPU).
      * Executing it at CPL=3 causes the CPU to raise:
-     *   General Protection Fault — vector 13, error code 0
+     *   General Protection Fault -- vector 13, error code 0
      *
      * The kernel's exception handler (exceptions.c) will catch this,
      * print a diagnostic including the faulting EIP (pointing here),
      * and then halt.  This is the expected, correct behaviour.         */
     asm volatile("hlt");
 
-    /* Unreachable — the GPF fires before we return. */
+    /* Unreachable -- the GPF fires before we return. */
     while (1) asm volatile("pause");
 }
 
@@ -192,13 +192,13 @@ void user_task_spin(void)
 
 void user_task_syscall(void)
 {
-    /* ── SYS_WRITE — print a message through the kernel ─────────────────────
+    /* -- SYS_WRITE -- print a message through the kernel ---------------------
      *
      * This is the correct way for user-mode code to output text:
      * instead of writing directly to the VGA buffer (which would work in
      * our permissive demo setup), we ask the kernel to do it via a syscall.
      * In a real OS, user code can never touch kernel or device memory
-     * directly — syscalls are the only bridge.                           */
+     * directly -- syscalls are the only bridge.                           */
     const char msg[] = "[ring3] SYS_WRITE via int $0x80 : syscall works!\r\n";
     uint32_t   len   = (uint32_t)(sizeof(msg) - 1);
     uint32_t   ret;
@@ -213,7 +213,7 @@ void user_task_syscall(void)
         : "memory"
     );
 
-    /* ── SYS_GETPID — retrieve the process ID ────────────────────────────────
+    /* -- SYS_GETPID -- retrieve the process ID --------------------------------
      *
      * Returns 0 in this single-task kernel.  Demonstrates a zero-argument
      * syscall and shows that EAX is correctly delivered back to user code.  */
@@ -225,7 +225,7 @@ void user_task_syscall(void)
         : "memory"
     );
 
-    /* Report the PID we got back — write the message via SYS_WRITE again. */
+    /* Report the PID we got back -- write the message via SYS_WRITE again. */
     if (pid == 0) {
         const char pid_ok[] = "[ring3] SYS_GETPID returned 0 (expected)\r\n";
         uint32_t pid_len = (uint32_t)(sizeof(pid_ok) - 1);
@@ -239,7 +239,7 @@ void user_task_syscall(void)
         );
     }
 
-    /* ── SYS_EXIT — terminate cleanly ────────────────────────────────────────
+    /* -- SYS_EXIT -- terminate cleanly ----------------------------------------
      *
      * Asks the kernel to end this process with exit code 0.
      * The kernel prints a termination message and halts the CPU.
@@ -250,13 +250,13 @@ void user_task_syscall(void)
         : "memory"
     );
 
-    /* Unreachable — SYS_EXIT halts the CPU. */
+    /* Unreachable -- SYS_EXIT halts the CPU. */
     while (1) asm volatile("pause");
 }
 
 void user_task_sbrk(void)
 {
-    /* ── SYS_SBRK — extend the heap by one page ─────────────────────────────
+    /* -- SYS_SBRK -- extend the heap by one page -----------------------------
      *
      * sbrk(increment) returns the old program break on success or -1 on OOM.
      * Here we request one 4-KiB page and verify we can write to the memory. */
@@ -315,7 +315,7 @@ void user_task_sbrk(void)
         }
     }
 
-    /* SYS_EXIT(0) — return control to the shell via exec_longjmp. */
+    /* SYS_EXIT(0) -- return control to the shell via exec_longjmp. */
     asm volatile(
         "int $0x80"
         :: "a"(3u), "b"(0u)
@@ -326,7 +326,7 @@ void user_task_sbrk(void)
 
 void user_task_fork(void)
 {
-    /* ── SYS_FORK — create a child process ──────────────────────────────────
+    /* -- SYS_FORK -- create a child process ----------------------------------
      *
      * fork() returns:
      *   > 0 in the parent (child PID)

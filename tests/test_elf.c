@@ -1,5 +1,5 @@
 /*
- * Quilon OS — ELF Loader Unit Tests
+ * Quilon OS -- ELF Loader Unit Tests
  *
  * Tests elf_validate() and elf_phdr() from kernel/kernel/elf.c using
  * hand-crafted ELF32 buffers.  No kernel services (VFS, PMM, paging) are
@@ -20,7 +20,7 @@
 
 #include <kernel/elf.h>
 
-/* ── Minimal valid ELF32 i386 executable ─────────────────────────────────────
+/* -- Minimal valid ELF32 i386 executable -------------------------------------
  *
  * Hand-crafted byte array representing the smallest possible ELF32 executable
  * accepted by elf_validate():
@@ -39,7 +39,7 @@
  *   p_align  = 4096
  *
  * Entry point: 0x00001000
- * ─────────────────────────────────────────────────────────────────────────── */
+ * --------------------------------------------------------------------------- */
 
 /* little-endian helpers */
 #define U16LE(v)  (uint8_t)((v) & 0xFF), (uint8_t)(((v) >> 8) & 0xFF)
@@ -47,7 +47,7 @@
                   (uint8_t)(((v) >> 16) & 0xFF), (uint8_t)(((v) >> 24) & 0xFF)
 
 static const uint8_t valid_elf[] = {
-    /* ── e_ident (16 bytes) ──────────────────────────────────────────────── */
+    /* -- e_ident (16 bytes) ------------------------------------------------ */
     0x7F, 'E', 'L', 'F',   /* magic                                         */
     0x01,                   /* EI_CLASS    = ELFCLASS32                      */
     0x01,                   /* EI_DATA     = ELFDATA2LSB (little-endian)     */
@@ -56,7 +56,7 @@ static const uint8_t valid_elf[] = {
     0x00, 0x00, 0x00, 0x00, /* EI_ABIVERSION + 4 bytes padding               */
     0x00, 0x00, 0x00, 0x00, /* 4 bytes padding                               */
 
-    /* ── rest of ELF header (36 bytes) ───────────────────────────────────── */
+    /* -- rest of ELF header (36 bytes) ------------------------------------- */
     U16LE(2),          /* e_type      = ET_EXEC                              */
     U16LE(3),          /* e_machine   = EM_386                               */
     U32LE(1),          /* e_version   = 1                                    */
@@ -71,7 +71,7 @@ static const uint8_t valid_elf[] = {
     U16LE(0),          /* e_shnum     = 0                                    */
     U16LE(0),          /* e_shstrndx  = 0                                    */
 
-    /* ── Program header #0 (32 bytes, starts at offset 52) ──────────────── */
+    /* -- Program header #0 (32 bytes, starts at offset 52) ---------------- */
     U32LE(1),          /* p_type   = PT_LOAD                                 */
     U32LE(84),         /* p_offset = 84 (code starts at offset 84)          */
     U32LE(0x00001000), /* p_vaddr  = 0x1000                                  */
@@ -81,15 +81,15 @@ static const uint8_t valid_elf[] = {
     U32LE(PF_R|PF_X),  /* p_flags  = readable + executable                  */
     U32LE(4096),       /* p_align  = 4096 (one page)                        */
 
-    /* ── Code bytes (4 bytes, starts at offset 84) ───────────────────────── */
+    /* -- Code bytes (4 bytes, starts at offset 84) ------------------------- */
     0x90, 0x90, 0x90, 0xC3   /* NOP NOP NOP RET                             */
 };
 
 #define VALID_ELF_SIZE  ((uint32_t)sizeof(valid_elf))
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 1. elf_validate() — good inputs
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 1. elf_validate() -- good inputs
+ * =========================================================================== */
 
 static void test_validate_good_elf(void)
 {
@@ -108,9 +108,9 @@ static void test_validate_exact_header_size(void)
     ASSERT_EQ(r, 0, "buffer with just header+phdrs passes (no segment data needed)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 2. elf_validate() — NULL / size failures
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 2. elf_validate() -- NULL / size failures
+ * =========================================================================== */
 
 static void test_validate_null_buf(void)
 {
@@ -139,9 +139,9 @@ static void test_validate_phdr_table_truncated(void)
     ASSERT_EQ(r, -1, "truncated program header table returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 3. elf_validate() — bad magic
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 3. elf_validate() -- bad magic
+ * =========================================================================== */
 
 static void test_validate_bad_magic_byte0(void)
 {
@@ -155,7 +155,7 @@ static void test_validate_bad_magic_byte1(void)
 {
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
-    buf[1] = 'X';    /* 'E' → 'X' */
+    buf[1] = 'X';    /* 'E' -> 'X' */
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "bad magic[1] returns -1");
 }
 
@@ -163,7 +163,7 @@ static void test_validate_bad_magic_byte2(void)
 {
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
-    buf[2] = 'X';    /* 'L' → 'X' */
+    buf[2] = 'X';    /* 'L' -> 'X' */
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "bad magic[2] returns -1");
 }
 
@@ -171,13 +171,13 @@ static void test_validate_bad_magic_byte3(void)
 {
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
-    buf[3] = 'X';    /* 'F' → 'X' */
+    buf[3] = 'X';    /* 'F' -> 'X' */
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "bad magic[3] returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 4. elf_validate() — bad class / data / version
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 4. elf_validate() -- bad class / data / version
+ * =========================================================================== */
 
 static void test_validate_64bit_class(void)
 {
@@ -191,7 +191,7 @@ static void test_validate_big_endian_data(void)
 {
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
-    buf[5] = 2;  /* ELFDATA2MSB — big-endian */
+    buf[5] = 2;  /* ELFDATA2MSB -- big-endian */
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "big-endian ELF rejected");
 }
 
@@ -203,15 +203,15 @@ static void test_validate_bad_version(void)
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "ELF version 0 rejected");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 5. elf_validate() — bad type / machine
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 5. elf_validate() -- bad type / machine
+ * =========================================================================== */
 
 static void test_validate_shared_lib_type(void)
 {
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
-    /* ET_DYN = 3 (shared object) — Quilon only loads executables (ET_EXEC=2) */
+    /* ET_DYN = 3 (shared object) -- Quilon only loads executables (ET_EXEC=2) */
     buf[16] = 3; buf[17] = 0;
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "ET_DYN (shared lib) rejected");
 }
@@ -243,16 +243,16 @@ static void test_validate_wrong_machine_x64(void)
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1, "x86-64 machine code rejected");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 6. elf_validate() — bad program header entry size
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 6. elf_validate() -- bad program header entry size
+ * =========================================================================== */
 
 static void test_validate_bad_phentsize(void)
 {
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
     /* e_phentsize is at offset 42 (little-endian 16-bit).
-     * Set it to 64 (ELF64 phdr size) — should be rejected.                */
+     * Set it to 64 (ELF64 phdr size) -- should be rejected.                */
     buf[42] = 64; buf[43] = 0;
     ASSERT_EQ(elf_validate(buf, VALID_ELF_SIZE), -1,
               "wrong e_phentsize (64 instead of 32) rejected");
@@ -267,15 +267,15 @@ static void test_validate_zero_phentsize(void)
               "zero e_phentsize rejected");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 7. elf_validate() — zero program header count is allowed
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 7. elf_validate() -- zero program header count is allowed
+ * =========================================================================== */
 
 static void test_validate_zero_phnum(void)
 {
     /* An ELF with e_phnum=0 has no program headers to load, so the program
      * header table trivially "fits" in the buffer.  elf_validate() accepts
-     * this — elf_load() would simply skip the load loop and return e_entry.*/
+     * this -- elf_load() would simply skip the load loop and return e_entry.*/
     uint8_t buf[VALID_ELF_SIZE];
     memcpy(buf, valid_elf, VALID_ELF_SIZE);
     /* e_phnum is at offset 44 (little-endian 16-bit) */
@@ -284,9 +284,9 @@ static void test_validate_zero_phnum(void)
               "e_phnum=0 passes validation (no segments to check)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 8. elf_phdr() — program header access
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 8. elf_phdr() -- program header access
+ * =========================================================================== */
 
 static void test_phdr_type_is_load(void)
 {
@@ -330,9 +330,9 @@ static void test_phdr_align(void)
     ASSERT_EQ(ph->p_align, 4096u, "phdr[0].p_align == 4096");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 9. ELF header field inspection
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_ehdr_entry_point(void)
 {
@@ -359,9 +359,9 @@ static void test_ehdr_phentsize(void)
               "e_phentsize == sizeof(elf32_phdr_t)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 10. ELF struct size invariants
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_struct_sizes(void)
 {
@@ -372,9 +372,9 @@ static void test_struct_sizes(void)
     ASSERT_EQ((int)sizeof(elf32_phdr_t), 32, "elf32_phdr_t is 32 bytes");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 11. Multiple program headers
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_two_phdrs(void)
 {
@@ -382,7 +382,7 @@ static void test_two_phdrs(void)
      *   #0: PT_LOAD  vaddr=0x1000  filesz=4
      *   #1: PT_NOTE  vaddr=0x0000  filesz=0  (non-load entry)
      *
-     * Offset  0: ELF header (52 bytes) — e_phnum=2
+     * Offset  0: ELF header (52 bytes) -- e_phnum=2
      * Offset 52: phdr #0 (32 bytes)
      * Offset 84: phdr #1 (32 bytes)
      * Offset 116: 4 bytes of code
@@ -402,7 +402,7 @@ static void test_two_phdrs(void)
     buf[42]=32; buf[43]=0;               /* e_phentsize = 32 */
     buf[44]=2;  buf[45]=0;               /* e_phnum     = 2  */
 
-    /* phdr #0 — PT_LOAD */
+    /* phdr #0 -- PT_LOAD */
     uint8_t *ph0 = buf + 52;
     ph0[0]=1; ph0[1]=0; ph0[2]=0; ph0[3]=0;         /* p_type = PT_LOAD */
     ph0[4]=116; ph0[5]=0; ph0[6]=0; ph0[7]=0;        /* p_offset = 116   */
@@ -413,7 +413,7 @@ static void test_two_phdrs(void)
     ph0[24]=PF_R|PF_X;                               /* p_flags          */
     ph0[28]=0x10; ph0[29]=0;                         /* p_align  = 16    */
 
-    /* phdr #1 — PT_NOTE */
+    /* phdr #1 -- PT_NOTE */
     uint8_t *ph1 = buf + 84;
     ph1[0]=4; ph1[1]=0; ph1[2]=0; ph1[3]=0;          /* p_type = PT_NOTE */
 
@@ -432,9 +432,9 @@ static void test_two_phdrs(void)
     ASSERT_EQ(p0->p_offset, 116u,             "phdr[0] offset == 116");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {
@@ -447,41 +447,41 @@ int main(void)
     RUN_SUITE(test_ehdr_phoff);
     RUN_SUITE(test_ehdr_phentsize);
 
-    /* elf_validate — good inputs */
+    /* elf_validate -- good inputs */
     RUN_SUITE(test_validate_good_elf);
     RUN_SUITE(test_validate_exact_header_size);
 
-    /* elf_validate — NULL / size failures */
+    /* elf_validate -- NULL / size failures */
     RUN_SUITE(test_validate_null_buf);
     RUN_SUITE(test_validate_zero_size);
     RUN_SUITE(test_validate_too_small);
     RUN_SUITE(test_validate_phdr_table_truncated);
 
-    /* elf_validate — bad magic */
+    /* elf_validate -- bad magic */
     RUN_SUITE(test_validate_bad_magic_byte0);
     RUN_SUITE(test_validate_bad_magic_byte1);
     RUN_SUITE(test_validate_bad_magic_byte2);
     RUN_SUITE(test_validate_bad_magic_byte3);
 
-    /* elf_validate — bad class / data / version */
+    /* elf_validate -- bad class / data / version */
     RUN_SUITE(test_validate_64bit_class);
     RUN_SUITE(test_validate_big_endian_data);
     RUN_SUITE(test_validate_bad_version);
 
-    /* elf_validate — bad type / machine */
+    /* elf_validate -- bad type / machine */
     RUN_SUITE(test_validate_shared_lib_type);
     RUN_SUITE(test_validate_relocatable_type);
     RUN_SUITE(test_validate_wrong_machine_arm);
     RUN_SUITE(test_validate_wrong_machine_x64);
 
-    /* elf_validate — bad phentsize */
+    /* elf_validate -- bad phentsize */
     RUN_SUITE(test_validate_bad_phentsize);
     RUN_SUITE(test_validate_zero_phentsize);
 
-    /* elf_validate — edge cases */
+    /* elf_validate -- edge cases */
     RUN_SUITE(test_validate_zero_phnum);
 
-    /* elf_phdr — program header field access */
+    /* elf_phdr -- program header field access */
     RUN_SUITE(test_phdr_type_is_load);
     RUN_SUITE(test_phdr_vaddr);
     RUN_SUITE(test_phdr_filesz);

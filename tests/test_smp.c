@@ -1,4 +1,4 @@
-/* test_smp.c — Host-side unit tests for section 10.5 SMP
+/* test_smp.c -- Host-side unit tests for section 10.5 SMP
  *
  * Tests that run on the host (no __is_kernel, no hardware):
  *   1. Spinlock:          trylock, release, is_locked
@@ -24,7 +24,7 @@
  * etc.) from the host build, leaving only pure-C code.                    */
 #include "../kernel/arch/i386/smp.c"
 
-/* ── Synthetic MP table builder ─────────────────────────────────────────── */
+/* -- Synthetic MP table builder ------------------------------------------- */
 
 static mp_config_t *make_mp_table(uint8_t *buf, uint32_t bufsz,
                                   uint8_t n_procs)
@@ -52,7 +52,7 @@ static mp_config_t *make_mp_table(uint8_t *buf, uint32_t bufsz,
     return cfg;
 }
 
-/* ── Suite 1: Spinlock ───────────────────────────────────────────────────── */
+/* -- Suite 1: Spinlock ----------------------------------------------------- */
 
 static void test_spinlock(void)
 {
@@ -91,7 +91,7 @@ static void test_spinlock(void)
     }
 }
 
-/* ── Suite 2: APIC helpers ───────────────────────────────────────────────── */
+/* -- Suite 2: APIC helpers ------------------------------------------------- */
 
 static void test_apic_helpers(void)
 {
@@ -100,7 +100,7 @@ static void test_apic_helpers(void)
         ASSERT_EQ(1, (icr & APIC_ICR_INIT)   != 0, "INIT assert: INIT bit set");
         ASSERT_EQ(1, (icr & APIC_ICR_LEVEL)  != 0, "INIT assert: LEVEL bit set");
         ASSERT_EQ(1, (icr & APIC_ICR_ASSERT) != 0, "INIT assert: ASSERT bit set");
-        /* Delivery mode field [10:8]: INIT=0x500, SIPI=0x600 — check it is INIT. */
+        /* Delivery mode field [10:8]: INIT=0x500, SIPI=0x600 -- check it is INIT. */
         ASSERT_EQ((int)APIC_ICR_INIT, (int)(icr & 0x700u), "INIT assert: delivery mode=INIT");
     }
     {
@@ -139,7 +139,7 @@ static void test_apic_helpers(void)
     }
 }
 
-/* ── Suite 3: SMP inline helpers ─────────────────────────────────────────── */
+/* -- Suite 3: SMP inline helpers ------------------------------------------- */
 
 static void test_smp_helpers(void)
 {
@@ -199,7 +199,7 @@ static void test_smp_helpers(void)
     }
 }
 
-/* ── Suite 4: mp_checksum ────────────────────────────────────────────────── */
+/* -- Suite 4: mp_checksum -------------------------------------------------- */
 
 static void test_mp_checksum(void)
 {
@@ -226,7 +226,7 @@ static void test_mp_checksum(void)
     }
 }
 
-/* ── Suite 5: mp_parse_config ────────────────────────────────────────────── */
+/* -- Suite 5: mp_parse_config ---------------------------------------------- */
 
 static void test_mp_parse(void)
 {
@@ -285,18 +285,18 @@ static void test_mp_parse(void)
     /* edge cases */
     {
         cpu_info_t cpus[2];
-        ASSERT_EQ(0, (int)mp_parse_config(NULL, cpus, 2), "null cfg → 0");
+        ASSERT_EQ(0, (int)mp_parse_config(NULL, cpus, 2), "null cfg -> 0");
     }
     {
         uint8_t buf[256];
         mp_config_t *cfg = make_mp_table(buf, sizeof(buf), 1);
-        ASSERT_EQ(0, (int)mp_parse_config(cfg, NULL, 1), "null cpus → 0");
+        ASSERT_EQ(0, (int)mp_parse_config(cfg, NULL, 1), "null cpus -> 0");
     }
     {
         uint8_t buf[256];
         mp_config_t *cfg = make_mp_table(buf, sizeof(buf), 1);
         cpu_info_t cpus[1];
-        ASSERT_EQ(0, (int)mp_parse_config(cfg, cpus, 0), "max=0 → 0");
+        ASSERT_EQ(0, (int)mp_parse_config(cfg, cpus, 0), "max=0 -> 0");
     }
 
     /* checksum validation: make_mp_table sets checksum so total=0 */
@@ -308,7 +308,7 @@ static void test_mp_parse(void)
     }
 }
 
-/* ── Suite 6: TRAMPOLINE constants ──────────────────────────────────────── */
+/* -- Suite 6: TRAMPOLINE constants ---------------------------------------- */
 
 static void test_trampoline_constants(void)
 {
@@ -338,7 +338,7 @@ static void test_trampoline_constants(void)
               "STACK is 4 bytes after ENTRYC");
 }
 
-/* ── main ─────────────────────────────────────────────────────────────────── */
+/* -- main ------------------------------------------------------------------- */
 
 int main(void)
 {

@@ -7,7 +7,7 @@
 #define GDTBASE 0x00000800
 #define GDTSIZE 0xFF
 
-/* ── GDT Access Byte bit definitions ────────────────────────────────────── */
+/* -- GDT Access Byte bit definitions -------------------------------------- */
 /* Each GDT descriptor's access byte encodes the segment type and privilege. */
 #define GDT_ACCESS_PRESENT    (1 << 7)  /* Segment is present in memory      */
 #define GDT_ACCESS_RING0      (0 << 5)  /* Descriptor Privilege Level: ring 0 */
@@ -19,7 +19,7 @@
 #define GDT_ACCESS_ACCESSED   (1 << 0)  /* Accessed bit (set by CPU)         */
 #define GDT_ACCESS_TSS        (0x09)    /* System segment: 32-bit TSS type   */
 
-/* ── GDT Flags Nibble bit definitions ('other' parameter) ───────────────── */
+/* -- GDT Flags Nibble bit definitions ('other' parameter) ----------------- */
 #define GDT_FLAG_AVL          (1 << 0)  /* Available for OS use              */
 #define GDT_FLAG_64BIT        (1 << 1)  /* L: 64-bit mode (IA-32e)           */
 #define GDT_FLAG_32BIT        (1 << 2)  /* DB: 32-bit protected mode         */
@@ -28,7 +28,7 @@
 /* Standard flags for 32-bit segments: 4 KiB pages + 32-bit mode + AVL */
 #define GDT_FLAGS_32BIT_PAGE  (GDT_FLAG_GRANULARITY | GDT_FLAG_32BIT | GDT_FLAG_AVL)
 
-/* ── Pre-built access bytes for each segment type ───────────────────────── */
+/* -- Pre-built access bytes for each segment type ------------------------- */
 /* Kernel code:  present | ring 0 | S=1 | executable | readable | accessed  */
 #define GDT_KERNEL_CODE  (GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | \
                           GDT_ACCESS_CODE_SEG | GDT_ACCESS_EXECUTABLE | \
@@ -103,12 +103,12 @@ void gdt_initialize(void);
  * The BSP already built kgdt[] and copied it to GDTBASE; this function
  * just executes lgdt + segment-register reload so the AP uses the same
  * descriptors as the BSP.  Call from ap_entry_c() before enabling
- * interrupts.  Does NOT reload the TSS (ltr) — the AP shares the BSP's
+ * interrupts.  Does NOT reload the TSS (ltr) -- the AP shares the BSP's
  * TSS in this implementation.                                             */
 void gdt_initialize_ap(void);
 
 /*
- * gdt_set_kernel_stack — set the TSS esp0 field to esp0.
+ * gdt_set_kernel_stack -- set the TSS esp0 field to esp0.
  *
  * Must be called on every context switch so that the CPU knows which
  * kernel stack to use when a ring-3 interrupt fires for the new process.

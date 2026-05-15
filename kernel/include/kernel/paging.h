@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* ── Page-entry flag bits (low 12 bits of every PDE / PTE) ─────────────── */
+/* -- Page-entry flag bits (low 12 bits of every PDE / PTE) --------------- */
 #define PAGE_PRESENT   (1u << 0)   /* P   – page is present in RAM         */
 #define PAGE_WRITABLE  (1u << 1)   /* R/W – allow writes                   */
 #define PAGE_USER      (1u << 2)   /* U/S – accessible from ring 3         */
@@ -21,7 +21,7 @@
  *     first write fault is taken against this page. */
 #define PAGE_COW       (1u << 9)
 
-/* ── Higher-half kernel constants (section 9.1) ────────────────────────────
+/* -- Higher-half kernel constants (section 9.1) ----------------------------
  *
  * The kernel is linked at virtual 0xC0100000 but loaded at physical 0x100000.
  * KERNEL_OFFSET is the difference: virtual - physical = 0xC0000000.
@@ -38,9 +38,9 @@
 #define PAGE_SIZE 4096u
 #endif
 
-/* ── Virtual address decomposition ─────────────────────────────────────────
- *  31..22  page directory index  (10 bits) → selects one of 1024 PDEs
- *  21..12  page table index      (10 bits) → selects one of 1024 PTEs
+/* -- Virtual address decomposition -----------------------------------------
+ *  31..22  page directory index  (10 bits) -> selects one of 1024 PDEs
+ *  21..12  page table index      (10 bits) -> selects one of 1024 PTEs
  *  11..0   byte offset within the page     (12 bits)
  */
 #define VIRT_PD_INDEX(v)  (((uint32_t)(v)) >> 22)
@@ -68,7 +68,7 @@ static inline uint32_t paging_make_entry(uint32_t phys_addr, uint32_t flags)
  *
  * Call after pmm_initialize() so the PMM bitmap is already populated.
  */
-/* ── Kernel page directory ──────────────────────────────────────────────────
+/* -- Kernel page directory --------------------------------------------------
  * Exposed so shell_cmd_exec can restore it after running a process in its
  * own address space.
  */
@@ -123,10 +123,10 @@ int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags);
  * Used by apic_initialize() to map the Local APIC at 0xFEE00000. */
 void paging_map_mmio(uint32_t virt, uint32_t phys);
 
-/* ── Per-process address space (section 5.1) ────────────────────────────── */
+/* -- Per-process address space (section 5.1) ------------------------------ */
 
 /*
- * paging_create_address_space — allocate a fresh page directory for a process.
+ * paging_create_address_space -- allocate a fresh page directory for a process.
  *
  * Allocates a new 4-KiB page directory and copies the kernel's PD entry 0
  * (the identity-mapped first 4-MiB page table) into it.  The kernel half is
@@ -139,7 +139,7 @@ void paging_map_mmio(uint32_t virt, uint32_t phys);
 uint32_t *paging_create_address_space(void);
 
 /*
- * paging_switch — load pd_phys into CR3, switching the active address space.
+ * paging_switch -- load pd_phys into CR3, switching the active address space.
  *
  * Flushes the TLB as a side effect (CR3 write always does this on x86).
  * Call with the physical address of a page directory (returned by
@@ -148,7 +148,7 @@ uint32_t *paging_create_address_space(void);
 void paging_switch(uint32_t pd_phys);
 
 /*
- * paging_fork_address_space — CoW fork of all user pages (section 9.3).
+ * paging_fork_address_space -- CoW fork of all user pages (section 9.3).
  *
  * Implements copy-on-write fork.  Walks every page directory entry in
  * parent_pd EXCEPT the shared kernel entries (PD[0] and PD[KERNEL_PD_IDX]).
@@ -173,41 +173,41 @@ void paging_switch(uint32_t pd_phys);
 int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd);
 
 /*
- * paging_cow_handle — resolve a copy-on-write write fault (section 9.3).
+ * paging_cow_handle -- resolve a copy-on-write write fault (section 9.3).
  *
  * Called by the page fault handler when a write to a PAGE_COW page raises
  * a protection fault (err_code bit 1 set, page was present but read-only).
  *
  * Algorithm:
  *   1. Locate the PTE for fault_addr in pd[].
- *   2. Verify PAGE_COW is set (otherwise return -1 — not a CoW fault).
+ *   2. Verify PAGE_COW is set (otherwise return -1 -- not a CoW fault).
  *   3. If pmm_page_refcount() == 1: this process is the sole remaining
- *      owner — clear PAGE_COW, restore PAGE_WRITABLE, no copy needed.
+ *      owner -- clear PAGE_COW, restore PAGE_WRITABLE, no copy needed.
  *   4. If refcount > 1: allocate a new physical page, copy content,
  *      call pmm_free_page() to decrement the shared page's refcount,
  *      install the new page as writable (PAGE_COW cleared).
  *   5. invlpg the fault address to invalidate the stale TLB entry.
  *
  * Returns 0 on success (fault handled, CPU will re-execute), -1 on
- * failure (not a CoW fault or OOM — caller should send SIGSEGV).
+ * failure (not a CoW fault or OOM -- caller should send SIGSEGV).
  */
 int paging_cow_handle(uint32_t *pd, uint32_t fault_addr);
 
 /*
- * paging_map_page_alloc_into — map a page into an arbitrary page directory.
+ * paging_map_page_alloc_into -- map a page into an arbitrary page directory.
  *
  * Like paging_map_page_alloc() but operates on an explicit pd[] instead of
  * the active global page_directory[].  Used by elf_load_into() to populate
  * a child process's address space before it is first scheduled.
  *
- * pd   — pointer to the target page directory (must be identity-mapped, i.e.
+ * pd   -- pointer to the target page directory (must be identity-mapped, i.e.
  *         in the first 4 MiB, as all pmm_alloc_page() results are).
- * virt — virtual address to map.
- * phys — physical page to map there.
- * flags — PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER as needed.
+ * virt -- virtual address to map.
+ * phys -- physical page to map there.
+ * flags -- PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER as needed.
  *
  * Returns 0 on success, -1 if pmm_alloc_page() fails for a new page table.
- * No TLB flush — the target PD is not currently active in CR3.
+ * No TLB flush -- the target PD is not currently active in CR3.
  */
 int paging_map_page_alloc_into(uint32_t *pd, uint32_t virt,
                                 uint32_t phys, uint32_t flags);

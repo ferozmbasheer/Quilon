@@ -1,11 +1,11 @@
 /*
- * Quilon OS — PSF2 Bitmap Font Loader  (section 11.2)
+ * Quilon OS -- PSF2 Bitmap Font Loader  (section 11.2)
  *
  * Implements:
- *   psf2_load()           — validates and registers the active font
- *   psf2_get_font()       — returns the active psf2_font_t pointer
- *   psf2_draw_glyph()     — renders one glyph to the VBE framebuffer
- *   psf2_make_from_builtin() — synthesizes a PSF2 image from the 8×8 built-in
+ *   psf2_load()           -- validates and registers the active font
+ *   psf2_get_font()       -- returns the active psf2_font_t pointer
+ *   psf2_draw_glyph()     -- renders one glyph to the VBE framebuffer
+ *   psf2_make_from_builtin() -- synthesizes a PSF2 image from the 8×8 built-in
  */
 
 #include <stdint.h>
@@ -14,12 +14,12 @@
 #include <kernel/psf.h>
 #include <kernel/vbe.h>
 
-/* ── Module state ─────────────────────────────────────────────────────────── */
+/* -- Module state ----------------------------------------------------------- */
 
 static psf2_font_t g_font;
 static bool        g_loaded = false;
 
-/* ── psf2_load ────────────────────────────────────────────────────────────── */
+/* -- psf2_load -------------------------------------------------------------- */
 
 int psf2_load(const uint8_t *data, uint32_t len)
 {
@@ -29,14 +29,14 @@ int psf2_load(const uint8_t *data, uint32_t len)
     return r;
 }
 
-/* ── psf2_get_font ────────────────────────────────────────────────────────── */
+/* -- psf2_get_font ---------------------------------------------------------- */
 
 const psf2_font_t *psf2_get_font(void)
 {
     return g_loaded ? &g_font : (const psf2_font_t *)0;
 }
 
-/* ── psf2_draw_glyph ──────────────────────────────────────────────────────── */
+/* -- psf2_draw_glyph -------------------------------------------------------- */
 
 void psf2_draw_glyph(uint32_t ch, uint32_t x, uint32_t y,
                      uint32_t fg, uint32_t bg)
@@ -52,7 +52,7 @@ void psf2_draw_glyph(uint32_t ch, uint32_t x, uint32_t y,
     }
 }
 
-/* ── psf2_make_from_builtin ───────────────────────────────────────────────── */
+/* -- psf2_make_from_builtin ------------------------------------------------- */
 
 uint32_t psf2_make_from_builtin(uint8_t *buf, uint32_t buf_len)
 {

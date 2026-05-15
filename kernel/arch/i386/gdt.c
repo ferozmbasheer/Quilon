@@ -22,7 +22,7 @@ struct gdtr 		kgdtr;
 struct tss 		default_tss;
 
 /*
- * gdt_set_kernel_stack — update the TSS kernel stack pointer.
+ * gdt_set_kernel_stack -- update the TSS kernel stack pointer.
  *
  * The TSS esp0 field tells the CPU where to load ESP when it transitions
  * from ring-3 to ring-0 (on any interrupt, exception, or syscall).  With
@@ -30,8 +30,8 @@ struct tss 		default_tss;
  * so that ring-3 interrupts land on the correct process's kernel_stack[].
  *
  * Because the GDT descriptor for the TSS points directly at default_tss,
- * writing to default_tss.esp0 takes effect immediately — the CPU reads it
- * on the next ring-3 → ring-0 transition.
+ * writing to default_tss.esp0 takes effect immediately -- the CPU reads it
+ * on the next ring-3 -> ring-0 transition.
  */
 void gdt_set_kernel_stack(uint32_t esp0)
 {

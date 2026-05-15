@@ -1,12 +1,12 @@
 /*
- * Quilon user-space libc — stdlib.c
+ * Quilon user-space libc -- stdlib.c
  *
- * malloc/free — first-fit block allocator on top of sbrk().
- * atoi        — string to integer conversion.
- * exit        — declared here for stdlib.h but implemented in syscall.S.
+ * malloc/free -- first-fit block allocator on top of sbrk().
+ * atoi        -- string to integer conversion.
+ * exit        -- declared here for stdlib.h but implemented in syscall.S.
  *
  * Heap layout
- * ───────────
+ * -----------
  * The heap grows upward from USER_HEAP_START (0x800000, set by SYS_SBRK
  * when heap_end == 0 in the process's PCB).  Each allocation is preceded
  * by a block_t header:
@@ -17,14 +17,14 @@
  * search; free() marks a block free.  Adjacent free blocks are coalesced
  * on the next malloc pass.
  *
- * Thread safety: not applicable — Quilon is single-threaded per process.
+ * Thread safety: not applicable -- Quilon is single-threaded per process.
  */
 
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 
-/* ── Block header ─────────────────────────────────────────────────────── */
+/* -- Block header ------------------------------------------------------- */
 
 typedef struct block {
     unsigned int   size;    /* usable bytes (not including the header)    */
@@ -34,9 +34,9 @@ typedef struct block {
 
 #define BLOCK_HDR_SZ  sizeof(block_t)   /* 12 bytes on i386 */
 
-static block_t *heap_head = (block_t *)0;  /* NULL — not yet initialised  */
+static block_t *heap_head = (block_t *)0;  /* NULL -- not yet initialised  */
 
-/* ── Helpers ──────────────────────────────────────────────────────────── */
+/* -- Helpers ------------------------------------------------------------ */
 
 /* Align size up to the next 4-byte boundary. */
 static unsigned int align4(unsigned int n)
@@ -56,7 +56,7 @@ static block_t *heap_extend(unsigned int size)
     return b;
 }
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 void *malloc(size_t sz)
 {

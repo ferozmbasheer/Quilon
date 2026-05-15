@@ -1,19 +1,19 @@
 /*
- * Quilon OS — Signal Implementation (section 6.4)
+ * Quilon OS -- Signal Implementation (section 6.4)
  *
  * signal_send() and signal_dispatch() implement the minimal signal subsystem
  * described in ROADMAP2.md section 6.4.
  *
  * Supported actions
- * ─────────────────
+ * -----------------
  * SIG_DFL: terminate the process (PROC_ZOMBIE) and wake the parent.
  * SIG_IGN: clear the pending bit, do nothing.
- * user fn:  TODO — requires building a ring-3 signal stack frame and issuing
+ * user fn:  TODO -- requires building a ring-3 signal stack frame and issuing
  *            SYS_SIGRETURN on return.  The infrastructure (pending_signals,
  *            signal_handlers[]) is already in place; delivery is the missing piece.
  *
  * Thread safety
- * ─────────────
+ * -------------
  * IRQs may fire between reading pending_signals and clearing a bit.  The
  * bitmask operations are not atomic.  For a single-CPU kernel with IRQs
  * disabled during exception/syscall handlers this is safe.  An SMP kernel
@@ -30,7 +30,7 @@
 #include <kernel/scheduler.h>
 #endif
 
-/* ── signal_send ─────────────────────────────────────────────────────────── */
+/* -- signal_send ----------------------------------------------------------- */
 
 void signal_send(struct process *proc, int signum)
 {
@@ -47,7 +47,7 @@ void signal_send(struct process *proc, int signum)
 #endif
 }
 
-/* ── signal_dispatch ─────────────────────────────────────────────────────── */
+/* -- signal_dispatch ------------------------------------------------------- */
 
 void signal_dispatch(void)
 {
@@ -91,11 +91,11 @@ void signal_dispatch(void)
         if (parent && parent->state == PROC_BLOCKED)
             parent->state = PROC_READY;
 
-        scheduler_yield();   /* never returns — process is ZOMBIE */
+        scheduler_yield();   /* never returns -- process is ZOMBIE */
         __builtin_unreachable();
     }
 
-    /* User handler — TODO: build ring-3 signal stack frame.
+    /* User handler -- TODO: build ring-3 signal stack frame.
      * For now, treat any non-DFL, non-IGN handler like SIG_DFL so we
      * do not silently drop the signal.                                    */
     printf("[signal] pid %d: user handler for signal %d not yet supported"

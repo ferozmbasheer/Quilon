@@ -1,8 +1,8 @@
 /*
- * Quilon OS — String Library Tests
+ * Quilon OS -- String Library Tests
  *
  * Tests every function in libc/string/.
- * Compiled with the host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the host gcc -- no cross-compiler or QEMU needed.
  *
  * Build & run:  make (from tests/)
  */
@@ -10,9 +10,9 @@
 #include "framework.h"
 #include <string.h>   /* our libc/include/string.h */
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * memcpy
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 static void test_memcpy(void)
 {
     /* Basic copy including null terminator */
@@ -44,40 +44,40 @@ static void test_memcpy(void)
     ASSERT_MEM_EQ(binary_dst, binary_src, 4, "copies binary data correctly");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * memmove
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 static void test_memmove(void)
 {
-    /* No overlap — behaves like memcpy */
+    /* No overlap -- behaves like memcpy */
     char s[12] = "hello";
     memmove(s + 6, s, 6);
     ASSERT_MEM_EQ(s + 6, "hello", 6, "no-overlap copy");
 
-    /* Forward overlap: dst > src (copy right — must go back-to-front) */
+    /* Forward overlap: dst > src (copy right -- must go back-to-front) */
     char fwd[8] = "abcde";
-    memmove(fwd + 2, fwd, 4);   /* "abcd" → fwd+2, giving "ababcd" */
+    memmove(fwd + 2, fwd, 4);   /* "abcd" -> fwd+2, giving "ababcd" */
     ASSERT_MEM_EQ(fwd, "ababcd", 6, "forward overlap preserved");
 
-    /* Backward overlap: dst < src (copy left — must go front-to-back) */
+    /* Backward overlap: dst < src (copy left -- must go front-to-back) */
     char bwd[8] = "abcde";
     memmove(bwd, bwd + 1, 4);   /* shift left by 1: "bcde" */
     ASSERT_MEM_EQ(bwd, "bcde", 4, "backward overlap preserved");
 
-    /* Exact same pointer — no-op, returns dst */
+    /* Exact same pointer -- no-op, returns dst */
     char same[4] = {9, 8, 7, 6};
     ASSERT_EQ(memmove(same, same, 4), (void *)same, "same src==dst returns dst");
     ASSERT_EQ(same[0], 9, "same src==dst: data unchanged");
 
-    /* Zero length — must not modify dst */
+    /* Zero length -- must not modify dst */
     char z[4] = {0, 1, 2, 3};
     memmove(z + 1, z, 0);
     ASSERT_EQ(z[1], 1, "zero-length: dst unchanged");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * memset
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 static void test_memset(void)
 {
     char buf[8];
@@ -96,7 +96,7 @@ static void test_memset(void)
     memset(buf, 0x1FF, 1);   /* 0x1FF truncated to 0xFF */
     ASSERT_EQ((unsigned char)buf[0], 0xFF, "only low byte of value is used");
 
-    /* Zero length — must not touch dst */
+    /* Zero length -- must not touch dst */
     char keep = 99;
     memset(&keep, 0, 0);
     ASSERT_EQ(keep, 99, "zero-length: value unchanged");
@@ -105,9 +105,9 @@ static void test_memset(void)
     ASSERT_EQ(memset(buf, 0, 8), (void *)buf, "returns dst pointer");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * memcmp
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 static void test_memcmp(void)
 {
     /* Equal regions */
@@ -119,7 +119,7 @@ static void test_memcmp(void)
     /* Strictly greater */
     ASSERT_EQ(memcmp("abd", "abc", 3), 1, "greater-than: returns 1");
 
-    /* Only compare n bytes — prefix match */
+    /* Only compare n bytes -- prefix match */
     ASSERT_EQ(memcmp("abc", "abcd", 3), 0, "prefix equal with n=3 returns 0");
 
     /* Zero length is always equal */
@@ -135,14 +135,14 @@ static void test_memcmp(void)
     ASSERT_EQ(memcmp("aac", "aab", 3), 1, "difference at last byte");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * strlen
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 static void test_strlen(void)
 {
-    ASSERT_EQ(strlen(""),          (size_t)0,  "empty string → 0");
-    ASSERT_EQ(strlen("a"),         (size_t)1,  "single char → 1");
-    ASSERT_EQ(strlen("hello"),     (size_t)5,  "normal string → 5");
+    ASSERT_EQ(strlen(""),          (size_t)0,  "empty string -> 0");
+    ASSERT_EQ(strlen("a"),         (size_t)1,  "single char -> 1");
+    ASSERT_EQ(strlen("hello"),     (size_t)5,  "normal string -> 5");
     ASSERT_EQ(strlen("hello\0x"),  (size_t)5,  "stops at first null");
     ASSERT_EQ(strlen("ab\0cd"),    (size_t)2,  "embedded null terminates count");
 
@@ -151,9 +151,9 @@ static void test_strlen(void)
     ASSERT_EQ(strlen("1234567890"), (size_t)10, "ten-char string");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * main
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 int main(void)
 {
     RUN_SUITE(test_memcpy);

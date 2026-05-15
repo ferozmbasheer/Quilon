@@ -1,33 +1,33 @@
 /*
- * Quilon OS — User libc Unit Tests (section 7.1)
+ * Quilon OS -- User libc Unit Tests (section 7.1)
  *
- * Compiled with the native host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the native host gcc -- no cross-compiler or QEMU needed.
  *
  * What is tested (pure C, host build):
- *   String functions  — strlen, strcmp, strncmp, memcpy, memset, memcmp,
+ *   String functions  -- strlen, strcmp, strncmp, memcpy, memset, memcmp,
  *                        memmove, strncpy, strchr
- *   stdlib: atoi      — string-to-integer conversion
- *   stdlib: malloc/free — first-fit block allocator with mock sbrk()
- *   stdio:  printf    — format specifiers %d, %u, %x, %s, %c, %%
+ *   stdlib: atoi      -- string-to-integer conversion
+ *   stdlib: malloc/free -- first-fit block allocator with mock sbrk()
+ *   stdio:  printf    -- format specifiers %d, %u, %x, %s, %c, %%
  *                        via a mock write() that captures stdout output
  *
  * What is NOT tested (requires cross-compiled ring-3 execution):
- *   syscall.S         — int $0x80 stubs (x86 assembly, not runnable on host)
- *   crt0.S            — startup trampoline
- *   exit()            — SYS_EXIT syscall
+ *   syscall.S         -- int $0x80 stubs (x86 assembly, not runnable on host)
+ *   crt0.S            -- startup trampoline
+ *   exit()            -- SYS_EXIT syscall
  *
  * Build & run:  cd tests && make
  *
  * Mock strategy
- * ─────────────
+ * -------------
  * framework.h declares:  extern long write(int, const void *, unsigned long)
  * Our mock below matches that signature.  It captures writes to fd=1
  * (stdout) in out_buf so printf tests can inspect the output.  Writes to
- * fd=2 (stderr) go into the same buffer too — we always reset out_pos
+ * fd=2 (stderr) go into the same buffer too -- we always reset out_pos
  * before each printf call and NUL-terminate immediately after, so
  * subsequent ASSERT output doesn't corrupt the check.
  *
- * stdlib.c calls sbrk(int increment) — we provide a mock backed by a
+ * stdlib.c calls sbrk(int increment) -- we provide a mock backed by a
  * 64-KiB static array.
  *
  * NOTE: do NOT include <unistd.h> from user libc here.  That header
@@ -38,27 +38,27 @@
 
 #include "framework.h"
 
-/* User libc headers — resolved to user/libc/include/ via Makefile -I flag.
+/* User libc headers -- resolved to user/libc/include/ via Makefile -I flag.
  * Intentionally NOT including <unistd.h>; see note above.               */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 
-/* ── Mocks ───────────────────────────────────────────────────────��──────────
+/* -- Mocks -------------------------------------------------------��----------
  *
- * write() — matches framework.h's extern declaration.
+ * write() -- matches framework.h's extern declaration.
  *   All writes (stdout from printf AND stderr from ASSERT) go into out_buf.
  *   Reset out_pos = 0 before a printf call and NUL-terminate after to
  *   isolate the output under test.
  *
- * sbrk() — backed by a static 64-KiB heap array.
- * ──────────────────────────────────────────────────────────────────────── */
+ * sbrk() -- backed by a static 64-KiB heap array.
+ * ------------------------------------------------------------------------ */
 
 static char   out_buf[4096];
 static int    out_pos = 0;
 
 /*
- * write() mock — matches framework.h: extern long write(int, const void *, unsigned long)
+ * write() mock -- matches framework.h: extern long write(int, const void *, unsigned long)
  *
  * fd=1 (stdout): captured in out_buf for printf assertions.
  * fd=2 (stderr): passed through to the real kernel write syscall so
@@ -103,9 +103,9 @@ void *sbrk(int increment)
     return old;
 }
 
-/* ══════════════���══════════════════════════════���═════════════════════════════
+/* ==============���==============================���=============================
  * 1. String functions
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_strlen(void)
 {
@@ -193,9 +193,9 @@ static void test_strchr(void)
     ASSERT(strchr(s, '\0') == s + 5,       "strchr NUL terminator");
 }
 
-/* ═════════════════��═════════════════════════════════════════════════════════
+/* =================��=========================================================
  * 2. stdlib: atoi
- * ═════════════════════════════��════════════════════════════════════��════════ */
+ * =============================��====================================��======== */
 
 static void test_atoi(void)
 {
@@ -208,13 +208,13 @@ static void test_atoi(void)
     ASSERT_EQ(atoi(""),      0,   "atoi empty string");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3. stdlib: malloc / free
  *
  * All malloc tests run sequentially on a single heap (heap_head is a
  * static in stdlib.c and persists across test functions).  Tests are
  * designed so each one leaves the heap in a sensible state for the next.
- * ══════════════════════════════════════════════════��════════════════════════ */
+ * ==================================================��======================== */
 
 static void test_malloc_basic(void)
 {
@@ -272,14 +272,14 @@ static void test_malloc_growing(void)
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. stdio: printf format specifiers
  *
  * We reset out_pos = 0 before each printf call and NUL-terminate
  * out_buf[out_pos] immediately after.  The ASSERT macros that follow may
- * append to out_buf via fw_write → write(), but they do so past the NUL
+ * append to out_buf via fw_write -> write(), but they do so past the NUL
  * terminator and do not affect the strcmp check below.
- * ══════════════════════════════���═════════════════════════════════════��══════ */
+ * ==============================���=====================================��====== */
 
 static void test_printf_decimal(void)
 {
@@ -317,7 +317,7 @@ static void test_printf_string(void)
     ASSERT_STR_EQ(out_buf, "hello",  "printf %s basic");
 
     out_pos = 0; printf("%s", (char *)0); out_buf[out_pos] = '\0';
-    ASSERT_STR_EQ(out_buf, "(null)", "printf %s NULL → (null)");
+    ASSERT_STR_EQ(out_buf, "(null)", "printf %s NULL -> (null)");
 }
 
 static void test_printf_char(void)
@@ -342,7 +342,7 @@ static void test_printf_mixed(void)
 
 static void test_printf_width(void)
 {
-    /* Left-aligned string with field width — the bug that broke ls */
+    /* Left-aligned string with field width -- the bug that broke ls */
     out_pos = 0; printf("%-14s|", "hi"); out_buf[out_pos] = '\0';
     ASSERT_STR_EQ(out_buf, "hi            |", "printf %-14s left-align");
 
@@ -354,7 +354,7 @@ static void test_printf_width(void)
     out_pos = 0; printf("%05u", 42u); out_buf[out_pos] = '\0';
     ASSERT_STR_EQ(out_buf, "00042", "printf %05u zero-pad");
 
-    /* Width + multiple args — subsequent args must not be skewed */
+    /* Width + multiple args -- subsequent args must not be skewed */
     out_pos = 0; printf("%-8s%u", "file.txt", 1234u); out_buf[out_pos] = '\0';
     ASSERT_STR_EQ(out_buf, "file.txt1234", "printf %-8s%u no arg skew");
 }
@@ -368,9 +368,9 @@ static void test_puts(void)
     ASSERT_EQ(out_buf[5], '\n', "puts appends newline");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * Runner
- * ════════════════════════════════════════��════════════════════════════════��═ */
+ * ========================================��================================��= */
 
 int main(void)
 {

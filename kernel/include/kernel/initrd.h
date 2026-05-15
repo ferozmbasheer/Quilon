@@ -11,7 +11,7 @@
 #define INITRD_MAX_FILES 32
 
 /*
- * initrd_entry_t — one parsed file record.
+ * initrd_entry_t -- one parsed file record.
  *
  * `data` points directly into the raw image buffer; no copying is done.
  * The image buffer must remain valid for the lifetime of the mount.
@@ -23,7 +23,7 @@ typedef struct {
 } initrd_entry_t;
 
 /*
- * initrd_ctx_t — driver context; one per mounted initrd image.
+ * initrd_ctx_t -- driver context; one per mounted initrd image.
  * Pass to vfs_mount() as the `ctx` argument.
  */
 typedef struct {
@@ -37,7 +37,7 @@ typedef struct {
 extern const vfs_ops_t initrd_vfs_ops;
 
 /*
- * initrd_mount — parse a raw initrd image and fill `ctx`.
+ * initrd_mount -- parse a raw initrd image and fill `ctx`.
  *
  * Image format (all integers little-endian):
  *   [ uint32_t  file_count N                                  ]
@@ -49,7 +49,7 @@ extern const vfs_ops_t initrd_vfs_ops;
 int initrd_mount(initrd_ctx_t *ctx, void *addr, uint32_t size);
 
 /*
- * initrd_build_demo — write a 3-file demo initrd image into `buf`.
+ * initrd_build_demo -- write a 3-file demo initrd image into `buf`.
  *
  * `buf` must be at least 256 bytes.  Returns the image size in bytes, or 0
  * if `bufsize` is too small.  Used by the kernel boot demo and unit tests.

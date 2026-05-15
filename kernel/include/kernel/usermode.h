@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* ── GDT selectors for ring-3 segments ──────────────────────────────────────
+/* -- GDT selectors for ring-3 segments --------------------------------------
  *
  * GDT layout (see arch/i386/gdt.c):
  *   [0] null      [1] kernel code  [2] kernel data  [3] kernel stack
@@ -12,18 +12,18 @@
  * Selector encoding: (index * 8) | TI=0 | RPL
  *   Kernel segments have RPL=0, user segments have RPL=3.
  */
-#define USER_CS   0x23u   /* GDT[4] | RPL=3 — user code segment  */
-#define USER_DS   0x2Bu   /* GDT[5] | RPL=3 — user data segment  */
-#define TSS_SEL   0x38u   /* GDT[7] | RPL=0 — Task State Segment */
+#define USER_CS   0x23u   /* GDT[4] | RPL=3 -- user code segment  */
+#define USER_DS   0x2Bu   /* GDT[5] | RPL=3 -- user data segment  */
+#define TSS_SEL   0x38u   /* GDT[7] | RPL=0 -- Task State Segment */
 
-/* ── User-mode stack layout ─────────────────────────────────────────────────
+/* -- User-mode stack layout -------------------------------------------------
  *
  * Demo tasks (user_task_demo etc.) use a single 4-KiB page in BSS,
  * identity-mapped inside the first 4 MiB, as their ring-3 stack.
  *
  * ELF processes loaded by elf_load_into() get a PRIVATE stack page mapped
  * at USER_STACK_TOP - PAGE_SIZE in their own page directory.  This keeps
- * each process's stack isolated — multiple simultaneous executions cannot
+ * each process's stack isolated -- multiple simultaneous executions cannot
  * corrupt each other's stack.
  *
  * USER_STACK_TOP: the exclusive upper bound of the per-process user stack.
@@ -34,7 +34,7 @@
 #define USER_STACK_SIZE  4096u          /* demo-task BSS stack, one page    */
 #define USER_STACK_TOP   0xC0000000u    /* per-process ELF stack top (excl) */
 
-/* ── exec_setjmp / exec_longjmp ─────────────────────────────────────────────
+/* -- exec_setjmp / exec_longjmp ---------------------------------------------
  *
  * Minimal save/restore used by shell_cmd_exec so that the shell regains
  * control after a user program calls SYS_EXIT.
@@ -60,11 +60,11 @@ void exec_longjmp(exec_jmp_buf_t *buf, int val) __attribute__((noreturn));
 extern exec_jmp_buf_t exec_return_buf;
 extern int            exec_return_active;
 
-/* ── Public API ──────────────────────────────────────────────────────────────
+/* -- Public API --------------------------------------------------------------
  *
  * Call order (in kernel_main or a shell command):
- *   1. usermode_initialize()   — once, after paging_initialize()
- *   2. usermode_enter(fn)      — to jump to ring 3; never returns
+ *   1. usermode_initialize()   -- once, after paging_initialize()
+ *   2. usermode_enter(fn)      -- to jump to ring 3; never returns
  */
 
 /* Prepare for ring-3 execution:
@@ -72,7 +72,7 @@ extern int            exec_return_active;
  *     find the kernel stack (esp0/ss0) when a ring-3 exception fires.
  *   • Mark the first 4 MiB of the page table USER-accessible so that
  *     ring-3 demo code (which lives in kernel text) can execute.
- *     NOTE: a production OS would never do this — user pages would be
+ *     NOTE: a production OS would never do this -- user pages would be
  *     isolated in a separate address space.  Here it is a teaching aid.
  *   • Mark the per-task user stack page writable + user-accessible.
  *
@@ -103,7 +103,7 @@ void usermode_enter(void (*user_func)(void));
  */
 void usermode_enter_esp(void (*user_func)(void), uint32_t user_esp_top);
 
-/* ── Ring-3 demo tasks ───────────────────────────────────────────────────────
+/* -- Ring-3 demo tasks -------------------------------------------------------
  *
  * These are normal C functions compiled into the kernel image, but they
  * are designed to be called at CPL=3.  They demonstrate:
@@ -125,7 +125,7 @@ void user_task_spin(void);
  *   1. Calls SYS_WRITE (int $0x80, eax=1) to print a message via the kernel.
  *   2. Calls SYS_GETPID (int $0x80, eax=2) to retrieve the process ID.
  *   3. Calls SYS_EXIT  (int $0x80, eax=3) to terminate cleanly.
- * Never returns — SYS_EXIT halts the CPU. */
+ * Never returns -- SYS_EXIT halts the CPU. */
 void user_task_syscall(void);
 
 /* Demonstrates SYS_SBRK (section 6.3) from ring-3 code.

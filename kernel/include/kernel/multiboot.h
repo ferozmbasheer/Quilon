@@ -28,7 +28,7 @@ typedef struct {
 } __attribute__((packed)) multiboot_mmap_entry_t;
 
 /*
- * Multiboot module descriptor — one entry in the array at mods_addr.
+ * Multiboot module descriptor -- one entry in the array at mods_addr.
  * Only valid when multiboot_info_t.flags has MULTIBOOT_FLAG_MODS set.
  */
 typedef struct {
@@ -43,33 +43,33 @@ typedef struct {
  * attribute prevents any compiler-inserted padding.                         */
 typedef struct {
     uint32_t flags;               /* offset   0 */
-    uint32_t mem_lower;           /* offset   4 — KB of lower memory  (bit 0) */
-    uint32_t mem_upper;           /* offset   8 — KB of upper memory  (bit 0) */
+    uint32_t mem_lower;           /* offset   4 -- KB of lower memory  (bit 0) */
+    uint32_t mem_upper;           /* offset   8 -- KB of upper memory  (bit 0) */
     uint32_t boot_device;         /* offset  12 */
     uint32_t cmdline;             /* offset  16 */
     uint32_t mods_count;          /* offset  20 */
     uint32_t mods_addr;           /* offset  24 */
-    uint32_t syms[4];             /* offset  28 — aout/elf table info (16 B) */
-    uint32_t mmap_length;         /* offset  44 — bytes in mmap buffer (bit 6) */
-    uint32_t mmap_addr;           /* offset  48 — phys addr of mmap buffer     */
-    uint32_t drives_length;       /* offset  52 — (bit 7) */
-    uint32_t drives_addr;         /* offset  56 — (bit 7) */
-    uint32_t config_table;        /* offset  60 — (bit 8) */
-    uint32_t boot_loader_name;    /* offset  64 — (bit 9) */
-    uint32_t apm_table;           /* offset  68 — (bit 10) */
-    uint32_t vbe_control_info;    /* offset  72 — (bit 11) */
-    uint32_t vbe_mode_info;       /* offset  76 — (bit 11) */
-    uint16_t vbe_mode;            /* offset  80 — (bit 11) */
-    uint16_t vbe_interface_seg;   /* offset  82 — (bit 11) */
-    uint16_t vbe_interface_off;   /* offset  84 — (bit 11) */
-    uint16_t vbe_interface_len;   /* offset  86 — (bit 11) */
-    uint64_t framebuffer_addr;    /* offset  88 — (bit 12) phys base of fb    */
-    uint32_t framebuffer_pitch;   /* offset  96 — (bit 12) bytes per scanline */
-    uint32_t framebuffer_width;   /* offset 100 — (bit 12) pixels per row     */
-    uint32_t framebuffer_height;  /* offset 104 — (bit 12) pixel rows         */
-    uint8_t  framebuffer_bpp;     /* offset 108 — (bit 12) bits per pixel     */
-    uint8_t  framebuffer_type;    /* offset 109 — (bit 12) 0=indexed 1=RGB    */
-    uint8_t  color_info[6];       /* offset 110 — (bit 12) RGB field offsets  */
+    uint32_t syms[4];             /* offset  28 -- aout/elf table info (16 B) */
+    uint32_t mmap_length;         /* offset  44 -- bytes in mmap buffer (bit 6) */
+    uint32_t mmap_addr;           /* offset  48 -- phys addr of mmap buffer     */
+    uint32_t drives_length;       /* offset  52 -- (bit 7) */
+    uint32_t drives_addr;         /* offset  56 -- (bit 7) */
+    uint32_t config_table;        /* offset  60 -- (bit 8) */
+    uint32_t boot_loader_name;    /* offset  64 -- (bit 9) */
+    uint32_t apm_table;           /* offset  68 -- (bit 10) */
+    uint32_t vbe_control_info;    /* offset  72 -- (bit 11) */
+    uint32_t vbe_mode_info;       /* offset  76 -- (bit 11) */
+    uint16_t vbe_mode;            /* offset  80 -- (bit 11) */
+    uint16_t vbe_interface_seg;   /* offset  82 -- (bit 11) */
+    uint16_t vbe_interface_off;   /* offset  84 -- (bit 11) */
+    uint16_t vbe_interface_len;   /* offset  86 -- (bit 11) */
+    uint64_t framebuffer_addr;    /* offset  88 -- (bit 12) phys base of fb    */
+    uint32_t framebuffer_pitch;   /* offset  96 -- (bit 12) bytes per scanline */
+    uint32_t framebuffer_width;   /* offset 100 -- (bit 12) pixels per row     */
+    uint32_t framebuffer_height;  /* offset 104 -- (bit 12) pixel rows         */
+    uint8_t  framebuffer_bpp;     /* offset 108 -- (bit 12) bits per pixel     */
+    uint8_t  framebuffer_type;    /* offset 109 -- (bit 12) 0=indexed 1=RGB    */
+    uint8_t  color_info[6];       /* offset 110 -- (bit 12) RGB field offsets  */
 } __attribute__((packed)) multiboot_info_t;
 
 #endif /* _KERNEL_MULTIBOOT_H */

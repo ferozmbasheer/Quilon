@@ -1,24 +1,24 @@
 /*
- * Quilon OS — Signal Infrastructure Unit Tests (section 6.4)
+ * Quilon OS -- Signal Infrastructure Unit Tests (section 6.4)
  *
- * Compiled with the native host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the native host gcc -- no cross-compiler or QEMU needed.
  *
  * What is tested here (pure C, host build):
- *   • Signal number constants — SIGKILL, SIGSEGV, SIGCHLD values and uniqueness.
- *   • NSIG — covers all defined signals; bitmask fits in uint32_t.
- *   • SIG_DFL / SIG_IGN — sentinel values are distinct and non-NULL/NULL.
- *   • process_t.pending_signals — starts at 0 after process_create().
- *   • process_t.signal_handlers[] — all initialised to SIG_DFL by process_create().
- *   • signal_send() — sets the correct bit in pending_signals.
- *   • signal_send() — multiple sends OR the bits (no clear on re-send).
- *   • signal_send() — out-of-range signum is silently ignored.
- *   • signal_send() — NULL proc is silently ignored.
+ *   • Signal number constants -- SIGKILL, SIGSEGV, SIGCHLD values and uniqueness.
+ *   • NSIG -- covers all defined signals; bitmask fits in uint32_t.
+ *   • SIG_DFL / SIG_IGN -- sentinel values are distinct and non-NULL/NULL.
+ *   • process_t.pending_signals -- starts at 0 after process_create().
+ *   • process_t.signal_handlers[] -- all initialised to SIG_DFL by process_create().
+ *   • signal_send() -- sets the correct bit in pending_signals.
+ *   • signal_send() -- multiple sends OR the bits (no clear on re-send).
+ *   • signal_send() -- out-of-range signum is silently ignored.
+ *   • signal_send() -- NULL proc is silently ignored.
  *
  * What is NOT tested (requires kernel/hardware):
- *   • signal_dispatch() SIG_DFL path — calls scheduler_yield() → context_switch.
- *   • signal_dispatch() SIG_IGN path — involves current_process global.
- *   • SIGSEGV delivery from exception_handler — requires ring-3 execution.
- *   • User handler stack frame — not yet implemented.
+ *   • signal_dispatch() SIG_DFL path -- calls scheduler_yield() -> context_switch.
+ *   • signal_dispatch() SIG_IGN path -- involves current_process global.
+ *   • SIGSEGV delivery from exception_handler -- requires ring-3 execution.
+ *   • User handler stack frame -- not yet implemented.
  *
  * Build & run:  cd tests && make
  */
@@ -32,18 +32,18 @@
 #include <kernel/signal.h>
 #include <kernel/process.h>
 
-/* ── Mocks ──────────────────────────────────────────────────────────────────
+/* -- Mocks ------------------------------------------------------------------
  * signal_dispatch() calls scheduler_yield() and printf() when run on-kernel.
  * In the host build, signal.c's dispatch body is guarded by #ifdef __is_kernel,
  * so no mock is needed.
  *
  * process.c calls process_first_run (trampoline) only under __is_kernel;
  * the host build substitutes 0.  No other mocks required.
- * ──────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------ */
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 1. Signal number constants
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_signal_constants(void)
 {
@@ -63,7 +63,7 @@ static void test_signal_constants(void)
     ASSERT(SIGCHLD  >= 0 && SIGCHLD  < NSIG, "SIGCHLD  in [0, NSIG)");
 }
 
-/* ── NSIG ─────────────────────────────────────────────────────────────────── */
+/* -- NSIG ------------------------------------------------------------------- */
 
 static void test_nsig(void)
 {
@@ -76,7 +76,7 @@ static void test_nsig(void)
     ASSERT(SIGCHLD  < NSIG, "SIGCHLD  < NSIG");
 }
 
-/* ── SIG_DFL / SIG_IGN ───────────────────────────────────────────────────── */
+/* -- SIG_DFL / SIG_IGN ----------------------------------------------------- */
 
 static void test_sig_dfl_ign(void)
 {
@@ -88,9 +88,9 @@ static void test_sig_dfl_ign(void)
     ASSERT(SIG_IGN == (void (*)(int))1,  "SIG_IGN == (void(*)(int))1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. process_t signal fields after process_init / process_create
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_process_signal_init(void)
 {
@@ -108,9 +108,9 @@ static void test_process_signal_init(void)
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 3. signal_send — bitmask behaviour
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 3. signal_send -- bitmask behaviour
+ * =========================================================================== */
 
 static void test_signal_send_sets_bit(void)
 {
@@ -174,7 +174,7 @@ static void test_signal_send_all_signals(void)
               "all NSIG bits set after sending every signal");
 }
 
-/* ── signal_send with invalid arguments ─────────────────────────────────── */
+/* -- signal_send with invalid arguments ----------------------------------- */
 
 static void test_signal_send_null_proc(void)
 {
@@ -197,9 +197,9 @@ static void test_signal_send_out_of_range(void)
               "out-of-range sends leave pending_signals unchanged");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. signal_handlers array in process_t
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_signal_handlers_size(void)
 {
@@ -230,9 +230,9 @@ static void test_signal_handler_overwrite(void)
            "SIGCHLD handler reset to SIG_DFL");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. Bitmask semantics (signal-independent)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_bitmask_coverage(void)
 {
@@ -249,9 +249,9 @@ static void test_bitmask_coverage(void)
               "all 32 signal bits together fill a uint32_t");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {

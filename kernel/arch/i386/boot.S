@@ -20,15 +20,15 @@
 .long MAGIC       # offset  0
 .long FLAGS       # offset  4
 .long CHECKSUM    # offset  8
-.long 0           # offset 12 — header_addr   (bit 16 not set; GRUB ignores)
-.long 0           # offset 16 — load_addr
-.long 0           # offset 20 — load_end_addr
-.long 0           # offset 24 — bss_end_addr
-.long 0           # offset 28 — entry_addr
-.long 0           # offset 32 — mode_type: 0 = linear graphics
-.long 0           # offset 36 — width:  0 = let GRUB pick any suitable mode
-.long 0           # offset 40 — height: 0 = no preference
-.long 0           # offset 44 — depth:  0 = no preference
+.long 0           # offset 12 -- header_addr   (bit 16 not set; GRUB ignores)
+.long 0           # offset 16 -- load_addr
+.long 0           # offset 20 -- load_end_addr
+.long 0           # offset 24 -- bss_end_addr
+.long 0           # offset 28 -- entry_addr
+.long 0           # offset 32 -- mode_type: 0 = linear graphics
+.long 0           # offset 36 -- width:  0 = let GRUB pick any suitable mode
+.long 0           # offset 40 -- height: 0 = no preference
+.long 0           # offset 44 -- depth:  0 = no preference
 
 # Reserve a stack for the initial thread.
 .section .bss
@@ -130,7 +130,7 @@ outb:
 	out %al, %dx
 	ret
 
-/* ── CPU Exception stubs (vectors 0-31) ─────────────────────────────────── */
+/* -- CPU Exception stubs (vectors 0-31) ----------------------------------- */
 /* Exceptions without a CPU-pushed error code push a fake zero so every stub
  * leaves the stack in the same layout for exception_common_stub.         */
 
@@ -199,7 +199,7 @@ exception_common_stub:
     add  $8, %esp
     iret
 
-/* ── IRQ stubs (hardware interrupts, vectors 32-47) ────────────────────── */
+/* -- IRQ stubs (hardware interrupts, vectors 32-47) ---------------------- */
 /* Each stub saves all registers, calls the C handler, restores, and irets. */
 
 .macro IRQ_STUB num
@@ -236,7 +236,7 @@ load_idt:
 	sti
 	ret
 
-/* ── exec_setjmp / exec_longjmp ─────────────────────────────────────────── */
+/* -- exec_setjmp / exec_longjmp ------------------------------------------- */
 /*
  * Minimal setjmp/longjmp used by shell_cmd_exec to resume the shell after a
  * user program calls SYS_EXIT.
@@ -280,9 +280,9 @@ exec_longjmp:
     movl   8(%edx), %edi       /* restore EDI                                  */
     movl  12(%edx), %ebp       /* restore EBP                                  */
     movl  16(%edx), %esp       /* restore ESP (jumps back to caller's frame)   */
-    jmp  *20(%edx)             /* jump to saved EIP — exec_setjmp "returns" 1  */
+    jmp  *20(%edx)             /* jump to saved EIP -- exec_setjmp "returns" 1  */
 
-/* ── Context switch (section 5.3) ───────────────────────────────────────── */
+/* -- Context switch (section 5.3) ----------------------------------------- */
 /*
  * context_switch(prev_esp_ptr, next_esp_val)
  *
@@ -296,12 +296,12 @@ exec_longjmp:
  *
  * For a NEW process: next_esp_val points to the initial frame built by
  * process_create().  The ret jumps to process_first_run (below), which
- * calls process_launch() → usermode_enter() → iret into ring 3.
+ * calls process_launch() -> usermode_enter() -> iret into ring 3.
  *
  * Calling convention (cdecl):
  *   [esp+ 0]  return address
- *   [esp+ 4]  prev_esp_ptr   — pointer to prev->kernel_esp
- *   [esp+ 8]  next_esp_val   — value of next->kernel_esp
+ *   [esp+ 4]  prev_esp_ptr   -- pointer to prev->kernel_esp
+ *   [esp+ 8]  next_esp_val   -- value of next->kernel_esp
  */
 .global context_switch
 context_switch:
@@ -333,7 +333,7 @@ context_switch:
     ret                          /* jump into the new process's context  */
 
 /*
- * process_first_run — trampoline for a brand-new process's first scheduling.
+ * process_first_run -- trampoline for a brand-new process's first scheduling.
  *
  * process_create() plants the address of this label as the "return address"
  * in the initial kernel stack frame.  When context_switch's ret fires for
@@ -349,9 +349,9 @@ process_first_run:
 1:  hlt
     jmp  1b
 
-/* ── fork() child return trampoline (section 6.2) ───────────────────────── */
+/* -- fork() child return trampoline (section 6.2) ------------------------- */
 /*
- * fork_child_return — entered by context_switch when a fork() child is first
+ * fork_child_return -- entered by context_switch when a fork() child is first
  * scheduled.  At this point, the child's kernel stack contains the full
  * int80_stub return frame (copied from the parent by SYS_FORK), with EAX
  * already patched to 0 (fork() returns 0 in the child).
@@ -379,12 +379,12 @@ process_first_run:
  */
 .global fork_child_return
 
-/* ── int $0x80 system call stub ─────────────────────────────────────────── */
+/* -- int $0x80 system call stub ------------------------------------------- */
 /*
  * Entry point for `int $0x80` system calls.  Registered in the IDT with
  * DPL=3 by syscall_initialize() so ring-3 code may invoke it.
  *
- * Stack on entry (ring-3 → ring-0 transition, CPU pushes 5 items):
+ * Stack on entry (ring-3 -> ring-0 transition, CPU pushes 5 items):
  *   ss       ← user stack segment
  *   useresp  ← user stack pointer
  *   eflags
@@ -404,7 +404,7 @@ process_first_run:
  */
 .global int80_stub
 int80_stub:
-    push $0          /* fake err_code — keeps layout identical to exceptions */
+    push $0          /* fake err_code -- keeps layout identical to exceptions */
     push $0x80       /* int_no                                                */
     pusha
     mov  %ds, %ax

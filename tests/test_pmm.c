@@ -1,8 +1,8 @@
 /*
- * Quilon OS — PMM Unit Tests
+ * Quilon OS -- PMM Unit Tests
  *
  * Tests the bitmap allocator logic in kernel/arch/i386/pmm.c.
- * Compiled with the host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the host gcc -- no cross-compiler or QEMU needed.
  *
  * Uses pmm_init_range() instead of pmm_initialize() to avoid the
  * 32-bit/64-bit pointer-truncation problem: pmm_initialize() stores
@@ -18,7 +18,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <string.h>   /* our libc memset — used by pmm_init_range */
+#include <string.h>   /* our libc memset -- used by pmm_init_range */
 
 #include <kernel/pmm.h>
 
@@ -27,7 +27,7 @@
 uint32_t kernel_start;
 uint32_t kernel_end;
 
-/* ── Test region ────────────────────────────────────────────────────────────
+/* -- Test region ------------------------------------------------------------
  * Simulate 15 MiB of available RAM starting at 1 MiB.
  * "Kernel" occupies the first 16 pages (64 KiB) of that region.        */
 #define MMAP_BASE    0x100000u          /* 1 MiB  */
@@ -47,9 +47,9 @@ static void setup(void)
     pmm_init_range(MMAP_BASE, MMAP_LEN, KERN_BASE, KERN_LEN);
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * Initialisation
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 static void test_init_free_count(void)
 {
@@ -79,9 +79,9 @@ static void test_kernel_pages_reserved(void)
            "first allocation is past the reserved kernel region");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * Allocation properties
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 static void test_alloc_page_aligned(void)
 {
@@ -111,9 +111,9 @@ static void test_alloc_decrements_count(void)
     ASSERT_EQ(pmm_free_page_count(), before - 1, "alloc decrements free count by 1");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * Free
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 static void test_free_increments_count(void)
 {
@@ -144,9 +144,9 @@ static void test_double_free_idempotent(void)
     ASSERT_EQ(pmm_free_page_count(), count, "double free does not corrupt the count");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * Out-of-memory + exhaustion
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 static void test_oom_returns_null(void)
 {
@@ -177,9 +177,9 @@ static void test_alloc_free_cycle(void)
               "free count recovers after freeing 64 pages");
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ===============================================================
  * main
- * ═══════════════════════════════════════════════════════════════ */
+ * =============================================================== */
 
 int main(void)
 {

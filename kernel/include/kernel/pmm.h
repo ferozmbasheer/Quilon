@@ -29,7 +29,7 @@ void     pmm_free_page(void *addr);
 /* Number of pages currently free. */
 uint32_t pmm_free_page_count(void);
 
-/* ── Reference counting for Copy-on-Write (section 9.3) ─────────────────────
+/* -- Reference counting for Copy-on-Write (section 9.3) ---------------------
  *
  * Every physical page has a reference count.  pmm_alloc_page() sets it to 1.
  * pmm_ref_page() increments it when a page is shared (CoW fork).
@@ -48,7 +48,7 @@ void    pmm_ref_page(void *addr);
  * Used by paging_cow_handle() to decide whether to copy or just remap. */
 uint8_t pmm_page_refcount(void *addr);
 
-/* ── Test / internal interface ───────────────────────────────────────────────
+/* -- Test / internal interface -----------------------------------------------
  * Bypasses multiboot parsing. Resets the bitmap, marks [free_base,
  * free_base+free_len) as available, then re-reserves the null page and
  * [reserved_base, reserved_base+reserved_len) as the "kernel" region.

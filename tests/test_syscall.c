@@ -1,30 +1,30 @@
 /*
- * Quilon OS — System Call Unit Tests
+ * Quilon OS -- System Call Unit Tests
  *
- * Compiled with the native host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the native host gcc -- no cross-compiler or QEMU needed.
  *
  * What is tested here:
- *   Constants  — SYS_* numbers and FD_* values are correct and non-overlapping.
- *   Struct layout — syscall_regs_t fields sit at the expected offsets (must
+ *   Constants  -- SYS_* numbers and FD_* values are correct and non-overlapping.
+ *   Struct layout -- syscall_regs_t fields sit at the expected offsets (must
  *                   match the stack frame int80_stub builds in boot.S).
- *   Handler dispatch — syscall_handler correctly routes each syscall number,
+ *   Handler dispatch -- syscall_handler correctly routes each syscall number,
  *                      writes the return value into regs->eax, and calls
  *                      terminal_write with the right arguments for SYS_WRITE.
  *
  * What is NOT tested here (requires x86 hardware / QEMU):
- *   syscall_initialize() — calls idt_set_gate(), which writes into the IDT
+ *   syscall_initialize() -- calls idt_set_gate(), which writes into the IDT
  *                          array only present on a real/emulated x86 CPU.
- *   int80_stub            — inline assembly (int $0x80, iret) can only run
+ *   int80_stub            -- inline assembly (int $0x80, iret) can only run
  *                          on a 32-bit x86 kernel.
- *   SYS_EXIT halt         — the `hlt` instruction is guarded by #ifdef
+ *   SYS_EXIT halt         -- the `hlt` instruction is guarded by #ifdef
  *                          __is_kernel; on the host SYS_EXIT returns normally
  *                          so the test can inspect the result.
  *
  * Mocks
- * ─────
- * terminal_write — captured to a fixed buffer; call count and last length
+ * -----
+ * terminal_write -- captured to a fixed buffer; call count and last length
  *                  are exposed via file-scope variables.
- * putchar        — captured to a separate buffer so printf() output from
+ * putchar        -- captured to a separate buffer so printf() output from
  *                  inside syscall_handler can be examined or ignored.
  *                  putchar.c is excluded from the link (see Makefile) so
  *                  this definition wins.
@@ -40,17 +40,17 @@
 
 #include <kernel/syscall.h>
 
-/* ── Mocks ──────────────────────────────────────────────────────────────────
+/* -- Mocks ------------------------------------------------------------------
  * terminal_write and putchar are called by syscall_handler.
  * We provide lightweight stubs here; tty.c and putchar.c are not linked.
- * ──────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------ */
 
-/* terminal_write mock ─── records call count and length only.
+/* terminal_write mock --- records call count and length only.
  *
  * The `data` pointer stored in regs->ecx is a uint32_t, so on a 64-bit host
  * it may be a truncated pointer (the upper 32 bits of the host stack address
  * are lost).  Dereferencing it would crash.  We therefore do NOT read the
- * buffer contents here — we only verify that terminal_write was called and
+ * buffer contents here -- we only verify that terminal_write was called and
  * received the right length.  This is the same pointer-truncation caveat
  * documented in test_pmm.c for pmm_initialize().                            */
 static int    tw_calls      = 0;
@@ -58,14 +58,14 @@ static size_t tw_last_len   = 0;
 
 void terminal_write(const char *data, size_t size)
 {
-    (void)data;   /* do not dereference — may be a truncated 32-bit pointer */
+    (void)data;   /* do not dereference -- may be a truncated 32-bit pointer */
     tw_calls++;
     tw_last_len = size;
 }
 
 static void tw_reset(void) { tw_calls = 0; tw_last_len = 0; }
 
-/* putchar mock ─── absorbs printf output from syscall_handler */
+/* putchar mock --- absorbs printf output from syscall_handler */
 int putchar(int c)
 {
     (void)c;
@@ -83,13 +83,13 @@ static syscall_regs_t make_regs(uint32_t syscall_no)
     return r;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 1. Syscall number constants
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_syscall_numbers(void)
 {
-    /* Values must be stable — user-space ABI depends on them */
+    /* Values must be stable -- user-space ABI depends on them */
     ASSERT_EQ(SYS_WRITE,     1u,  "SYS_WRITE     == 1");
     ASSERT_EQ(SYS_GETPID,    2u,  "SYS_GETPID    == 2");
     ASSERT_EQ(SYS_EXIT,      3u,  "SYS_EXIT      == 3");
@@ -126,7 +126,7 @@ static void test_syscall_numbers(void)
     ASSERT(SYS_SIGRETURN > 0u, "SYS_SIGRETURN > 0");
 }
 
-/* ── File descriptor constants ─────────────────────────────────────────── */
+/* -- File descriptor constants ------------------------------------------- */
 
 static void test_fd_constants(void)
 {
@@ -140,13 +140,13 @@ static void test_fd_constants(void)
     ASSERT(FD_STDOUT != FD_STDERR, "FD_STDOUT != FD_STDERR");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. syscall_regs_t struct layout
  *
  * The offsets here must exactly match the stack layout that int80_stub
  * builds in boot.S.  A mismatch would silently corrupt registers on every
- * system call — this test catches that class of bug before running on QEMU.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * system call -- this test catches that class of bug before running on QEMU.
+ * =========================================================================== */
 
 static void test_regs_struct_layout(void)
 {
@@ -174,9 +174,9 @@ static void test_regs_struct_layout(void)
     ASSERT_EQ(offsetof(syscall_regs_t, eflags),   (size_t)52, "eflags   @ offset 52");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3. SYS_WRITE dispatch
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sys_write_stdout(void)
 {
@@ -196,7 +196,7 @@ static void test_sys_write_stdout(void)
               "SYS_WRITE passes the correct length to terminal_write");
     ASSERT_EQ(r.eax, (uint32_t)(sizeof(msg) - 1),
               "SYS_WRITE return value equals bytes written");
-    /* Note: buffer contents are not verified here — the buf pointer is stored
+    /* Note: buffer contents are not verified here -- the buf pointer is stored
      * as uint32_t in regs->ecx and would be a truncated address on 64-bit. */
 }
 
@@ -271,9 +271,9 @@ static void test_sys_write_zero_len(void)
               "SYS_WRITE with len=0 returns 0");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. SYS_GETPID dispatch
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sys_getpid(void)
 {
@@ -296,9 +296,9 @@ static void test_sys_getpid_does_not_touch_terminal(void)
               "SYS_GETPID does not call terminal_write");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. SYS_EXIT dispatch  (host build: hlt is skipped, handler returns)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sys_exit_returns_zero(void)
 {
@@ -314,7 +314,7 @@ static void test_sys_exit_returns_zero(void)
 static void test_sys_exit_nonzero_code(void)
 {
     syscall_regs_t r = make_regs(SYS_EXIT);
-    r.ebx = 42; /* non-zero exit code — handler should still return on host */
+    r.ebx = 42; /* non-zero exit code -- handler should still return on host */
 
     syscall_handler(&r);
 
@@ -322,9 +322,9 @@ static void test_sys_exit_nonzero_code(void)
               "SYS_EXIT with non-zero code still returns eax=0 on host");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6. Unknown syscall
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_unknown_syscall_returns_minus1(void)
 {
@@ -346,13 +346,13 @@ static void test_syscall_zero_returns_minus1(void)
               "syscall 0 (undefined) returns ENOSYS");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 6b. Filesystem syscalls (host build — hardware not available)
+/* ===========================================================================
+ * 6b. Filesystem syscalls (host build -- hardware not available)
  *
  * In the host build, SYS_OPEN / SYS_READ / SYS_CLOSE are guarded by
  * #ifdef __is_kernel.  They should fall through to return (uint32_t)-1
  * (ENOSYS) so that user-mode tests still get a well-defined result.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sys_open_returns_minus1_in_host(void)
 {
@@ -391,16 +391,16 @@ static void test_sys_close_returns_minus1_in_host(void)
               "SYS_CLOSE returns -1 in host build (no filesystem)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 7. regs->eax is always written (no stale caller value)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 6c. Section-6 syscalls (host build — all return -1, no hardware/scheduler)
+/* ===========================================================================
+ * 6c. Section-6 syscalls (host build -- all return -1, no hardware/scheduler)
  *
  * SYS_FORK, SYS_SBRK, SYS_SIGRETURN are guarded by #ifdef __is_kernel.
  * In the host build they return (uint32_t)-1 / ENOSYS equivalents.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sys_fork_returns_minus1_in_host(void)
 {
@@ -431,13 +431,13 @@ static void test_sys_sigreturn_returns_zero(void)
 static void test_eax_is_always_overwritten(void)
 {
     /* Set eax to a sentinel value before the call.  After the call it must
-     * have been replaced by the handler — never read the caller's value.  */
+     * have been replaced by the handler -- never read the caller's value.  */
     const uint32_t SENTINEL = 0xCAFEBABEu;
 
     syscall_regs_t r;
     for (size_t i = 0; i < sizeof(r); i++)
         ((unsigned char *)&r)[i] = 0;
-    r.eax = SENTINEL;        /* syscall 0xCAFEBABE — undefined */
+    r.eax = SENTINEL;        /* syscall 0xCAFEBABE -- undefined */
 
     syscall_handler(&r);
 
@@ -445,9 +445,9 @@ static void test_eax_is_always_overwritten(void)
            "eax is overwritten by handler (sentinel value gone)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {

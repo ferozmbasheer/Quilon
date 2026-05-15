@@ -1,13 +1,13 @@
 /*
- * Quilon OS — PIT and Scheduler Unit Tests
+ * Quilon OS -- PIT and Scheduler Unit Tests
  *
- * Compiled with the native host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the native host gcc -- no cross-compiler or QEMU needed.
  *
  * What is tested here:
- *   PIT      — pit_divisor() is a pure inline math function in pit.h;
+ *   PIT      -- pit_divisor() is a pure inline math function in pit.h;
  *               it requires no hardware and is fully testable on the host.
  *
- *   Scheduler — scheduler.c contains only plain C (no x86 asm on the host
+ *   Scheduler -- scheduler.c contains only plain C (no x86 asm on the host
  *               because the ESP swap is guarded by #ifdef __is_kernel).
  *               All task-management and round-robin logic is testable.
  *
@@ -22,11 +22,11 @@
 #include <kernel/pit.h>
 #include <kernel/scheduler.h>
 
-/* ═══════════════════════════════════════════════════════════════════════
- * PIT — divisor math
+/* =======================================================================
+ * PIT -- divisor math
  * The PIT fires IRQ0 at  PIT_BASE_HZ / divisor  Hz.
- * Higher target frequency → smaller divisor.
- * ═══════════════════════════════════════════════════════════════════════ */
+ * Higher target frequency -> smaller divisor.
+ * ======================================================================= */
 
 static void test_divisor_100hz(void)
 {
@@ -55,16 +55,16 @@ static void test_divisor_nonzero(void)
 
 static void test_divisor_inversely_proportional(void)
 {
-    /* Higher frequency → fewer cycles between IRQs → smaller divisor. */
+    /* Higher frequency -> fewer cycles between IRQs -> smaller divisor. */
     ASSERT(pit_divisor(100) > pit_divisor(1000),
            "higher frequency produces a smaller reload divisor");
     ASSERT(pit_divisor(50) > pit_divisor(100),
            "50 Hz divisor > 100 Hz divisor");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Scheduler — initialisation
- * ═══════════════════════════════════════════════════════════════════════ */
+/* =======================================================================
+ * Scheduler -- initialisation
+ * ======================================================================= */
 
 static void test_init_task_count_zero(void)
 {
@@ -81,9 +81,9 @@ static void test_init_current_slot_unused(void)
               "current slot is UNUSED before any task is created");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Scheduler — task creation
- * ═══════════════════════════════════════════════════════════════════════ */
+/* =======================================================================
+ * Scheduler -- task creation
+ * ======================================================================= */
 
 static void dummy_fn(void) {}
 
@@ -152,9 +152,9 @@ static void test_create_returns_minus1_when_full(void)
     ASSERT_EQ(extra, -1, "create_task returns -1 when all slots are taken");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Scheduler — round-robin selection
- * ═══════════════════════════════════════════════════════════════════════ */
+/* =======================================================================
+ * Scheduler -- round-robin selection
+ * ======================================================================= */
 
 static void test_next_index_no_tasks(void)
 {
@@ -185,9 +185,9 @@ static void test_next_index_advances_past_current(void)
               "next_index skips current slot and returns the next READY task");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Scheduler — tick and state transitions
- * ═══════════════════════════════════════════════════════════════════════ */
+/* =======================================================================
+ * Scheduler -- tick and state transitions
+ * ======================================================================= */
 
 static void test_tick_switches_to_next_task(void)
 {
@@ -229,11 +229,11 @@ static void test_tick_round_robin_two_tasks(void)
     int b = scheduler_create_task(dummy_fn);
     (void)a;
 
-    /* Tick 1: 0 → b */
+    /* Tick 1: 0 -> b */
     scheduler_tick();
     int after_first = (int)scheduler_get_current()->id;
 
-    /* Tick 2: b → a (wraps around) */
+    /* Tick 2: b -> a (wraps around) */
     scheduler_tick();
     int after_second = (int)scheduler_get_current()->id;
 
@@ -265,9 +265,9 @@ static void test_tick_no_op_with_no_tasks(void)
               "tick with no tasks leaves count at zero");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 int main(void)
 {

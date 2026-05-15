@@ -1,15 +1,15 @@
 /*
- * test_vbe.c — host-side unit tests for the VBE framebuffer driver helpers.
+ * test_vbe.c -- host-side unit tests for the VBE framebuffer driver helpers.
  *
  * Only the pure-C / static-inline functions from vbe.h are tested here:
- *   - vbe_pixel_offset()  — framebuffer byte-offset math
- *   - vbe_glyph_pixel()   — font bitmap lookup
- *   - vbe_term_cols()     — terminal column count from pixel width
- *   - vbe_term_rows()     — terminal row count from pixel height
+ *   - vbe_pixel_offset()  -- framebuffer byte-offset math
+ *   - vbe_glyph_pixel()   -- font bitmap lookup
+ *   - vbe_term_cols()     -- terminal column count from pixel width
+ *   - vbe_term_rows()     -- terminal row count from pixel height
  *   - Color constant values and uniqueness
  *   - VBE_FONT_W / VBE_FONT_H constants
  *
- * vbe.c (the actual kernel driver) is NOT linked — it depends on
+ * vbe.c (the actual kernel driver) is NOT linked -- it depends on
  * paging_map_page_alloc() and hardware MMIO which are unavailable on the host.
  */
 
@@ -17,7 +17,7 @@
 #include "../kernel/include/kernel/vbe.h"
 #include "../kernel/include/kernel/paging.h"
 
-/* ── Color constants ───────────────────────────────────────────────────────── */
+/* -- Color constants --------------------------------------------------------- */
 
 static void test_color_values(void)
 {
@@ -52,7 +52,7 @@ static void test_color_uniqueness(void)
     ASSERT_NE(all_unique, 0, "all 12 color constants are unique");
 }
 
-/* ── Font metrics ──────────────────────────────────────────────────────────── */
+/* -- Font metrics ------------------------------------------------------------ */
 
 static void test_font_metrics(void)
 {
@@ -60,7 +60,7 @@ static void test_font_metrics(void)
     ASSERT_EQ((int)VBE_FONT_H, 16, "VBE_FONT_H == 16");
 }
 
-/* ── vbe_term_cols / vbe_term_rows ─────────────────────────────────────────── */
+/* -- vbe_term_cols / vbe_term_rows ------------------------------------------- */
 
 static void test_term_dimensions(void)
 {
@@ -74,7 +74,7 @@ static void test_term_dimensions(void)
     ASSERT_EQ((int)vbe_term_rows(601),  37, "601px / 16 = 37 (floor)");
 }
 
-/* ── vbe_pixel_offset ──────────────────────────────────────────────────────── */
+/* -- vbe_pixel_offset -------------------------------------------------------- */
 
 static void test_pixel_offset_32bpp(void)
 {
@@ -104,7 +104,7 @@ static void test_pixel_offset_24bpp(void)
               "24bpp pixel_offset(0,0) == 0");
 }
 
-/* ── vbe_glyph_pixel ───────────────────────────────────────────────────────── */
+/* -- vbe_glyph_pixel --------------------------------------------------------- */
 
 static void test_glyph_space(void)
 {
@@ -173,7 +173,7 @@ static void test_glyph_printable_nonblank(void)
     ASSERT_NE(all_ok, 0, "every printable ASCII glyph (0x21-0x7E) is non-blank");
 }
 
-/* ── Double-buffer (section 11.3) ──────────────────────────────────────────── */
+/* -- Double-buffer (section 11.3) -------------------------------------------- */
 
 static void test_shadow_vbase_pd_slot(void)
 {
@@ -209,7 +209,7 @@ static void test_shadow_fits_in_pd769(void)
 static void test_shadow_larger_than_heap(void)
 {
     /* Kernel heap is 1 MiB (kmalloc.h HEAP_SIZE).  The shadow buffer for
-     * 800x600x32 is ~1.83 MiB — too large for kmalloc, hence PMM alloc. */
+     * 800x600x32 is ~1.83 MiB -- too large for kmalloc, hence PMM alloc. */
     uint32_t shadow_bytes = 800u * 4u * 600u;   /* 1,920,000 */
     uint32_t heap_bytes   = 1u * 1024u * 1024u; /* 1,048,576 */
     ASSERT_EQ((int)(shadow_bytes > heap_bytes), 1,
@@ -231,7 +231,7 @@ static void test_shadow_vbase_above_kernel_heap(void)
               "VBE_SHADOW_VBASE is above the 4 MiB kernel window");
 }
 
-/* ── Main ──────────────────────────────────────────────────────────────────── */
+/* -- Main -------------------------------------------------------------------- */
 
 int main(void)
 {

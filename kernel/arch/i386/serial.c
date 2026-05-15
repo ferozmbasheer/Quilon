@@ -9,7 +9,7 @@ extern char inb(unsigned short port);
 void serial_initialize(void) {
     outb(COM1 + 1, 0x00); /* disable interrupts                    */
     outb(COM1 + 3, 0x80); /* enable DLAB to set baud rate divisor  */
-    outb(COM1 + 0, 0x03); /* divisor low byte:  3 → 38400 baud     */
+    outb(COM1 + 0, 0x03); /* divisor low byte:  3 -> 38400 baud     */
     outb(COM1 + 1, 0x00); /* divisor high byte                     */
     outb(COM1 + 3, 0x03); /* 8 bits, no parity, 1 stop bit         */
     outb(COM1 + 2, 0xC7); /* enable and clear FIFO, 14-byte thresh */

@@ -28,7 +28,7 @@ void scheduler_initialize(void)
 }
 
 /*
- * scheduler_create_task — allocate a free task slot and set it up to
+ * scheduler_create_task -- allocate a free task slot and set it up to
  * start executing at `entry` when first scheduled.
  *
  * Returns the task index on success, or -1 if all slots are full.
@@ -62,7 +62,7 @@ task_t *scheduler_get_current(void)
 }
 
 /*
- * scheduler_next_index — pure round-robin selection.
+ * scheduler_next_index -- pure round-robin selection.
  *
  * Scans forward from the current task and returns the index of the first
  * READY or RUNNING task found.  Returns current_task if no other task is
@@ -92,7 +92,7 @@ uint32_t scheduler_task_count(void)
 }
 
 /*
- * scheduler_tick — called from pit_tick() on every IRQ0 (100 Hz).
+ * scheduler_tick -- called from pit_tick() on every IRQ0 (100 Hz).
  *
  * In the kernel build, delegates to the process table for real preemptive
  * context switching (section 5.3).  The low-level swap is done by
@@ -126,7 +126,7 @@ void scheduler_tick(void)
 
     /* Perform the actual stack swap.  After this call returns we are
      * executing on next's kernel stack.  For an existing process, the
-     * return goes back through pit_tick → irq0_handler → irq0 → iret.
+     * return goes back through pit_tick -> irq0_handler -> irq0 -> iret.
      * For a new process, it goes to process_first_run (boot.S).        */
     context_switch(&prev->kernel_esp, next->kernel_esp);
 
@@ -144,11 +144,11 @@ void scheduler_tick(void)
 }
 
 /*
- * scheduler_yield — voluntarily give up the CPU.
+ * scheduler_yield -- voluntarily give up the CPU.
  *
  * Called by SYS_EXIT (to hand off after marking the process ZOMBIE) and
  * by SYS_WAIT (to sleep while waiting for a child).  Unlike scheduler_tick,
- * it does not emit the PIC EOI — we are not inside an IRQ handler.
+ * it does not emit the PIC EOI -- we are not inside an IRQ handler.
  *
  * In the kernel build: does a real context switch to the next READY process.
  * In the host build: no-op (no hardware, no real switching needed).

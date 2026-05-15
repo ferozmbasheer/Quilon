@@ -1,5 +1,5 @@
 /*
- * Quilon OS — VMA unit tests (section 9.2)
+ * Quilon OS -- VMA unit tests (section 9.2)
  *
  * Tests the Virtual Memory Area API: vma_init, vma_add, vma_find,
  * vma_find_start, vma_extend, vma_remove.
@@ -14,7 +14,7 @@
 #include "framework.h"
 #include <kernel/vma.h>
 
-/* ── vma_init ─────────────────────────────────────────────────────────────── */
+/* -- vma_init --------------------------------------------------------------- */
 
 static void test_init(void)
 {
@@ -41,7 +41,7 @@ static void test_init(void)
     ASSERT(all_clear, "vma_init: all slots cleared");
 }
 
-/* ── vma_add ──────────────────────────────────────────────────────────────── */
+/* -- vma_add ---------------------------------------------------------------- */
 
 static void test_add_basic(void)
 {
@@ -84,7 +84,7 @@ static void test_add_table_full(void)
     ASSERT_EQ(full, -1, "vma_add: -1 when table full");
 }
 
-/* ── vma_find ─────────────────────────────────────────────────────────────── */
+/* -- vma_find --------------------------------------------------------------- */
 
 static void test_find_basic(void)
 {
@@ -101,7 +101,7 @@ static void test_find_basic(void)
     v = vma_find(vmas, PROC_VMA_MAX, 0x401FFCu);
     ASSERT_NOTNULL(v, "vma_find: finds VMA in middle");
 
-    /* Address at end (exclusive) — should NOT find */
+    /* Address at end (exclusive) -- should NOT find */
     v = vma_find(vmas, PROC_VMA_MAX, 0x402000u);
     ASSERT_NULL(v, "vma_find: end is exclusive (not found at 0x402000)");
 
@@ -149,7 +149,7 @@ static void test_find_empty_table(void)
     ASSERT_NULL(v, "vma_find: empty table returns NULL");
 }
 
-/* ── vma_find_start ───────────────────────────────────────────────────────── */
+/* -- vma_find_start --------------------------------------------------------- */
 
 static void test_find_start(void)
 {
@@ -170,7 +170,7 @@ static void test_find_start(void)
     ASSERT_EQ(v->flags & VMA_X, (uint32_t)VMA_X, "vma_find_start: flags correct");
 }
 
-/* ── vma_extend ───────────────────────────────────────────────────────────── */
+/* -- vma_extend ------------------------------------------------------------- */
 
 static void test_extend(void)
 {
@@ -197,7 +197,7 @@ static void test_extend_not_found(void)
     ASSERT_EQ(r, -1, "vma_extend: -1 when VMA not found");
 }
 
-/* ── vma_remove ───────────────────────────────────────────────────────────── */
+/* -- vma_remove ------------------------------------------------------------- */
 
 static void test_remove(void)
 {
@@ -233,7 +233,7 @@ static void test_remove_and_reuse(void)
 
     vma_remove(vmas, 2, 0x1000u);
 
-    /* Slot 0 freed — add a new VMA and confirm it reuses slot 0. */
+    /* Slot 0 freed -- add a new VMA and confirm it reuses slot 0. */
     int r = vma_add(vmas, 2, 0x5000u, 0x6000u, VMA_W);
     ASSERT_EQ(r, 0, "vma_remove+add: slot reused after removal");
 
@@ -242,14 +242,14 @@ static void test_remove_and_reuse(void)
     ASSERT_EQ(v->flags, (uint32_t)VMA_W, "vma_remove+add: new flags correct");
 }
 
-/* ── heap-like sbrk simulation ────────────────────────────────────────────── */
+/* -- heap-like sbrk simulation ---------------------------------------------- */
 
 static void test_heap_simulation(void)
 {
     /*
      * Simulate the sbrk demand-paging path:
      *
-     *   1. First sbrk: no heap VMA yet → vma_add creates it.
+     *   1. First sbrk: no heap VMA yet -> vma_add creates it.
      *   2. Subsequent sbrks: vma_extend grows the end.
      *   3. vma_find validates arbitrary addresses within the heap.
      */
@@ -259,7 +259,7 @@ static void test_heap_simulation(void)
     uint32_t heap_start = 0x800000u;
     uint32_t brk        = heap_start;
 
-    /* sbrk(4096) — first call: create heap VMA. */
+    /* sbrk(4096) -- first call: create heap VMA. */
     uint32_t new_brk = brk + 4096u;
     if (vma_extend(vmas, PROC_VMA_MAX, heap_start, new_brk) != 0)
         vma_add(vmas, PROC_VMA_MAX, heap_start, new_brk,
@@ -270,7 +270,7 @@ static void test_heap_simulation(void)
     vma_t *v = vma_find(vmas, PROC_VMA_MAX, 0x800000u);
     ASSERT_NOTNULL(v, "heap sim: first page in VMA");
 
-    /* sbrk(8192) — extend. */
+    /* sbrk(8192) -- extend. */
     new_brk = brk + 8192u;
     if (vma_extend(vmas, PROC_VMA_MAX, heap_start, new_brk) != 0)
         vma_add(vmas, PROC_VMA_MAX, heap_start, new_brk,
@@ -285,7 +285,7 @@ static void test_heap_simulation(void)
     ASSERT_NULL(v, "heap sim: address at break is outside VMA (exclusive end)");
 }
 
-/* ── stack VMA ────────────────────────────────────────────────────────────── */
+/* -- stack VMA -------------------------------------------------------------- */
 
 static void test_stack_vma(void)
 {
@@ -312,7 +312,7 @@ static void test_stack_vma(void)
     ASSERT_NULL(v, "stack VMA: address below VMA start is not found");
 }
 
-/* ── main ─────────────────────────────────────────────────────────────────── */
+/* -- main ------------------------------------------------------------------- */
 
 int main(void)
 {

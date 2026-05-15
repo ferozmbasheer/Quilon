@@ -1,10 +1,10 @@
 /*
- * Quilon OS — Wait Queue Unit Tests (section 12.2)
+ * Quilon OS -- Wait Queue Unit Tests (section 12.2)
  *
  * Tests the linked-list mechanics of waitq_sleep, waitq_wake_one, and
  * waitq_wake_all on the host (no real scheduler).  scheduler_yield() is a
  * no-op in the host build, so waitq_sleep returns immediately after the
- * cleanup path — the entry is self-removed and the process state is
+ * cleanup path -- the entry is self-removed and the process state is
  * restored to PROC_RUNNING.
  *
  * Build & run:  cd tests && make
@@ -18,7 +18,7 @@
 #include <kernel/waitq.h>
 #include <kernel/process.h>
 
-/* ── Helpers ──────────────────────────────────────────────────────────────── */
+/* -- Helpers ---------------------------------------------------------------- */
 
 /* Manually push a pre-built entry onto the waitq (simulates a second sleeper
  * that called waitq_sleep on another CPU or in a previous turn).           */
@@ -40,9 +40,9 @@ static void reset_procs(void)
     }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 1. WAITQ_INIT macro
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_init_head_null(void)
 {
@@ -58,9 +58,9 @@ static void test_two_inits_independent(void)
     ASSERT(b.head == NULL, "WAITQ_INIT b: head NULL");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. waitq_wake_one
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_wake_one_empty_nop(void)
 {
@@ -79,7 +79,7 @@ static void test_wake_one_single_entry(void)
 
     waitq_wake_one(&wq);
 
-    ASSERT_EQ((int)tp[0].state, (int)PROC_READY, "wake_one: process → PROC_READY");
+    ASSERT_EQ((int)tp[0].state, (int)PROC_READY, "wake_one: process -> PROC_READY");
     ASSERT(wq.head == NULL, "wake_one: queue empty after sole entry");
 }
 
@@ -130,9 +130,9 @@ static void test_wake_one_extra_call_on_empty(void)
     ASSERT(wq.head == NULL, "wake_one on already-empty: still NULL");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3. waitq_wake_all
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_wake_all_empty_nop(void)
 {
@@ -205,9 +205,9 @@ static void test_wake_all_detaches_whole_list(void)
     ASSERT(wq.head == NULL, "wake_all 4: list fully detached");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. waitq_sleep (no-op scheduler in host build)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sleep_null_process_nop(void)
 {
@@ -288,9 +288,9 @@ static void test_sleep_leaves_other_entries_intact(void)
     current_process = NULL;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. Combined sleep + wake
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_sleep_then_wake_one(void)
 {
@@ -339,9 +339,9 @@ static void test_sleep_then_wake_all(void)
     current_process = NULL;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6. Partial wake (wake_one N times, not all)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_partial_wake(void)
 {
@@ -369,7 +369,7 @@ static void test_partial_wake(void)
     ASSERT(wq.head != NULL, "partial wake: queue not yet empty");
 }
 
-/* ── main ──────────────────────────────────────────────────────────────── */
+/* -- main ---------------------------------------------------------------- */
 
 int main(void)
 {

@@ -24,8 +24,8 @@ AR = i686-elf-ar
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
          -Iinclude
 
-SRCS   = string.c stdio.c stdlib.c
-OBJS   = string.o stdio.o stdlib.o syscall.o
+SRCS   = string.c stdio.c stdlib.c pthread.c
+OBJS   = string.o stdio.o stdlib.o syscall.o pthread.o
 
 .PHONY: all clean
 
@@ -47,6 +47,9 @@ stdlib.o: stdlib.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 syscall.o: syscall.S
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+pthread.o: pthread.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:

@@ -6,10 +6,10 @@
 #include <kernel/paging.h>
 #include <kernel/spinlock.h>
 
-/* ── Bitmap ─────────────────────────────────────────────────────────────── */
+/* -- Bitmap --------------------------------------------------------------- */
 /* One bit per 4 KiB page across the full 32-bit (4 GiB) address space.
- * 4 GiB / 4 KiB = 1 048 576 pages → bitmap is 128 KiB, stored in .bss.
- * Bit = 1 → page is used/reserved.  Bit = 0 → page is free.              */
+ * 4 GiB / 4 KiB = 1 048 576 pages -> bitmap is 128 KiB, stored in .bss.
+ * Bit = 1 -> page is used/reserved.  Bit = 0 -> page is free.              */
 
 #define MAX_PAGES   (0x100000u)           /* 4 GiB / 4 KiB               */
 #define BITMAP_WORDS (MAX_PAGES / 32u)    /* 32 pages per uint32_t word  */
@@ -22,17 +22,17 @@ static uint32_t free_pages = 0;
  * any kernel code runs.                                                    */
 static spinlock_t pmm_lock = SPINLOCK_INIT;
 
-/* ── Reference counts (section 9.3 — CoW) ──────────────────────────────── */
+/* -- Reference counts (section 9.3 -- CoW) -------------------------------- */
 /* One byte per physical page.  Starts at 1 on alloc; pmm_ref_page
  * increments it; pmm_free_page decrements it and only releases the
  * page when the count reaches 0.  max refcount per page: 255. */
 static uint8_t refcount[MAX_PAGES];
 
-/* Linker-defined symbols — use their *addresses*, not their contents. */
+/* Linker-defined symbols -- use their *addresses*, not their contents. */
 extern uint32_t kernel_start;
 extern uint32_t kernel_end;
 
-/* ── Bitmap primitives ───────────────────────────────────────────────────── */
+/* -- Bitmap primitives ----------------------------------------------------- */
 
 static inline void page_set(uint32_t page)
 {
@@ -49,7 +49,7 @@ static inline int page_test(uint32_t page)
     return (bitmap[page / 32] >> (page % 32)) & 1u;
 }
 
-/* ── Range helpers ───────────────────────────────────────────────────────── */
+/* -- Range helpers --------------------------------------------------------- */
 
 static void pmm_free_range(uint32_t base, uint32_t length)
 {
@@ -65,7 +65,7 @@ static void pmm_free_range(uint32_t base, uint32_t length)
 
 static void pmm_reserve_range(uint32_t base, uint32_t length)
 {
-    /* Round base down, round end up — never leave a partial page free. */
+    /* Round base down, round end up -- never leave a partial page free. */
     uint32_t first = base / PAGE_SIZE;
     uint32_t last  = (base + length + PAGE_SIZE - 1) / PAGE_SIZE;
     for (uint32_t p = first; p < last && p < MAX_PAGES; p++) {
@@ -76,7 +76,7 @@ static void pmm_reserve_range(uint32_t base, uint32_t length)
     }
 }
 
-/* ── Public API ──────────────────────────────────────────────────────────── */
+/* -- Public API ------------------------------------------------------------ */
 
 void pmm_initialize(void *multiboot_info)
 {
@@ -111,7 +111,7 @@ void pmm_initialize(void *multiboot_info)
         pmm_free_range(0x100000, mbi->mem_upper * 1024);
     }
 
-    /* Page 0 (the null page) must never be allocated — keeps NULL special. */
+    /* Page 0 (the null page) must never be allocated -- keeps NULL special. */
     pmm_reserve_range(0, PAGE_SIZE);
 
     /* Reserve pages occupied by the kernel image (text + rodata + data + bss,
@@ -122,7 +122,7 @@ void pmm_initialize(void *multiboot_info)
 
     /* Reserve Multiboot modules (e.g. the initrd image).
      * Without this, pmm_alloc_page() hands out initrd pages to callers who
-     * then overwrite them — corrupting any zero-copy pointers (like the PSF
+     * then overwrite them -- corrupting any zero-copy pointers (like the PSF
      * font glyph data) that the kernel holds into the module.              */
     if (mbi->flags & MULTIBOOT_FLAG_MODS) {
         multiboot_module_t *mods = (multiboot_module_t *)(uintptr_t)mbi->mods_addr;
@@ -158,7 +158,7 @@ done:
 }
 
 /*
- * pmm_alloc_page_above_4mib — allocate a page from physical RAM above 4 MiB.
+ * pmm_alloc_page_above_4mib -- allocate a page from physical RAM above 4 MiB.
  *
  * Shadow-buffer data pages and other large kernel buffers that are only ever
  * accessed through virtual addresses (not via physical address directly) should
@@ -197,7 +197,7 @@ void pmm_free_page(void *addr)
 {
     spinlock_acquire(&pmm_lock);
     uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
-    if (!page_test(page)) goto done;   /* page not allocated — no-op */
+    if (!page_test(page)) goto done;   /* page not allocated -- no-op */
     if (refcount[page] > 1) {
         refcount[page]--;
         goto done;                     /* still referenced */

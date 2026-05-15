@@ -1,5 +1,5 @@
 /*
- * Quilon user-space libc — crt0.S
+ * Quilon user-space libc -- crt0.S
  *
  * C runtime startup stub.  The ELF loader jumps here at e_entry (0x400000).
  *
@@ -9,9 +9,9 @@
  *
  * Stack state on entry (set up by usermode_enter / process_launch):
  *   ESP points to the top of the user stack (USER_STACK_SIZE = 4 KiB).
- *   The stack is empty — no argc, argv, or envp has been pushed.
+ *   The stack is empty -- no argc, argv, or envp has been pushed.
  *
- * We declare main() with `int main(void)` — no argument passing needed.
+ * We declare main() with `int main(void)` -- no argument passing needed.
  * If a program declares `int main(int argc, char **argv)`, argc and argv
  * will be garbage, but that is acceptable for this demo OS.
  */
@@ -22,7 +22,7 @@
 _start:
     call  main          /* call C main(); return value in %eax */
     pushl %eax          /* push return value as exit() argument */
-    call  exit          /* exit(main_retval) — never returns   */
+    call  exit          /* exit(main_retval) -- never returns   */
 
     /* Safety net: exit() is noreturn, but the assembler doesn't know that. */
 .Lhang:

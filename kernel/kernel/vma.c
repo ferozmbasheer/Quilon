@@ -1,7 +1,7 @@
 /*
- * Quilon OS — Virtual Memory Area manager (section 9.2)
+ * Quilon OS -- Virtual Memory Area manager (section 9.2)
  *
- * Pure C — no architecture-specific code.  Compiles and is unit-testable on
+ * Pure C -- no architecture-specific code.  Compiles and is unit-testable on
  * the host without the cross-compiler.
  */
 

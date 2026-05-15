@@ -1,5 +1,5 @@
 /*
- * Quilon OS — Test Framework
+ * Quilon OS -- Test Framework
  *
  * A minimal, zero-dependency test harness for host-side unit tests.
  * Output goes to stderr via write() so it works even when our own
@@ -38,20 +38,20 @@
 #endif
 extern long write(int, const void *, unsigned long);
 
-/* ── Pass/fail counters ────────────────────────────────────────────────────
+/* -- Pass/fail counters ----------------------------------------------------
  * These are static so each test binary has its own counters.
  * All suites in one binary share the same counters, giving a
  * combined total in TEST_SUMMARY.
- * ───────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------- */
 static int fw_passed = 0;
 static int fw_failed = 0;
 
-/* ── Raw output helpers ────────────────────────────────────────────────────
- * We cannot use printf here — this file is compiled alongside the OS
+/* -- Raw output helpers ----------------------------------------------------
+ * We cannot use printf here -- this file is compiled alongside the OS
  * source files, which define their own printf. Using printf in the
  * framework would call our OS version, which in turn calls our mock
  * putchar, corrupting test output.
- * ───────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------- */
 static void fw_write(const char *s) {
     const char *p = s;
     while (*p) p++;
@@ -67,24 +67,24 @@ static void fw_write_uint(unsigned int n) {
     fw_write(buf + i);
 }
 
-/* ── ANSI colour codes ─────────────────────────────────────────────────── */
+/* -- ANSI colour codes --------------------------------------------------- */
 #define FW_RESET  "\033[0m"
 #define FW_GREEN  "\033[32m"
 #define FW_RED    "\033[31m"
 #define FW_CYAN   "\033[36m"
 #define FW_BOLD   "\033[1m"
 
-/* ── Stringify helpers for __LINE__ in ASSERT output ──────────────────── */
+/* -- Stringify helpers for __LINE__ in ASSERT output -------------------- */
 #define FW_STR_(x) #x
 #define FW_STR(x)  FW_STR_(x)
 
-/* ── Core assertion ────────────────────────────────────────────────────────
+/* -- Core assertion --------------------------------------------------------
  *
  *   ASSERT(condition, "human readable label")
  *
  * On failure the output includes the file and line number so you can
  * jump straight to the broken assertion.
- * ───────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------- */
 #define ASSERT(cond, msg)                                              \
     do {                                                               \
         if (cond) {                                                    \
@@ -97,7 +97,7 @@ static void fw_write_uint(unsigned int n) {
         }                                                              \
     } while (0)
 
-/* ── Typed assertion helpers ───────────────────────────────────────────── */
+/* -- Typed assertion helpers --------------------------------------------- */
 
 /* Integer equality / inequality */
 #define ASSERT_EQ(a, b, msg)     ASSERT((a) == (b), msg)
@@ -107,11 +107,11 @@ static void fw_write_uint(unsigned int n) {
 #define ASSERT_NULL(p, msg)      ASSERT((void*)(p) == (void*)0, msg)
 #define ASSERT_NOTNULL(p, msg)   ASSERT((void*)(p) != (void*)0, msg)
 
-/* Memory block equality — uses memcmp, which must be compiled alongside */
+/* Memory block equality -- uses memcmp, which must be compiled alongside */
 #define ASSERT_MEM_EQ(a, b, n, msg) \
     ASSERT(memcmp((const void*)(a), (const void*)(b), (n)) == 0, msg)
 
-/* Null-terminated string equality — uses fw_streq (no external deps) */
+/* Null-terminated string equality -- uses fw_streq (no external deps) */
 static int fw_streq(const char *a, const char *b) {
     while (*a && *b) {
         if (*a != *b) return 0;
@@ -122,25 +122,25 @@ static int fw_streq(const char *a, const char *b) {
 #define ASSERT_STR_EQ(a, b, msg) \
     ASSERT(fw_streq((const char*)(a), (const char*)(b)), msg)
 
-/* ── Suite runner ──────────────────────────────────────────────────────────
+/* -- Suite runner ----------------------------------------------------------
  *
  *   RUN_SUITE(my_test_function);
  *
  * Prints a header with the function name then calls the function.
- * ───────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------- */
 #define RUN_SUITE(fn)                                                  \
     do {                                                               \
         fw_write(FW_BOLD FW_CYAN "\n[" #fn "]\n" FW_RESET);           \
         fn();                                                          \
     } while (0)
 
-/* ── Final summary ─────────────────────────────────────────────────────────
+/* -- Final summary ---------------------------------------------------------
  *
  *   TEST_SUMMARY();
  *
  * Must be the last statement in main(). Prints pass/fail counts,
  * then returns 0 (all pass) or 1 (any failure) from main().
- * ───────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------- */
 #define TEST_SUMMARY()                                                 \
     do {                                                               \
         fw_write(FW_BOLD "\n--- Results ---\n" FW_RESET);              \

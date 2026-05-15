@@ -1,5 +1,5 @@
 /*
- * Quilon user-space libc — string.h
+ * Quilon user-space libc -- string.h
  */
 
 #ifndef _STRING_H

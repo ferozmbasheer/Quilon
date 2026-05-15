@@ -1,5 +1,5 @@
 /*
- * Quilon OS — Paging Unit Tests
+ * Quilon OS -- Paging Unit Tests
  *
  * Tests the pure logic declared in kernel/include/kernel/paging.h:
  *   - PAGE_* flag constant values
@@ -18,9 +18,9 @@
 #include <stdint.h>
 #include <kernel/paging.h>
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * PAGE_SIZE and flag constants
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 static void test_page_size(void)
 {
@@ -42,14 +42,14 @@ static void test_flags_distinct(void)
     ASSERT((PAGE_WRITABLE & PAGE_USER)    == 0, "WRITABLE and USER do not overlap");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * Virtual address decomposition
  *
  * x86 two-level paging splits a 32-bit virtual address as:
- *   bits 31..22  → page directory index  (10 bits, selects 4-MiB region)
- *   bits 21..12  → page table index      (10 bits, selects 4-KiB page)
- *   bits 11..0   → byte offset           (12 bits)
- * ══════════════════════════════════════════════════════════════════════ */
+ *   bits 31..22  -> page directory index  (10 bits, selects 4-MiB region)
+ *   bits 21..12  -> page table index      (10 bits, selects 4-KiB page)
+ *   bits 11..0   -> byte offset           (12 bits)
+ * ====================================================================== */
 
 static void test_decompose_zero(void)
 {
@@ -73,7 +73,7 @@ static void test_decompose_1mib(void)
 
 static void test_decompose_4mib_boundary(void)
 {
-    /* 4 MiB = 0x00400000 — first address covered by PD slot 1.
+    /* 4 MiB = 0x00400000 -- first address covered by PD slot 1.
      *   PD index = 0x00400000 >> 22 = 1
      *   PT index = (0x00400000 >> 12) & 0x3FF = 0
      *   Offset   = 0                                               */
@@ -131,9 +131,9 @@ static void test_decompose_last_slot(void)
     ASSERT_EQ(VIRT_OFFSET(v),   0u,    "offset  of 0xFFC00000 == 0");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * paging_make_entry
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 static void test_make_entry_present_writable(void)
 {
@@ -165,7 +165,7 @@ static void test_make_entry_zero_flags(void)
 {
     /* flags == 0 marks the entry as not-present (useful to unmap). */
     uint32_t e = paging_make_entry(0x3000u, 0u);
-    ASSERT_EQ(e & 0xFFFu, 0u,    "zero flags → no flag bits set");
+    ASSERT_EQ(e & 0xFFFu, 0u,    "zero flags -> no flag bits set");
     ASSERT_EQ(e, 0x3000u,        "address is still stored");
 }
 
@@ -196,10 +196,10 @@ static void test_make_entry_large_address(void)
               "large physical address preserved correctly");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * Reconstruct virtual address from its decomposed parts
  * (sanity check that the three fields cover all 32 bits exactly once)
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 static void test_decompose_reconstruct(void)
 {
@@ -218,9 +218,9 @@ static void test_decompose_reconstruct(void)
     }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
- * Section 9.1 — Higher-Half Kernel constants
- * ══════════════════════════════════════════════════════════════════════ */
+/* ======================================================================
+ * Section 9.1 -- Higher-Half Kernel constants
+ * ====================================================================== */
 
 static void test_kernel_offset(void)
 {
@@ -231,7 +231,7 @@ static void test_kernel_offset(void)
     uint32_t virt_start = phys_start + KERNEL_OFFSET;
     ASSERT_EQ(virt_start, 0xC0100000u, "phys 0x100000 + KERNEL_OFFSET = 0xC0100000");
 
-    /* Round-trip: virtual → physical → virtual. */
+    /* Round-trip: virtual -> physical -> virtual. */
     uint32_t phys = virt_start - KERNEL_OFFSET;
     ASSERT_EQ(phys, phys_start, "virt - KERNEL_OFFSET == original phys");
 }
@@ -273,9 +273,9 @@ static void test_higher_half_address_split(void)
               "USER_STACK_TOP == KERNEL_OFFSET is PD[768] boundary");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * main
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 int main(void)
 {

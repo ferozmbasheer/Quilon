@@ -1,4 +1,4 @@
-/* ── AP startup trampoline ─────────────────────────────────────────────────
+/* -- AP startup trampoline -------------------------------------------------
  *
  * Copied to physical 0x8000 by smp_boot_aps() before any SIPI is sent.
  * An AP receiving a SIPI with vector=8 wakes in 16-bit real mode with:
@@ -21,7 +21,7 @@
 
 .section .smp_trampoline, "ax"
 
-/* ── 16-bit real-mode entry ───────────────────────────────────────────────── */
+/* -- 16-bit real-mode entry ------------------------------------------------- */
 .code16
 .global smp_trampoline_start
 smp_trampoline_start:                   /* physical 0x8000 after copy        */
@@ -37,7 +37,7 @@ smp_trampoline_start:                   /* physical 0x8000 after copy        */
     /* Load the minimal GDT descriptor sitting at physical 0x8080.
      * We put the address in EAX first to get reliable 32-bit addressing.   */
     movl    $0x8080, %eax
-    lgdtl   (%eax)              /* operand-size prefix → 32-bit GDT base    */
+    lgdtl   (%eax)              /* operand-size prefix -> 32-bit GDT base    */
 
     /* Enable Protected Mode: set CR0 bit 0 (PE).                           */
     movl    %cr0, %eax
@@ -52,7 +52,7 @@ smp_trampoline_start:                   /* physical 0x8000 after copy        */
     .long   0x00008040
     .word   0x0008
 
-/* ── 32-bit protected-mode entry at trampoline offset 0x40 ──────────────── */
+/* -- 32-bit protected-mode entry at trampoline offset 0x40 ---------------- */
 .org 0x40
 .code32
 smp_trampoline_32:
@@ -84,7 +84,7 @@ smp_trampoline_32:
 1:  hlt
     jmp     1b
 
-/* ── Minimal bootstrap GDT at trampoline offset 0x80 ───────────────────── */
+/* -- Minimal bootstrap GDT at trampoline offset 0x80 --------------------- */
 .org 0x80
 trampoline_gdtr:
     .word   0x17            /* GDT limit = 3 entries × 8 bytes − 1 = 23    */

@@ -1,13 +1,13 @@
 /*
- * Quilon OS — PCI Bus Enumeration (Section 10.1)
+ * Quilon OS -- PCI Bus Enumeration (Section 10.1)
  *
  * PCI Configuration Access Mechanism #1 uses two I/O ports:
  *
- *   0xCF8  CONFIG_ADDRESS — 32-bit write to select bus/slot/func/register
- *   0xCFC  CONFIG_DATA    — 32-bit read/write of the selected register
+ *   0xCF8  CONFIG_ADDRESS -- 32-bit write to select bus/slot/func/register
+ *   0xCFC  CONFIG_DATA    -- 32-bit read/write of the selected register
  *
  * Scanning strategy
- * ──────────────────
+ * ------------------
  * For each (bus, slot) pair we read offset 0x00, which returns the vendor
  * and device IDs in a single 32-bit read.  If the low 16 bits are 0xFFFF,
  * no device occupies that slot and we skip it.
@@ -25,12 +25,12 @@
 #include <stdio.h>
 #include <kernel/pci.h>
 
-/* ── Global device table ─────────────────────────────────────────────────── */
+/* -- Global device table --------------------------------------------------- */
 
 pci_device_t pci_devices[PCI_MAX_DEVICES];
 int          pci_device_count = 0;
 
-/* ── Class code name table ───────────────────────────────────────────────── */
+/* -- Class code name table ------------------------------------------------- */
 
 static const struct {
     uint8_t     code;
@@ -69,7 +69,7 @@ const char *pci_class_name(uint8_t class_code)
     return "Unknown Class";
 }
 
-/* ── Device table queries ────────────────────────────────────────────────── */
+/* -- Device table queries -------------------------------------------------- */
 
 pci_device_t *pci_find_device(uint16_t vendor_id, uint16_t device_id)
 {
@@ -88,7 +88,7 @@ pci_device_t *pci_get_device(int index)
     return &pci_devices[index];
 }
 
-/* ── Hardware I/O — x86 only, excluded from host test builds ─────────────── */
+/* -- Hardware I/O -- x86 only, excluded from host test builds --------------- */
 
 #ifdef __is_kernel
 
@@ -153,7 +153,7 @@ static void pci_scan_slot(uint8_t bus, uint8_t slot)
 
     pci_scan_function(bus, slot, 0);
 
-    /* Header type bit 7 set → multi-function device; check functions 1–7. */
+    /* Header type bit 7 set -> multi-function device; check functions 1–7. */
     uint32_t cache_word = pci_read(bus, slot, 0, PCI_OFF_CACHE_LINE);
     uint8_t  htype      = (uint8_t)((cache_word >> 16) & 0xFF);
     if (htype & PCI_HEADER_MULTIFUNC) {

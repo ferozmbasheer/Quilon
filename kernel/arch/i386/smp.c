@@ -10,12 +10,12 @@
 #include <kernel/interrupts.h>
 #include <kernel/pit.h>
 
-/* ── Global SMP state ──────────────────────────────────────────────────── */
+/* -- Global SMP state ---------------------------------------------------- */
 cpu_info_t        smp_cpus[SMP_MAX_CPUS];
 volatile uint32_t smp_cpu_count   = 0;
 volatile uint32_t smp_cpus_online = 0;
 
-/* ── mp_parse_config ── pure C, testable on host ──────────────────────── */
+/* -- mp_parse_config -- pure C, testable on host ------------------------ */
 uint32_t mp_parse_config(const mp_config_t *cfg,
                          cpu_info_t *cpus, uint32_t max)
 {
@@ -44,14 +44,14 @@ uint32_t mp_parse_config(const mp_config_t *cfg,
         case 3: p += 8;  break; /* I/O interrupt entry  */
         case 4: p += 8;  break; /* Local interrupt entry */
         default:
-            /* Unknown entry type — stop parsing to avoid reading garbage. */
+            /* Unknown entry type -- stop parsing to avoid reading garbage. */
             return count;
         }
     }
     return count;
 }
 
-/* ── MP floating pointer search (kernel-only) ───────────────────────────── */
+/* -- MP floating pointer search (kernel-only) ----------------------------- */
 #ifdef __is_kernel
 
 /* Search a memory range for the "_MP_" signature at 16-byte boundaries.   */
@@ -71,7 +71,7 @@ static mp_float_t *mp_search_range(uint32_t base, uint32_t len)
 
 static mp_float_t *mp_find_float(void)
 {
-    /* 1. EBDA — Extended BIOS Data Area (segment address at 0x40E × 16).  */
+    /* 1. EBDA -- Extended BIOS Data Area (segment address at 0x40E × 16).  */
     uint32_t ebda_seg = (uint32_t)(*(const uint16_t *)(uintptr_t)0x040E);
     uint32_t ebda_base = ebda_seg << 4;
     if (ebda_base) {
@@ -94,7 +94,7 @@ static mp_float_t *mp_find_float(void)
     return NULL;
 }
 
-/* ── smp_initialize ─────────────────────────────────────────────────────── */
+/* -- smp_initialize ------------------------------------------------------- */
 void smp_initialize(void)
 {
     memset(smp_cpus, 0, sizeof(smp_cpus));
@@ -146,7 +146,7 @@ void smp_initialize(void)
         if (cpuid_count > 1 && found < cpuid_count &&
             cpuid_count <= SMP_MAX_CPUS) {
             printf("[SMP] MP table: %d CPU(s); CPUID leaf1 EBX[23:16]=%d"
-                   " — adding synthetic APs\r\n",
+                   " -- adding synthetic APs\r\n",
                    (int)found, (int)cpuid_count);
             for (uint32_t i = found; i < cpuid_count; i++) {
                 smp_cpus[i].apic_id = (uint8_t)i;
@@ -158,7 +158,7 @@ void smp_initialize(void)
         }
     }
 
-    /* The BSP is already running — mark it online immediately.             */
+    /* The BSP is already running -- mark it online immediately.             */
     int bsp_idx = smp_find_bsp_idx(smp_cpus, smp_cpu_count);
     if (bsp_idx >= 0) {
         smp_cpus[bsp_idx].online = 1;
@@ -168,13 +168,13 @@ void smp_initialize(void)
     printf("[SMP] Found %d CPU(s) via MP table\r\n", (int)found);
 }
 
-/* ── smp_this_cpu_id ────────────────────────────────────────────────────── */
+/* -- smp_this_cpu_id ------------------------------------------------------ */
 uint8_t smp_this_cpu_id(void)
 {
     return apic_id();
 }
 
-/* ── ap_entry_c — called by each AP after trampoline enables paging ───────
+/* -- ap_entry_c -- called by each AP after trampoline enables paging -------
  *
  * At entry:
  *   - Running at ring 0 in kernel-high virtual address space
@@ -211,13 +211,13 @@ void __attribute__((noreturn)) ap_entry_c(void)
         asm volatile("hlt");
 }
 
-/* ── smp_boot_aps ─────────────────────────────────────────────────────────
+/* -- smp_boot_aps ---------------------------------------------------------
  *
  * For each AP discovered in smp_cpus[]:
  *   1. Allocate a kernel stack page for the AP.
  *   2. Fill the trampoline communication area (CR3, entry, stack).
  *   3. Copy the trampoline code to physical 0x8000.
- *   4. Send INIT IPI → wait 10 ms → send SIPI → wait for AP to check in.
+ *   4. Send INIT IPI -> wait 10 ms -> send SIPI -> wait for AP to check in.
  */
 void smp_boot_aps(void)
 {
@@ -234,7 +234,7 @@ void smp_boot_aps(void)
      * The trampoline assembly already embeds the GDT bytes, so we only
      * need to fill the BSP-specific fields in the communication area.     */
 
-    /* Kernel CR3 — same page directory for all APs.                       */
+    /* Kernel CR3 -- same page directory for all APs.                       */
     *(volatile uint32_t *)(uintptr_t)TRAMPOLINE_CR3 = paging_kernel_cr3();
 
     /* ap_entry_c() virtual address.                                       */
@@ -260,13 +260,13 @@ void smp_boot_aps(void)
 
         printf("[SMP] Booting AP LAPIC ID=%d\r\n", (int)dest);
 
-        /* ── INIT IPI ── */
+        /* -- INIT IPI -- */
         apic_send_ipi(dest, apic_icr_init_assert());
         pit_sleep_ticks(1);      /* ≈10 ms at 100 Hz                       */
         apic_send_ipi(dest, apic_icr_init_deassert());
         pit_sleep_ticks(1);
 
-        /* ── SIPI (Startup IPI) — send twice as required by the MP spec ── */
+        /* -- SIPI (Startup IPI) -- send twice as required by the MP spec -- */
         uint32_t sipi = apic_icr_sipi(TRAMPOLINE_PHYS);
         apic_send_ipi(dest, sipi);
         pit_sleep_ticks(1);

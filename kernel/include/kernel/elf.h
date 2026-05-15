@@ -2,9 +2,9 @@
 #define _KERNEL_ELF_H
 
 #include <stdint.h>
-#include <kernel/vma.h>   /* vma_t — demand paging (section 9.2) */
+#include <kernel/vma.h>   /* vma_t -- demand paging (section 9.2) */
 
-/* ── ELF identification constants ────────────────────────────────────────── */
+/* -- ELF identification constants ------------------------------------------ */
 
 #define ELFCLASS32   1u   /* 32-bit objects                                 */
 #define ELFDATA2LSB  1u   /* little-endian data encoding                    */
@@ -18,7 +18,7 @@
 
 /* Segment types (p_type) */
 #define PT_NULL      0u   /* unused entry                                   */
-#define PT_LOAD      1u   /* loadable segment — copy to memory              */
+#define PT_LOAD      1u   /* loadable segment -- copy to memory              */
 #define PT_DYNAMIC   2u   /* dynamic linking information                    */
 #define PT_INTERP    3u   /* interpreter path string                        */
 #define PT_NOTE      4u   /* auxiliary information                          */
@@ -28,17 +28,17 @@
 #define PF_W         (1u << 1)   /* write permission                       */
 #define PF_R         (1u << 2)   /* read permission                        */
 
-/* ── ELF32 file header (52 bytes) ───────────────────────────────────────── */
+/* -- ELF32 file header (52 bytes) ----------------------------------------- */
 
 /*
- * elf32_ehdr_t — the first 52 bytes of every ELF32 file.
+ * elf32_ehdr_t -- the first 52 bytes of every ELF32 file.
  *
  * Key fields for a loader:
- *   e_entry     — virtual address of the first instruction to execute.
- *   e_phoff     — byte offset of the program header table from the start
+ *   e_entry     -- virtual address of the first instruction to execute.
+ *   e_phoff     -- byte offset of the program header table from the start
  *                 of the file (typically 52, immediately after this header).
- *   e_phentsize — size of one program header entry (32 for ELF32).
- *   e_phnum     — number of program header entries.
+ *   e_phentsize -- size of one program header entry (32 for ELF32).
+ *   e_phnum     -- number of program header entries.
  */
 typedef struct {
     uint8_t  e_ident[16];   /* magic (0x7F 'E' 'L' 'F'), class, encoding, … */
@@ -57,24 +57,24 @@ typedef struct {
     uint16_t e_shstrndx;    /* index of section-name string table             */
 } elf32_ehdr_t;
 
-/* ── ELF32 program header (32 bytes) ─────────────────────────────────────── */
+/* -- ELF32 program header (32 bytes) --------------------------------------- */
 
 /*
- * elf32_phdr_t — one entry in the program header table.
+ * elf32_phdr_t -- one entry in the program header table.
  *
  * The loader iterates the program header table looking for entries whose
  * p_type == PT_LOAD.  Each PT_LOAD entry describes one contiguous region
  * of the executable that must be copied into virtual memory before the
  * program can run.
  *
- * p_vaddr  — where in virtual memory to put this segment.
- * p_filesz — how many bytes to read from the file (may be 0 for BSS-only).
- * p_memsz  — how many bytes to reserve in virtual memory.  If p_memsz >
+ * p_vaddr  -- where in virtual memory to put this segment.
+ * p_filesz -- how many bytes to read from the file (may be 0 for BSS-only).
+ * p_memsz  -- how many bytes to reserve in virtual memory.  If p_memsz >
  *             p_filesz, the extra bytes are the BSS region and must be
  *             zero-initialised.
- * p_offset — byte offset in the file where this segment's data begins.
- * p_flags  — combination of PF_R, PF_W, PF_X.
- * p_align  — required alignment (power of 2; loader should respect it).
+ * p_offset -- byte offset in the file where this segment's data begins.
+ * p_flags  -- combination of PF_R, PF_W, PF_X.
+ * p_align  -- required alignment (power of 2; loader should respect it).
  */
 typedef struct {
     uint32_t p_type;    /* segment type                                      */
@@ -87,10 +87,10 @@ typedef struct {
     uint32_t p_align;   /* alignment constraint (0 or 1 = no constraint)     */
 } elf32_phdr_t;
 
-/* ── ELF loader API ──────────────────────────────────────────────────────── */
+/* -- ELF loader API -------------------------------------------------------- */
 
 /*
- * elf_validate — verify that `buf` contains a valid ELF32 i386 executable.
+ * elf_validate -- verify that `buf` contains a valid ELF32 i386 executable.
  *
  * Checks performed:
  *   • buf is non-NULL and size >= sizeof(elf32_ehdr_t)
@@ -110,30 +110,30 @@ typedef struct {
 int elf_validate(const uint8_t *buf, uint32_t size);
 
 /*
- * elf_phdr — return a read-only pointer to program header entry i.
+ * elf_phdr -- return a read-only pointer to program header entry i.
  *
  * Precondition: elf_validate(buf, size) returned 0 and i < ehdr->e_phnum.
- * No bounds check is performed — the caller is responsible for i.
+ * No bounds check is performed -- the caller is responsible for i.
  *
  * Returns a pointer into buf (the same storage; not a copy).
  */
 const elf32_phdr_t *elf_phdr(const uint8_t *buf, uint16_t i);
 
 /*
- * elf_load — load an ELF32 i386 executable from the VFS into virtual memory.
+ * elf_load -- load an ELF32 i386 executable from the VFS into virtual memory.
  *
  * This function ties together every major kernel subsystem built in
  * sections 4.1–4.11 of the Quilon roadmap:
  *
- *   VFS (4.11)  → opens and reads the binary
- *   kmalloc (4.4) → holds the file in memory while parsing
- *   PMM (4.2)   → allocates physical pages for each PT_LOAD segment
- *   Paging (4.3) → maps those pages at the ELF's requested virtual addresses
+ *   VFS (4.11)  -> opens and reads the binary
+ *   kmalloc (4.4) -> holds the file in memory while parsing
+ *   PMM (4.2)   -> allocates physical pages for each PT_LOAD segment
+ *   Paging (4.3) -> maps those pages at the ELF's requested virtual addresses
  *
  * Algorithm:
- *   1. vfs_open(path) — open the file.
+ *   1. vfs_open(path) -- open the file.
  *   2. Read up to ELF_MAX_SIZE bytes into a heap buffer.
- *   3. elf_validate() — check magic, class, machine.
+ *   3. elf_validate() -- check magic, class, machine.
  *   4. For each PT_LOAD program header:
  *       a. page-align the virtual address range [p_vaddr, p_vaddr+p_memsz)
  *       b. allocate one physical page per virtual page via pmm_alloc_page()
@@ -162,7 +162,7 @@ const elf32_phdr_t *elf_phdr(const uint8_t *buf, uint16_t i);
 uint32_t elf_load(const char *path);
 
 /*
- * elf_load_into — load an ELF32 executable into an explicit page directory.
+ * elf_load_into -- load an ELF32 executable into an explicit page directory.
  *
  * Process-isolation version of elf_load().  Maps each PT_LOAD segment into
  * target_pd (not into the currently active global page directory), writing
@@ -178,9 +178,9 @@ uint32_t elf_load(const char *path);
  *   - If vmas is not NULL, a VMA is added for every PT_LOAD segment and for
  *     the user stack, so the fault handler can validate demand-page requests.
  *
- * target_pd — pointer to the child's page directory (must be in the first
+ * target_pd -- pointer to the child's page directory (must be in the first
  *             4 MiB, identity-mapped, as all pmm_alloc_page() results are).
- * vmas      — if non-NULL, pointer to a PROC_VMA_MAX-entry VMA array that
+ * vmas      -- if non-NULL, pointer to a PROC_VMA_MAX-entry VMA array that
  *             will be populated with one VMA per PT_LOAD segment plus one for
  *             the stack.  Pass NULL to skip VMA registration (ring-0 exec).
  *

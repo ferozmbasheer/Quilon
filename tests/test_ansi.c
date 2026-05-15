@@ -1,5 +1,5 @@
 /*
- * test_ansi.c — host-side unit tests for the ANSI escape sequence parser.
+ * test_ansi.c -- host-side unit tests for the ANSI escape sequence parser.
  *
  * Tests the pure-C functions in kernel/include/kernel/ansi.h:
  *   - ansi_parser_init()
@@ -13,7 +13,7 @@
 #include "framework.h"
 #include "../kernel/include/kernel/ansi.h"
 
-/* ── Helper: feed a NUL-terminated string, count results ───────────────── */
+/* -- Helper: feed a NUL-terminated string, count results ----------------- */
 
 typedef struct {
     int  chars;         /* number of ANSI_CHAR events */
@@ -47,7 +47,7 @@ static feed_result_t feed_string(const char *s)
     return r;
 }
 
-/* ── ansi_parser_init ──────────────────────────────────────────────────── */
+/* -- ansi_parser_init ---------------------------------------------------- */
 
 static void test_parser_init(void)
 {
@@ -57,7 +57,7 @@ static void test_parser_init(void)
     ASSERT_EQ(p.len, 0, "init: len is 0");
 }
 
-/* ── ansi_feed — plain characters ─────────────────────────────────────── */
+/* -- ansi_feed -- plain characters --------------------------------------- */
 
 static void test_plain_chars(void)
 {
@@ -68,21 +68,21 @@ static void test_plain_chars(void)
     int r;
 
     r = ansi_feed(&p, 'A', &ev);
-    ASSERT_EQ(r, ANSI_CHAR, "plain 'A' → ANSI_CHAR");
-    ASSERT_EQ((int)ev.ch, (int)'A', "plain 'A' → ev.ch=='A'");
+    ASSERT_EQ(r, ANSI_CHAR, "plain 'A' -> ANSI_CHAR");
+    ASSERT_EQ((int)ev.ch, (int)'A', "plain 'A' -> ev.ch=='A'");
 
     r = ansi_feed(&p, '\n', &ev);
-    ASSERT_EQ(r, ANSI_CHAR, "newline → ANSI_CHAR");
-    ASSERT_EQ((int)ev.ch, (int)'\n', "newline → ev.ch==\\n");
+    ASSERT_EQ(r, ANSI_CHAR, "newline -> ANSI_CHAR");
+    ASSERT_EQ((int)ev.ch, (int)'\n', "newline -> ev.ch==\\n");
 
     r = ansi_feed(&p, '\r', &ev);
-    ASSERT_EQ(r, ANSI_CHAR, "CR → ANSI_CHAR");
+    ASSERT_EQ(r, ANSI_CHAR, "CR -> ANSI_CHAR");
 
     r = ansi_feed(&p, '\b', &ev);
-    ASSERT_EQ(r, ANSI_CHAR, "backspace → ANSI_CHAR");
+    ASSERT_EQ(r, ANSI_CHAR, "backspace -> ANSI_CHAR");
 }
 
-/* ── ansi_feed — ESC alone is consumed ────────────────────────────────── */
+/* -- ansi_feed -- ESC alone is consumed ---------------------------------- */
 
 static void test_esc_alone(void)
 {
@@ -91,11 +91,11 @@ static void test_esc_alone(void)
     ansi_event_t ev;
 
     int r = ansi_feed(&p, '\033', &ev);
-    ASSERT_EQ(r, ANSI_NONE, "ESC alone → ANSI_NONE");
-    ASSERT_EQ((int)p.state, (int)ANSI_STATE_ESC, "ESC → state is SAW_ESC");
+    ASSERT_EQ(r, ANSI_NONE, "ESC alone -> ANSI_NONE");
+    ASSERT_EQ((int)p.state, (int)ANSI_STATE_ESC, "ESC -> state is SAW_ESC");
 }
 
-/* ── ansi_feed — ESC + non-[ emits char literally ─────────────────────── */
+/* -- ansi_feed -- ESC + non-[ emits char literally ----------------------- */
 
 static void test_esc_non_bracket(void)
 {
@@ -106,11 +106,11 @@ static void test_esc_non_bracket(void)
     ansi_feed(&p, '\033', &ev);  /* ESC */
 
     int r = ansi_feed(&p, 'c', &ev);
-    ASSERT_EQ(r, ANSI_CHAR, "ESC+c → ANSI_CHAR (reset sequence, emit 'c')");
-    ASSERT_EQ((int)p.state, (int)ANSI_STATE_NORMAL, "ESC+c → state restored to NORMAL");
+    ASSERT_EQ(r, ANSI_CHAR, "ESC+c -> ANSI_CHAR (reset sequence, emit 'c')");
+    ASSERT_EQ((int)p.state, (int)ANSI_STATE_NORMAL, "ESC+c -> state restored to NORMAL");
 }
 
-/* ── ansi_feed — ESC [ alone does not complete ────────────────────────── */
+/* -- ansi_feed -- ESC [ alone does not complete -------------------------- */
 
 static void test_csi_partial(void)
 {
@@ -118,13 +118,13 @@ static void test_csi_partial(void)
     ansi_parser_init(&p);
     ansi_event_t ev;
 
-    ASSERT_EQ(ansi_feed(&p, '\033', &ev), ANSI_NONE, "ESC → ANSI_NONE");
-    ASSERT_EQ(ansi_feed(&p, '[', &ev),   ANSI_NONE, "ESC[ → ANSI_NONE");
-    ASSERT_EQ((int)p.state, (int)ANSI_STATE_CSI, "ESC[ → state is SAW_CSI");
-    ASSERT_EQ(p.len, 0, "ESC[ → buf empty");
+    ASSERT_EQ(ansi_feed(&p, '\033', &ev), ANSI_NONE, "ESC -> ANSI_NONE");
+    ASSERT_EQ(ansi_feed(&p, '[', &ev),   ANSI_NONE, "ESC[ -> ANSI_NONE");
+    ASSERT_EQ((int)p.state, (int)ANSI_STATE_CSI, "ESC[ -> state is SAW_CSI");
+    ASSERT_EQ(p.len, 0, "ESC[ -> buf empty");
 }
 
-/* ── ansi_feed — ESC [ m (SGR reset, no params) ───────────────────────── */
+/* -- ansi_feed -- ESC [ m (SGR reset, no params) ------------------------- */
 
 static void test_sgr_reset(void)
 {
@@ -136,100 +136,100 @@ static void test_sgr_reset(void)
     ansi_feed(&p, '[', &ev);
     int r = ansi_feed(&p, 'm', &ev);
 
-    ASSERT_EQ(r, ANSI_CSI, "ESC[m → ANSI_CSI");
-    ASSERT_EQ((int)ev.cmd, (int)'m', "ESC[m → cmd=='m'");
-    ASSERT_EQ(ev.nparams, 0, "ESC[m → nparams==0 (no params)");
-    ASSERT_EQ((int)p.state, (int)ANSI_STATE_NORMAL, "after CSI → state NORMAL");
+    ASSERT_EQ(r, ANSI_CSI, "ESC[m -> ANSI_CSI");
+    ASSERT_EQ((int)ev.cmd, (int)'m', "ESC[m -> cmd=='m'");
+    ASSERT_EQ(ev.nparams, 0, "ESC[m -> nparams==0 (no params)");
+    ASSERT_EQ((int)p.state, (int)ANSI_STATE_NORMAL, "after CSI -> state NORMAL");
 }
 
-/* ── ansi_feed — ESC [ 0 m (SGR reset with explicit 0) ───────────────── */
+/* -- ansi_feed -- ESC [ 0 m (SGR reset with explicit 0) ----------------- */
 
 static void test_sgr_explicit_reset(void)
 {
     feed_result_t r = feed_string("\033[0m");
-    ASSERT_EQ(r.csi, 1, "ESC[0m → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'m', "ESC[0m → cmd=='m'");
-    ASSERT_EQ(r.last_nparams, 1, "ESC[0m → nparams==1");
-    ASSERT_EQ(r.last_params[0], 0, "ESC[0m → params[0]==0");
+    ASSERT_EQ(r.csi, 1, "ESC[0m -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'m', "ESC[0m -> cmd=='m'");
+    ASSERT_EQ(r.last_nparams, 1, "ESC[0m -> nparams==1");
+    ASSERT_EQ(r.last_params[0], 0, "ESC[0m -> params[0]==0");
 }
 
-/* ── ansi_feed — ESC [ 31 m (red foreground) ─────────────────────────── */
+/* -- ansi_feed -- ESC [ 31 m (red foreground) --------------------------- */
 
 static void test_sgr_color(void)
 {
     feed_result_t r = feed_string("\033[31m");
-    ASSERT_EQ(r.csi, 1, "ESC[31m → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'m', "ESC[31m → cmd=='m'");
-    ASSERT_EQ(r.last_nparams, 1, "ESC[31m → nparams==1");
-    ASSERT_EQ(r.last_params[0], 31, "ESC[31m → params[0]==31");
+    ASSERT_EQ(r.csi, 1, "ESC[31m -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'m', "ESC[31m -> cmd=='m'");
+    ASSERT_EQ(r.last_nparams, 1, "ESC[31m -> nparams==1");
+    ASSERT_EQ(r.last_params[0], 31, "ESC[31m -> params[0]==31");
 }
 
-/* ── ansi_feed — ESC [ 1 ; 32 m (bold green) ─────────────────────────── */
+/* -- ansi_feed -- ESC [ 1 ; 32 m (bold green) --------------------------- */
 
 static void test_sgr_bold_green(void)
 {
     feed_result_t r = feed_string("\033[1;32m");
-    ASSERT_EQ(r.csi, 1, "ESC[1;32m → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'m', "ESC[1;32m → cmd=='m'");
-    ASSERT_EQ(r.last_nparams, 2, "ESC[1;32m → nparams==2");
-    ASSERT_EQ(r.last_params[0], 1, "ESC[1;32m → params[0]==1 (bold)");
-    ASSERT_EQ(r.last_params[1], 32, "ESC[1;32m → params[1]==32 (green)");
+    ASSERT_EQ(r.csi, 1, "ESC[1;32m -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'m', "ESC[1;32m -> cmd=='m'");
+    ASSERT_EQ(r.last_nparams, 2, "ESC[1;32m -> nparams==2");
+    ASSERT_EQ(r.last_params[0], 1, "ESC[1;32m -> params[0]==1 (bold)");
+    ASSERT_EQ(r.last_params[1], 32, "ESC[1;32m -> params[1]==32 (green)");
 }
 
-/* ── ansi_feed — ESC [ 2 J (clear screen) ────────────────────────────── */
+/* -- ansi_feed -- ESC [ 2 J (clear screen) ------------------------------ */
 
 static void test_erase_display(void)
 {
     feed_result_t r = feed_string("\033[2J");
-    ASSERT_EQ(r.csi, 1, "ESC[2J → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'J', "ESC[2J → cmd=='J'");
-    ASSERT_EQ(r.last_nparams, 1, "ESC[2J → nparams==1");
-    ASSERT_EQ(r.last_params[0], 2, "ESC[2J → params[0]==2");
+    ASSERT_EQ(r.csi, 1, "ESC[2J -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'J', "ESC[2J -> cmd=='J'");
+    ASSERT_EQ(r.last_nparams, 1, "ESC[2J -> nparams==1");
+    ASSERT_EQ(r.last_params[0], 2, "ESC[2J -> params[0]==2");
 }
 
-/* ── ansi_feed — ESC [ K (erase to EOL, no param) ────────────────────── */
+/* -- ansi_feed -- ESC [ K (erase to EOL, no param) ---------------------- */
 
 static void test_erase_line_no_param(void)
 {
     feed_result_t r = feed_string("\033[K");
-    ASSERT_EQ(r.csi, 1, "ESC[K → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'K', "ESC[K → cmd=='K'");
-    ASSERT_EQ(r.last_nparams, 0, "ESC[K → nparams==0");
+    ASSERT_EQ(r.csi, 1, "ESC[K -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'K', "ESC[K -> cmd=='K'");
+    ASSERT_EQ(r.last_nparams, 0, "ESC[K -> nparams==0");
 }
 
-/* ── ansi_feed — ESC [ 0 K (erase to EOL, explicit 0) ───────────────── */
+/* -- ansi_feed -- ESC [ 0 K (erase to EOL, explicit 0) ----------------- */
 
 static void test_erase_line_explicit(void)
 {
     feed_result_t r = feed_string("\033[0K");
-    ASSERT_EQ(r.csi, 1, "ESC[0K → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'K', "ESC[0K → cmd=='K'");
-    ASSERT_EQ(r.last_params[0], 0, "ESC[0K → params[0]==0");
+    ASSERT_EQ(r.csi, 1, "ESC[0K -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'K', "ESC[0K -> cmd=='K'");
+    ASSERT_EQ(r.last_params[0], 0, "ESC[0K -> params[0]==0");
 }
 
-/* ── ansi_feed — ESC [ 10 ; 5 H (cursor position) ───────────────────── */
+/* -- ansi_feed -- ESC [ 10 ; 5 H (cursor position) --------------------- */
 
 static void test_cursor_position(void)
 {
     feed_result_t r = feed_string("\033[10;5H");
-    ASSERT_EQ(r.csi, 1, "ESC[10;5H → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'H', "ESC[10;5H → cmd=='H'");
-    ASSERT_EQ(r.last_nparams, 2, "ESC[10;5H → nparams==2");
-    ASSERT_EQ(r.last_params[0], 10, "ESC[10;5H → params[0]==10");
-    ASSERT_EQ(r.last_params[1], 5,  "ESC[10;5H → params[1]==5");
+    ASSERT_EQ(r.csi, 1, "ESC[10;5H -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'H', "ESC[10;5H -> cmd=='H'");
+    ASSERT_EQ(r.last_nparams, 2, "ESC[10;5H -> nparams==2");
+    ASSERT_EQ(r.last_params[0], 10, "ESC[10;5H -> params[0]==10");
+    ASSERT_EQ(r.last_params[1], 5,  "ESC[10;5H -> params[1]==5");
 }
 
-/* ── ansi_feed — ESC [ H (cursor home, no params) ────────────────────── */
+/* -- ansi_feed -- ESC [ H (cursor home, no params) ---------------------- */
 
 static void test_cursor_home(void)
 {
     feed_result_t r = feed_string("\033[H");
-    ASSERT_EQ(r.csi, 1, "ESC[H → 1 CSI event");
-    ASSERT_EQ((int)r.last_cmd, (int)'H', "ESC[H → cmd=='H'");
-    ASSERT_EQ(r.last_nparams, 0, "ESC[H → nparams==0");
+    ASSERT_EQ(r.csi, 1, "ESC[H -> 1 CSI event");
+    ASSERT_EQ((int)r.last_cmd, (int)'H', "ESC[H -> cmd=='H'");
+    ASSERT_EQ(r.last_nparams, 0, "ESC[H -> nparams==0");
 }
 
-/* ── ansi_feed — cursor movement A/B/C/D ─────────────────────────────── */
+/* -- ansi_feed -- cursor movement A/B/C/D ------------------------------- */
 
 static void test_cursor_movement(void)
 {
@@ -238,27 +238,27 @@ static void test_cursor_movement(void)
     feed_result_t right = feed_string("\033[2C");
     feed_result_t left  = feed_string("\033[4D");
 
-    ASSERT_EQ((int)up.last_cmd,    (int)'A', "ESC[3A → cmd=='A'");
-    ASSERT_EQ(up.last_params[0],   3,         "ESC[3A → params[0]==3");
-    ASSERT_EQ((int)down.last_cmd,  (int)'B', "ESC[5B → cmd=='B'");
-    ASSERT_EQ(down.last_params[0], 5,         "ESC[5B → params[0]==5");
-    ASSERT_EQ((int)right.last_cmd, (int)'C', "ESC[2C → cmd=='C'");
-    ASSERT_EQ(right.last_params[0],2,         "ESC[2C → params[0]==2");
-    ASSERT_EQ((int)left.last_cmd,  (int)'D', "ESC[4D → cmd=='D'");
-    ASSERT_EQ(left.last_params[0], 4,         "ESC[4D → params[0]==4");
+    ASSERT_EQ((int)up.last_cmd,    (int)'A', "ESC[3A -> cmd=='A'");
+    ASSERT_EQ(up.last_params[0],   3,         "ESC[3A -> params[0]==3");
+    ASSERT_EQ((int)down.last_cmd,  (int)'B', "ESC[5B -> cmd=='B'");
+    ASSERT_EQ(down.last_params[0], 5,         "ESC[5B -> params[0]==5");
+    ASSERT_EQ((int)right.last_cmd, (int)'C', "ESC[2C -> cmd=='C'");
+    ASSERT_EQ(right.last_params[0],2,         "ESC[2C -> params[0]==2");
+    ASSERT_EQ((int)left.last_cmd,  (int)'D', "ESC[4D -> cmd=='D'");
+    ASSERT_EQ(left.last_params[0], 4,         "ESC[4D -> params[0]==4");
 }
 
-/* ── ansi_feed — save/restore cursor ─────────────────────────────────── */
+/* -- ansi_feed -- save/restore cursor ----------------------------------- */
 
 static void test_save_restore(void)
 {
     feed_result_t save    = feed_string("\033[s");
     feed_result_t restore = feed_string("\033[u");
-    ASSERT_EQ((int)save.last_cmd,    (int)'s', "ESC[s → cmd=='s'");
-    ASSERT_EQ((int)restore.last_cmd, (int)'u', "ESC[u → cmd=='u'");
+    ASSERT_EQ((int)save.last_cmd,    (int)'s', "ESC[s -> cmd=='s'");
+    ASSERT_EQ((int)restore.last_cmd, (int)'u', "ESC[u -> cmd=='u'");
 }
 
-/* ── ansi_feed — multiple sequences in a row ─────────────────────────── */
+/* -- ansi_feed -- multiple sequences in a row --------------------------- */
 
 static void test_multiple_sequences(void)
 {
@@ -270,7 +270,7 @@ static void test_multiple_sequences(void)
     ASSERT_EQ((int)r.last_cmd, (int)'m', "last CSI cmd is 'm'");
 }
 
-/* ── ansi_feed — sequence does not bleed into next char ──────────────── */
+/* -- ansi_feed -- sequence does not bleed into next char ---------------- */
 
 static void test_no_bleed(void)
 {
@@ -289,44 +289,44 @@ static void test_no_bleed(void)
     ASSERT_EQ((int)p.state, (int)ANSI_STATE_NORMAL, "state is NORMAL after sequence+char");
 }
 
-/* ── ansi_parse_params ────────────────────────────────────────────────── */
+/* -- ansi_parse_params -------------------------------------------------- */
 
 static void test_parse_params_empty(void)
 {
     int params[8];
     int n = ansi_parse_params("", 0, params, 8);
-    ASSERT_EQ(n, 0, "empty string → 0 params");
+    ASSERT_EQ(n, 0, "empty string -> 0 params");
 }
 
 static void test_parse_params_single(void)
 {
     int params[8];
     int n = ansi_parse_params("0", 1, params, 8);
-    ASSERT_EQ(n, 1, "\"0\" → 1 param");
-    ASSERT_EQ(params[0], 0, "\"0\" → params[0]==0");
+    ASSERT_EQ(n, 1, "\"0\" -> 1 param");
+    ASSERT_EQ(params[0], 0, "\"0\" -> params[0]==0");
 
     n = ansi_parse_params("31", 2, params, 8);
-    ASSERT_EQ(n, 1, "\"31\" → 1 param");
-    ASSERT_EQ(params[0], 31, "\"31\" → params[0]==31");
+    ASSERT_EQ(n, 1, "\"31\" -> 1 param");
+    ASSERT_EQ(params[0], 31, "\"31\" -> params[0]==31");
 
     n = ansi_parse_params("100", 3, params, 8);
-    ASSERT_EQ(n, 1, "\"100\" → 1 param");
-    ASSERT_EQ(params[0], 100, "\"100\" → params[0]==100");
+    ASSERT_EQ(n, 1, "\"100\" -> 1 param");
+    ASSERT_EQ(params[0], 100, "\"100\" -> params[0]==100");
 }
 
 static void test_parse_params_multiple(void)
 {
     int params[8];
     int n = ansi_parse_params("1;32", 4, params, 8);
-    ASSERT_EQ(n, 2, "\"1;32\" → 2 params");
-    ASSERT_EQ(params[0], 1,  "\"1;32\" → params[0]==1");
-    ASSERT_EQ(params[1], 32, "\"1;32\" → params[1]==32");
+    ASSERT_EQ(n, 2, "\"1;32\" -> 2 params");
+    ASSERT_EQ(params[0], 1,  "\"1;32\" -> params[0]==1");
+    ASSERT_EQ(params[1], 32, "\"1;32\" -> params[1]==32");
 
     n = ansi_parse_params("10;5;0", 6, params, 8);
-    ASSERT_EQ(n, 3, "\"10;5;0\" → 3 params");
-    ASSERT_EQ(params[0], 10, "\"10;5;0\" → params[0]==10");
-    ASSERT_EQ(params[1], 5,  "\"10;5;0\" → params[1]==5");
-    ASSERT_EQ(params[2], 0,  "\"10;5;0\" → params[2]==0");
+    ASSERT_EQ(n, 3, "\"10;5;0\" -> 3 params");
+    ASSERT_EQ(params[0], 10, "\"10;5;0\" -> params[0]==10");
+    ASSERT_EQ(params[1], 5,  "\"10;5;0\" -> params[1]==5");
+    ASSERT_EQ(params[2], 0,  "\"10;5;0\" -> params[2]==0");
 }
 
 static void test_parse_params_empty_fields(void)
@@ -334,9 +334,9 @@ static void test_parse_params_empty_fields(void)
     int params[8];
     /* Leading semicolon: one field of 0, then "32" */
     int n = ansi_parse_params(";32", 3, params, 8);
-    ASSERT_EQ(n, 2, "\";32\" → 2 params");
-    ASSERT_EQ(params[0], 0,  "\";32\" → params[0]==0 (empty first field)");
-    ASSERT_EQ(params[1], 32, "\";32\" → params[1]==32");
+    ASSERT_EQ(n, 2, "\";32\" -> 2 params");
+    ASSERT_EQ(params[0], 0,  "\";32\" -> params[0]==0 (empty first field)");
+    ASSERT_EQ(params[1], 32, "\";32\" -> params[1]==32");
 }
 
 static void test_parse_params_trailing_semicolon(void)
@@ -344,8 +344,8 @@ static void test_parse_params_trailing_semicolon(void)
     int params[8];
     /* Trailing semicolon: just one param "1" */
     int n = ansi_parse_params("1;", 2, params, 8);
-    ASSERT_EQ(n, 1, "\"1;\" → 1 param (trailing semicolon ignored)");
-    ASSERT_EQ(params[0], 1, "\"1;\" → params[0]==1");
+    ASSERT_EQ(n, 1, "\"1;\" -> 1 param (trailing semicolon ignored)");
+    ASSERT_EQ(params[0], 1, "\"1;\" -> params[0]==1");
 }
 
 static void test_parse_params_max_cap(void)
@@ -358,7 +358,7 @@ static void test_parse_params_max_cap(void)
     ASSERT_EQ(params[1], 2, "second param preserved");
 }
 
-/* ── ansi_sgr_color ───────────────────────────────────────────────────── */
+/* -- ansi_sgr_color ----------------------------------------------------- */
 
 static void test_sgr_color_standard(void)
 {
@@ -427,7 +427,7 @@ static void test_sgr_colors_unique(void)
     ASSERT_NE(all_unique, 0, "bright colors 90-97 are all distinct");
 }
 
-/* ── ansi_feed — full round-trip: chars preserved around CSI ─────────── */
+/* -- ansi_feed -- full round-trip: chars preserved around CSI ----------- */
 
 static void test_round_trip_chars(void)
 {
@@ -435,7 +435,7 @@ static void test_round_trip_chars(void)
     ansi_parser_init(&p);
     ansi_event_t ev;
 
-    /* "Hello" → 5 chars, no CSI */
+    /* "Hello" -> 5 chars, no CSI */
     char buf[8];
     int  n = 0;
     const char *hello = "Hello";
@@ -453,7 +453,7 @@ static void test_round_trip_mixed(void)
     ansi_parser_init(&p);
     ansi_event_t ev;
 
-    /* "\033[31mHi\033[0m" → chars 'H','i' and 2 CSI events */
+    /* "\033[31mHi\033[0m" -> chars 'H','i' and 2 CSI events */
     const char *mixed = "\033[31mHi\033[0m";
     int chars = 0, csi = 0;
     char cbuf[4];
@@ -468,7 +468,7 @@ static void test_round_trip_mixed(void)
     ASSERT_STR_EQ(cbuf, "Hi", "chars are 'H' and 'i'");
 }
 
-/* ── ANSI_BUF_SIZE overflow: long param string truncated, still terminates */
+/* -- ANSI_BUF_SIZE overflow: long param string truncated, still terminates */
 
 static void test_long_param_no_hang(void)
 {
@@ -484,11 +484,11 @@ static void test_long_param_no_hang(void)
     int r = ansi_feed(&p, 'm', &ev);
 
     ASSERT_EQ(r, ANSI_CSI, "long param string still completes on final byte");
-    ASSERT_EQ((int)ev.cmd, (int)'m', "long param → cmd=='m'");
+    ASSERT_EQ((int)ev.cmd, (int)'m', "long param -> cmd=='m'");
     ASSERT_EQ((int)p.state, (int)ANSI_STATE_NORMAL, "state reset after long param");
 }
 
-/* ── Constants ───────────────────────────────────────────────────────────── */
+/* -- Constants ------------------------------------------------------------- */
 
 static void test_constants(void)
 {
@@ -500,7 +500,7 @@ static void test_constants(void)
     ASSERT_NE(ANSI_BUF_SIZE,   0, "ANSI_BUF_SIZE > 0");
 }
 
-/* ── main ───────────────────────────────────────────────────────────────── */
+/* -- main ----------------------------------------------------------------- */
 
 int main(void)
 {

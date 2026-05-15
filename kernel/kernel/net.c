@@ -1,5 +1,5 @@
 /*
- * Quilon OS — Minimal TCP/IP Stack (Section 10.3)
+ * Quilon OS -- Minimal TCP/IP Stack (Section 10.3)
  *
  * Implements Ethernet/ARP/IPv4/ICMP/UDP/TCP over the RTL8139 NIC.
  *
@@ -20,7 +20,7 @@
 #include <kernel/rtl8139.h>
 #include <kernel/waitq.h>
 
-/* ── Constants ────────────────────────────────────────────────────────── */
+/* -- Constants ---------------------------------------------------------- */
 
 #define DHCP_XID        0x51C0DE00u   /* fixed transaction ID */
 #define ARP_POLL_LIMIT  2000000       /* iterations to wait for an ARP reply */
@@ -30,7 +30,7 @@
 static const uint8_t g_broadcast_mac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static const uint8_t g_zero_mac[6]      = {0,0,0,0,0,0};
 
-/* ── Module state ─────────────────────────────────────────────────────── */
+/* -- Module state ------------------------------------------------------- */
 
 static uint8_t  g_mac[6];
 static uint32_t g_ip      = 0;   /* our IPv4 address (host byte order) */
@@ -84,7 +84,7 @@ static struct {
 static uint8_t g_rx_buf[1520];
 static uint8_t g_tx_buf[1520];
 
-/* ── Private helpers ──────────────────────────────────────────────────── */
+/* -- Private helpers ---------------------------------------------------- */
 
 static void arp_cache_update(uint32_t ip, const uint8_t mac[6])
 {
@@ -199,7 +199,7 @@ static void parse_dhcp_options(const uint8_t *opts, int opts_len,
     while (p < end) {
         uint8_t code = *p++;
         if (code == 255u) break;        /* end option */
-        if (code == 0u)   continue;     /* pad option — no length byte */
+        if (code == 0u)   continue;     /* pad option -- no length byte */
         if (p >= end)     break;
         uint8_t olen = *p++;
         if (p + olen > end) break;
@@ -307,7 +307,7 @@ static void handle_udp(uint32_t src_ip,
     int              data_len = (int)net_ntohs(h->length) - (int)UDP_HDR_SIZE;
     if (data_len <= 0) return;
 
-    /* DHCP reply (port 68) — handle regardless of whether slot is full. */
+    /* DHCP reply (port 68) -- handle regardless of whether slot is full. */
     if (dst_port == PORT_DHCP_CLIENT) {
         handle_dhcp_reply(udp_data + UDP_HDR_SIZE, data_len);
         return;
@@ -518,7 +518,7 @@ static void send_dhcp_request(uint32_t offered_ip, uint32_t server_ip)
     rtl8139_send(g_tx_buf, (uint16_t)total);
 }
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 int net_init(void)
 {
@@ -589,7 +589,7 @@ int net_arp_lookup(uint32_t ip, uint8_t mac_out[6])
             return 0;
         }
     }
-    /* Not cached — send ARP request and poll for reply. */
+    /* Not cached -- send ARP request and poll for reply. */
     net_arp_request(ip);
     for (int iter = 0; iter < ARP_POLL_LIMIT; iter++) {
         net_poll();
@@ -626,7 +626,7 @@ void net_arp_cache_print(void)
         }
         uint32_t ip = g_arp[i].ip;
         const uint8_t *m = g_arp[i].mac;
-        printf("  [%d] %d.%d.%d.%d  →  %02x:%02x:%02x:%02x:%02x:%02x\r\n",
+        printf("  [%d] %d.%d.%d.%d  ->  %02x:%02x:%02x:%02x:%02x:%02x\r\n",
                i,
                (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
                (int)((ip >>  8) & 0xFF), (int)(ip & 0xFF),
@@ -642,7 +642,7 @@ int net_ping(uint32_t dst_ip)
     uint8_t dst_mac[6];
     /* Route through gateway if dst is not on the local subnet. */
     uint32_t next_hop = dst_ip;
-    /* Simple /24 check: same class-C subnet as us → direct, else via gateway. */
+    /* Simple /24 check: same class-C subnet as us -> direct, else via gateway. */
     if ((dst_ip & 0xFFFFFF00u) != (g_ip & 0xFFFFFF00u) && g_gateway != 0)
         next_hop = g_gateway;
 
@@ -810,7 +810,7 @@ int net_dhcp(void)
     g_dhcp.acked_ip   = 0;
     g_dhcp.phase      = 0;
 
-    /* Phase 0: Discover → Offer */
+    /* Phase 0: Discover -> Offer */
     send_dhcp_discover();
     int i;
     for (i = 0; i < DHCP_POLL_LIMIT; i++) {
@@ -819,7 +819,7 @@ int net_dhcp(void)
     }
     if (g_dhcp.offered_ip == 0) return -1;
 
-    /* Phase 1: Request → ACK */
+    /* Phase 1: Request -> ACK */
     g_dhcp.phase = 1;
     send_dhcp_request(g_dhcp.offered_ip, g_dhcp.server_ip);
     for (i = 0; i < DHCP_POLL_LIMIT; i++) {

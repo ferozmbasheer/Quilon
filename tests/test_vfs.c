@@ -1,8 +1,8 @@
 /*
- * Quilon OS — VFS Unit Tests
+ * Quilon OS -- VFS Unit Tests
  *
  * Tests the VFS layer (kernel/kernel/vfs.c) using a mock filesystem driver
- * backed by static data.  No hardware, no ATA, no FAT16 — the mock driver
+ * backed by static data.  No hardware, no ATA, no FAT16 -- the mock driver
  * returns hand-crafted responses for a tiny two-file "filesystem".
  *
  * Build & run:  cd tests && make
@@ -16,12 +16,12 @@
 
 #include <kernel/vfs.h>
 
-/* ── Mock filesystem ────────────────────────────────────────────────────────
+/* -- Mock filesystem --------------------------------------------------------
  *
  * Virtual layout:
  *   README.TXT   "Hello, VFS!"  (11 bytes)
  *   NOTES.TXT    "Test note."   (10 bytes)
- * ─────────────────────────────────────────────────────────────────────────── */
+ * --------------------------------------------------------------------------- */
 
 static const char mock_readme[] = "Hello, VFS!";
 static const char mock_notes[]  = "Test note.";
@@ -33,7 +33,7 @@ static const mock_file_t mock_files[] = {
 };
 #define MOCK_FILE_COUNT 2
 
-/* ── Driver functions ─────────────────────────────────────────────────────── */
+/* -- Driver functions ------------------------------------------------------- */
 
 static int mock_open(void *ctx, const char *path, vfs_node_t *out)
 {
@@ -97,7 +97,7 @@ static const vfs_ops_t mock_ops = {
     /* write / create / remove intentionally absent (NULL) */
 };
 
-/* ── Write-capable mock ──────────────────────────────────────────────────── */
+/* -- Write-capable mock ---------------------------------------------------- */
 
 static uint8_t  mock_wbuf[256];
 static uint32_t mock_wbuf_len;
@@ -140,7 +140,7 @@ static const vfs_ops_t mock_rw_ops = {
     .remove  = mock_remove_fn,
 };
 
-/* ── Section-12.1 mock: stat / mkdir / rename ────────────────────────────── */
+/* -- Section-12.1 mock: stat / mkdir / rename ------------------------------ */
 
 static int mock_stat_fn(void *ctx, const char *path, vfs_stat_t *out)
 {
@@ -192,14 +192,14 @@ static const vfs_ops_t mock_full_ops = {
     .rename  = mock_rename_fn,
 };
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 1. vfs_mount / vfs_mounted
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_not_mounted_initially(void)
 {
-    /* vfs.c starts with mounted_ops = NULL — first access should report not
-       mounted.  (But a previous test may have called vfs_mount — we reset
+    /* vfs.c starts with mounted_ops = NULL -- first access should report not
+       mounted.  (But a previous test may have called vfs_mount -- we reset
        between suites by mounting and relying on the test order.)          */
     ASSERT_EQ(vfs_mounted(), 0, "vfs_mounted() returns 0 before any mount");
 }
@@ -210,9 +210,9 @@ static void test_mounted_after_mount(void)
     ASSERT_EQ(vfs_mounted(), 1, "vfs_mounted() returns 1 after vfs_mount()");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. vfs_open
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_open_existing_file(void)
 {
@@ -259,9 +259,9 @@ static void test_open_two_distinct_fds(void)
     vfs_close(fd2);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3. vfs_read
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_read_full_file(void)
 {
@@ -324,9 +324,9 @@ static void test_read_closed_fd(void)
     ASSERT_EQ(n, -1, "read after close returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. vfs_close
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_close_valid_fd(void)
 {
@@ -354,9 +354,9 @@ static void test_reopen_after_close(void)
     vfs_close(fd2);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. vfs_readdir
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_readdir_first_entry(void)
 {
@@ -396,9 +396,9 @@ static void test_readdir_not_mounted(void)
     vfs_mount(&mock_ops, (void *)0);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6. vfs_write
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_write_basic(void)
 {
@@ -456,9 +456,9 @@ static void test_write_not_mounted(void)
     vfs_mount(&mock_rw_ops, (void *)0);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 7. vfs_create / vfs_remove
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_create_succeeds(void)
 {
@@ -511,9 +511,9 @@ static void test_remove_not_mounted(void)
     vfs_mount(&mock_rw_ops, (void *)0);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 8. fd table limits
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_fd_table_full(void)
 {
@@ -537,9 +537,9 @@ static void test_fd_table_full(void)
         if (fds[i] >= 0) vfs_close(fds[i]);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 9. vfs_lseek  (section 12.1)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_lseek_set(void)
 {
@@ -632,9 +632,9 @@ static void test_lseek_negative_set(void)
     vfs_close(fd);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 10. vfs_stat  (section 12.1)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_stat_known_file(void)
 {
@@ -690,9 +690,9 @@ static void test_stat_no_driver_support(void)
     vfs_mount(&mock_full_ops, (void *)0);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 11. vfs_mkdir  (section 12.1)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_mkdir_succeeds(void)
 {
@@ -717,9 +717,9 @@ static void test_mkdir_no_driver_support(void)
     vfs_mount(&mock_full_ops, (void *)0);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 12. vfs_rename  (section 12.1)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_rename_succeeds(void)
 {
@@ -751,13 +751,13 @@ static void test_rename_no_driver_support(void)
     vfs_mount(&mock_full_ops, (void *)0);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 13. vfs_chdir / vfs_getcwd  (section 12.1)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_getcwd_initial(void)
 {
-    /* Reset to root by calling chdir — tests may run in any order. */
+    /* Reset to root by calling chdir -- tests may run in any order. */
     vfs_mount(&mock_full_ops, (void *)0);
     vfs_chdir("/");
 
@@ -824,9 +824,9 @@ static void test_getcwd_zero_len(void)
     ASSERT_EQ(r, -1, "vfs_getcwd with len=0 returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {

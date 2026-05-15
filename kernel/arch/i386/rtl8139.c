@@ -1,10 +1,10 @@
 /*
- * Quilon OS — RTL8139 Network Card Driver (Section 10.2)
+ * Quilon OS -- RTL8139 Network Card Driver (Section 10.2)
  *
  * Initialisation sequence
- * ───────────────────────
- * 1. pci_find_device(0x10EC, 0x8139) — locate the card in the PCI table.
- * 2. pci_read BAR0 → io_base (I/O BAR, bit 0 is the I/O indicator).
+ * -----------------------
+ * 1. pci_find_device(0x10EC, 0x8139) -- locate the card in the PCI table.
+ * 2. pci_read BAR0 -> io_base (I/O BAR, bit 0 is the I/O indicator).
  * 3. Enable PCI I/O-space access (bit 0) and bus-master DMA (bit 2).
  * 4. Power on: CONFIG1 ← 0.
  * 5. Software reset: CR ← RST; poll until the bit self-clears (≤ 10 ms).
@@ -17,7 +17,7 @@
  * 12. Initialise CAPR to (0 - 16) so the first packet lands at ring offset 0.
  *
  * TX flow
- * ───────
+ * -------
  * Frame is copied into tx_buf[slot] (static, always mapped into the kernel).
  * TSAD[slot] ← physical address of that buffer.
  * TSD[slot]  ← frame length (writing starts the DMA).
@@ -25,7 +25,7 @@
  * Advance tx_slot round-robin through 0–3.
  *
  * RX flow (polling)
- * ─────────────────
+ * -----------------
  * Check CR.BUFE: if set, no data in ring.
  * Read 4-byte header from rx_buf[rx_pos & mask]: {u16 status, u16 pkt_len}.
  *   pkt_len = data length + 4-byte CRC (does NOT include the 4-byte header).
@@ -34,7 +34,7 @@
  * Write CAPR = rx_pos - 16 (RTL8139 hardware quirk).
  *
  * Physical addresses
- * ──────────────────
+ * ------------------
  * The kernel is linked at 0xC0100000 (virtual), loaded at 0x100000 (physical).
  * DMA buffers in kernel .bss must be given to the card as physical addresses:
  *   phys = (uint32_t)(uintptr_t)ptr - KERNEL_OFFSET   (KERNEL_OFFSET = 0xC0000000)
@@ -48,7 +48,7 @@
 
 #ifdef __is_kernel
 
-/* ── I/O port helpers ────────────────────────────────────────────────────── */
+/* -- I/O port helpers ------------------------------------------------------ */
 
 static inline void rtl_outb(uint16_t port, uint8_t val)
 {
@@ -86,7 +86,7 @@ static inline uint32_t rtl_inl(uint16_t port)
     return v;
 }
 
-/* ── DMA buffers (kernel .bss — physical addr = virt - KERNEL_OFFSET) ───── */
+/* -- DMA buffers (kernel .bss -- physical addr = virt - KERNEL_OFFSET) ----- */
 
 static uint8_t rx_buf[RTL8139_RX_BUF_SIZE + RTL8139_RX_BUF_PAD]
     __attribute__((aligned(8)));
@@ -94,7 +94,7 @@ static uint8_t rx_buf[RTL8139_RX_BUF_SIZE + RTL8139_RX_BUF_PAD]
 static uint8_t tx_buf[RTL8139_TX_SLOTS][RTL8139_TX_BUF_SIZE]
     __attribute__((aligned(4)));
 
-/* ── Driver state ────────────────────────────────────────────────────────── */
+/* -- Driver state ---------------------------------------------------------- */
 
 static uint16_t io_base  = 0;
 static int      tx_slot  = 0;
@@ -102,14 +102,14 @@ static uint16_t rx_pos   = 0;
 static int      nic_ready = 0;
 static uint8_t  mac_addr[RTL8139_MAC_LEN];
 
-/* ── Virtual → physical address conversion ───────────────────────────────── */
+/* -- Virtual -> physical address conversion --------------------------------- */
 
 static inline uint32_t to_phys(const void *virt)
 {
     return (uint32_t)(uintptr_t)virt - KERNEL_OFFSET;
 }
 
-/* ── Public API ──────────────────────────────────────────────────────────── */
+/* -- Public API ------------------------------------------------------------ */
 
 int rtl8139_init(void)
 {

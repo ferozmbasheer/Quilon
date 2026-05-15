@@ -10,7 +10,7 @@
 #define ATA_SLAVE   1   /* primary bus, slave  drive */
 
 /*
- * ata_initialize — probe the primary ATA bus for attached drives.
+ * ata_initialize -- probe the primary ATA bus for attached drives.
  *
  * Sends an IDENTIFY command to each drive position (master, slave) and records
  * which drives responded.  Must be called after interrupts are initialized.
@@ -20,11 +20,11 @@
 int ata_initialize(void);
 
 /*
- * ata_read_sectors — read `count` 512-byte sectors from `drive` at 28-bit
+ * ata_read_sectors -- read `count` 512-byte sectors from `drive` at 28-bit
  *                    LBA address `lba`.  `buf` must be at least
  *                    count * ATA_SECTOR_SIZE bytes.
  *
- * Uses PIO (Programmed I/O) polling — no DMA, no interrupts.
+ * Uses PIO (Programmed I/O) polling -- no DMA, no interrupts.
  * Fine for early boot and hobby kernels; not for performance-critical paths.
  *
  * Returns 0 on success, -1 on error or if the drive is not present.
@@ -32,7 +32,7 @@ int ata_initialize(void);
 int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf);
 
 /*
- * ata_write_sectors — write `count` 512-byte sectors to `drive` at LBA `lba`.
+ * ata_write_sectors -- write `count` 512-byte sectors to `drive` at LBA `lba`.
  *
  * Uses PIO WRITE SECTORS (0x30) command.  `buf` must hold count × 512 bytes.
  * Returns 0 on success, -1 on error or if the drive is not present.

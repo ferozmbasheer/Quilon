@@ -20,7 +20,7 @@ static uint32_t second_page_table[1024] __attribute__((aligned(4096)));
  * APIC MMIO).  paging_map_page_alloc uses these instead of PMM because the PT
  * must be accessible via its physical address (identity map).  By VBE init time
  * the sub-4 MiB PMM pool may be exhausted; a BSS PT is always within 4 MiB.
- * BSS is zero-initialised so every PTE starts as "not present" — no memset needed.
+ * BSS is zero-initialised so every PTE starts as "not present" -- no memset needed.
  */
 #define KERNEL_PT_POOL_SIZE 8
 static uint32_t kernel_pt_pool[KERNEL_PT_POOL_SIZE][1024] __attribute__((aligned(4096)));
@@ -51,14 +51,14 @@ void paging_initialize(void)
     /* PD[0]: identity map 0x00000000-0x003FFFFF. */
     page_directory[0] = paging_make_entry(pt_phys, PAGE_PRESENT | PAGE_WRITABLE);
 
-    /* PD[768]: kernel-high map 0xC0000000-0xC03FFFFF → same physical pages. */
+    /* PD[768]: kernel-high map 0xC0000000-0xC03FFFFF -> same physical pages. */
     page_directory[KERNEL_PD_IDX] = paging_make_entry(
         pt_phys, PAGE_PRESENT | PAGE_WRITABLE);
 
     /* PD[769]: pre-wired page table for 0xC0400000-0xC07FFFFF.
      * The VBE shadow buffer is mapped here (VBE_SHADOW_VBASE=0xC0500000).
      * Using a static BSS table means paging_map_page_alloc() never needs
-     * PMM for this PD slot — by VBE init time free pages may be above the
+     * PMM for this PD slot -- by VBE init time free pages may be above the
      * 4 MiB identity-mapped window and would crash if used as a PT.      */
     uint32_t pt2_phys = (uint32_t)(uintptr_t)second_page_table - KERNEL_OFFSET;
     page_directory[KERNEL_PD_IDX + 1] = paging_make_entry(
@@ -134,10 +134,10 @@ int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags)
     return 0;
 }
 
-/* ── Per-process address space helpers (section 5.1) ───────────────────── */
+/* -- Per-process address space helpers (section 5.1) --------------------- */
 
 /*
- * paging_get_kernel_pd — return a pointer to the kernel page directory.
+ * paging_get_kernel_pd -- return a pointer to the kernel page directory.
  *
  * Used when restoring the kernel's address space after running a process
  * in its own page directory (e.g. after exec_longjmp in shell_cmd_exec).
@@ -153,7 +153,7 @@ uint32_t paging_kernel_cr3(void)
 }
 
 /*
- * paging_create_address_space — allocate a new page directory for a process.
+ * paging_create_address_space -- allocate a new page directory for a process.
  *
  * Allocates a fresh 4-KiB-aligned page directory via pmm_alloc_page() and
  * copies the kernel's PD entry 0 (the first 4-MiB identity-mapped page table)
@@ -186,7 +186,7 @@ uint32_t *paging_create_address_space(void)
 }
 
 /*
- * paging_switch — switch the active page directory to pd_phys.
+ * paging_switch -- switch the active page directory to pd_phys.
  *
  * Writing CR3 atomically replaces the MMU's view of virtual memory and
  * flushes all TLB entries (except global pages, which we don't use).
@@ -198,7 +198,7 @@ void paging_switch(uint32_t pd_phys)
 }
 
 /*
- * paging_map_page_alloc_into — map a page into an arbitrary page directory.
+ * paging_map_page_alloc_into -- map a page into an arbitrary page directory.
  *
  * Like paging_map_page_alloc() but operates on pd[] instead of the global
  * page_directory[].  Used by elf_load_into() to populate the page directory
@@ -213,8 +213,8 @@ void paging_switch(uint32_t pd_phys)
  */
 int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd)
 {
-    /* Entry 0 is the shared kernel page table — already in child_pd[0].
-     * Entry KERNEL_PD_IDX (768) is the shared kernel-high page table — skip.
+    /* Entry 0 is the shared kernel page table -- already in child_pd[0].
+     * Entry KERNEL_PD_IDX (768) is the shared kernel-high page table -- skip.
      * Walk entries 1-1023 for user pages.                                 */
     for (int i = 1; i < 1024; i++) {
         if (i == (int)KERNEL_PD_IDX) continue;
@@ -324,7 +324,7 @@ int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags)
     uint32_t pt_idx = VIRT_PT_INDEX(virt);
 
     if (!(page_directory[pd_idx] & PAGE_PRESENT)) {
-        /* No page table exists for this 4-MiB slot — take one from the
+        /* No page table exists for this 4-MiB slot -- take one from the
          * static BSS pool.  The pool lives within the first 4 MiB
          * (physical = VA - KERNEL_OFFSET) so its physical address is
          * always within the identity-mapped region and can be stored

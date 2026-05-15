@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse
 
 .PHONY: all build run clean help
 
@@ -335,6 +335,22 @@ $(BINDIR)/test_waitq: test_waitq.c framework.h \
 	    $(PROCESS_SRC) \
 	    $(VMA_SRC) \
 	    $(LIBC_STRING)
+
+# Kernel thread / clone tests (section 12.3)
+# process.c and vma.c provide the process_t layout and process_init/process_create.
+# syscall.h / process.h define SYS_CLONE, CLONE_*, and the thread_group field.
+# No x86 asm is exercised — clone handler is guarded by #ifdef __is_kernel.
+$(BINDIR)/test_clone: test_clone.c framework.h $(PROCESS_SRC) $(VMA_SRC) $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_clone.c $(PROCESS_SRC) $(VMA_SRC) $(LIBC_STRING)
+
+# PS/2 Mouse tests (section 13)
+# mouse.h is header-only (pure static-inline helpers) — no .c file is
+# linked.  mouse.c contains only #ifdef __is_kernel code (hardware I/O and
+# VBE calls) so it is NOT linked on the host.  The helpers mouse_packet_dx,
+# mouse_packet_dy, and mouse_clamp are exercised without any hardware access.
+$(BINDIR)/test_mouse: test_mouse.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_mouse.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

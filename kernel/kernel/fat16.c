@@ -1,8 +1,8 @@
 /*
- * Quilon OS — FAT16 Filesystem Driver
+ * Quilon OS -- FAT16 Filesystem Driver
  *
  * FAT16 on-disk layout
- * ────────────────────
+ * --------------------
  *
  *   Sector 0:           Boot sector / BIOS Parameter Block (BPB)
  *   Sectors 1 … R-1:   Reserved (R = bpb.reserved_sectors)
@@ -11,24 +11,24 @@
  *   Remaining:          Data clusters   (cluster 2 is the first usable cluster)
  *
  * Cluster addressing
- * ──────────────────
+ * ------------------
  *   A "cluster" is the allocation unit: sectors_per_cluster contiguous sectors.
  *   Cluster numbers in FAT entries and directory entries start at 2.
  *   LBA of cluster N = data_lba + (N - 2) × sectors_per_cluster
  *
  * FAT entry values
- * ────────────────
+ * ----------------
  *   0x0000          free cluster
  *   0x0002–0xFFEF   next cluster in chain
  *   0xFFF8–0xFFFF   end-of-chain marker
  *
  * Testability
- * ───────────
+ * -----------
  *   All disk I/O is done through the fat16_ctx_t.sector_read callback, so
  *   unit tests can supply a RAM-backed reader without touching hardware.
  *
  * Limitations (intentional for a hobby OS)
- * ─────────────────────────────────────────
+ * -----------------------------------------
  *   • Only the root directory is searched (no subdirectory support).
  *   • No write support.
  *   • Long File Name (LFN) entries are silently skipped.
@@ -40,7 +40,7 @@
 #include <kernel/fat16.h>
 #include <kernel/vfs.h>
 
-/* ── On-disk structures (packed to match the FAT specification exactly) ─── */
+/* -- On-disk structures (packed to match the FAT specification exactly) --- */
 
 typedef struct __attribute__((packed)) {
     uint8_t  jmp[3];              /* 0x00 Jump instruction (EB xx 90)     */
@@ -60,7 +60,7 @@ typedef struct __attribute__((packed)) {
 } fat16_bpb_t;
 
 /*
- * FAT16 directory entry — 32 bytes per entry.
+ * FAT16 directory entry -- 32 bytes per entry.
  *
  * name[8] and ext[3] are space-padded uppercase ASCII (8.3 format).
  * first_cluster_hi is always 0 in FAT16 (non-zero only in FAT32).
@@ -89,12 +89,12 @@ typedef struct __attribute__((packed)) {
 /* FAT entry end-of-chain range */
 #define FAT16_EOC  0xFFF8u
 
-/* ── Forward declarations ────────────────────────────────────────────────── */
+/* -- Forward declarations -------------------------------------------------- */
 static uint16_t fat16_next_cluster(fat16_ctx_t *fs, uint16_t cluster);
 
-/* ── Shared sector buffers ───────────────────────────────────────────────── */
+/* -- Shared sector buffers ------------------------------------------------- */
 /*
- * sector_buf:  metadata I/O — FAT table reads/writes and root-directory
+ * sector_buf:  metadata I/O -- FAT table reads/writes and root-directory
  *              sector reads/writes.
  * data_buf:    data-cluster read-modify-write in fat16_write().
  *
@@ -105,10 +105,10 @@ static uint16_t fat16_next_cluster(fat16_ctx_t *fs, uint16_t cluster);
 static uint8_t sector_buf[512];
 static uint8_t data_buf[512];
 
-/* ── Internal helpers ────────────────────────────────────────────────────── */
+/* -- Internal helpers ------------------------------------------------------ */
 
 /*
- * fat16_write_fat_entry — set the FAT entry for `cluster` to `value`.
+ * fat16_write_fat_entry -- set the FAT entry for `cluster` to `value`.
  *
  * Performs a read-modify-write on the FAT sector containing the entry.
  * Uses sector_buf.  Returns 0 on success, -1 on I/O error.
@@ -130,7 +130,7 @@ static int fat16_write_fat_entry(fat16_ctx_t *fs,
 }
 
 /*
- * fat16_alloc_cluster — find a free FAT entry, mark it end-of-chain (0xFFFF),
+ * fat16_alloc_cluster -- find a free FAT entry, mark it end-of-chain (0xFFFF),
  *                       and return the cluster number.
  *
  * Returns a cluster number >= 2 on success, 0 on disk-full or I/O error.
@@ -167,7 +167,7 @@ static uint16_t fat16_alloc_cluster(fat16_ctx_t *fs)
 }
 
 /*
- * fat16_free_chain — walk the FAT chain from `first_cluster` and mark every
+ * fat16_free_chain -- walk the FAT chain from `first_cluster` and mark every
  *                    entry as free (0x0000).  Used by fat16_remove().
  *
  * Uses sector_buf.  Returns 0 on success, -1 on error.
@@ -185,7 +185,7 @@ static int fat16_free_chain(fat16_ctx_t *fs, uint16_t first_cluster)
 }
 
 /*
- * fat16_update_dirent — update the directory entry at `dir_sector`[`idx`]
+ * fat16_update_dirent -- update the directory entry at `dir_sector`[`idx`]
  *                       with the new file size and (optionally) first_cluster.
  *
  * Pass first_cluster = 0 to leave the existing cluster field unchanged.
@@ -208,7 +208,7 @@ static int fat16_update_dirent(fat16_ctx_t *fs,
 }
 
 /*
- * fat16_next_cluster — look up the FAT entry for `cluster`.
+ * fat16_next_cluster -- look up the FAT entry for `cluster`.
  *
  * Returns the next cluster number (2..0xFFF7), FAT16_EOC (>= 0xFFF8) for
  * end-of-chain, or 0 on read error.
@@ -228,7 +228,7 @@ static uint16_t fat16_next_cluster(fat16_ctx_t *fs, uint16_t cluster)
 }
 
 /*
- * fat16_cluster_lba — first sector LBA for data cluster `cluster` (>= 2).
+ * fat16_cluster_lba -- first sector LBA for data cluster `cluster` (>= 2).
  */
 static uint32_t fat16_cluster_lba(fat16_ctx_t *fs, uint16_t cluster)
 {
@@ -236,7 +236,7 @@ static uint32_t fat16_cluster_lba(fat16_ctx_t *fs, uint16_t cluster)
 }
 
 /*
- * path_to_83 — convert a path string to a space-padded uppercase 8.3 name.
+ * path_to_83 -- convert a path string to a space-padded uppercase 8.3 name.
  *
  * Writes exactly 8 bytes to out_name and 3 bytes to out_ext (no NUL).
  * Returns 0 on success, -1 if the name is empty, too long, or has multiple dots.
@@ -274,7 +274,7 @@ static int path_to_83(const char *path, char out_name[8], char out_ext[3])
 }
 
 /*
- * is_valid_entry — return 1 if this directory entry represents a real file
+ * is_valid_entry -- return 1 if this directory entry represents a real file
  * or directory that should be visible to the caller.
  */
 static int is_valid_entry(const fat16_dirent_t *e)
@@ -287,7 +287,7 @@ static int is_valid_entry(const fat16_dirent_t *e)
     return 1;
 }
 
-/* ── VFS driver functions ────────────────────────────────────────────────── */
+/* -- VFS driver functions -------------------------------------------------- */
 
 static int fat16_open(void *ctx, const char *path, vfs_node_t *out)
 {
@@ -331,7 +331,7 @@ static int fat16_open(void *ctx, const char *path, vfs_node_t *out)
 }
 
 /*
- * fat16_read — read `size` bytes from `node` starting at byte `offset`.
+ * fat16_read -- read `size` bytes from `node` starting at byte `offset`.
  *
  * Navigation:
  *   1. Walk the cluster chain from node->inode to find the cluster that
@@ -348,7 +348,7 @@ static int fat16_read(void *ctx, vfs_node_t *node, uint32_t offset,
 
     if (size == 0) return 0;
 
-    /* Clamp to file size — do not read past end of file */
+    /* Clamp to file size -- do not read past end of file */
     if (offset >= node->size) return 0;
     if (size > node->size - offset) size = node->size - offset;
 
@@ -402,10 +402,10 @@ static int fat16_read(void *ctx, vfs_node_t *node, uint32_t offset,
 }
 
 /*
- * fat16_readdir — return the `index`-th valid directory entry at `path`.
+ * fat16_readdir -- return the `index`-th valid directory entry at `path`.
  *
- * path "/" (or empty) → lists the FAT16 root directory.
- * path "DIRNAME"      → finds that entry in root, then lists its cluster.
+ * path "/" (or empty) -> lists the FAT16 root directory.
+ * path "DIRNAME"      -> finds that entry in root, then lists its cluster.
  *                        If first_cluster == 0 the directory is empty.
  * Returns 0 on success, -1 on end-of-directory or I/O error.
  */
@@ -449,12 +449,12 @@ dir_not_found:
 dir_found:
         /* Directories created by fat16_mkdir have first_cluster == 0 (empty). */
         if (first_cluster == 0) return -1;
-        /* Non-zero cluster chains are not yet traversed — empty listing. */
+        /* Non-zero cluster chains are not yet traversed -- empty listing. */
         (void)first_cluster;
         return -1;
     }
 
-    /* ── Root directory listing (original behaviour) ────────────────────── */
+    /* -- Root directory listing (original behaviour) ---------------------- */
     uint32_t root_sectors =
         ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
     uint32_t count = 0;
@@ -495,7 +495,7 @@ dir_found:
 }
 
 /*
- * fat16_write — write `size` bytes from `buf` into `node` starting at byte
+ * fat16_write -- write `size` bytes from `buf` into `node` starting at byte
  *               `offset`.
  *
  * Behaviour:
@@ -525,7 +525,7 @@ static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
     uint32_t cluster_size =
         (uint32_t)fs->sectors_per_cluster * fs->bytes_per_sector;
 
-    /* ── If the file has no clusters yet, allocate the first one ─────────── */
+    /* -- If the file has no clusters yet, allocate the first one ----------- */
     if (node->inode == 0) {
         uint16_t first = fat16_alloc_cluster(fs);
         if (first == 0) return -1;   /* disk full */
@@ -540,7 +540,7 @@ static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
         }
     }
 
-    /* ── Walk the FAT chain to the cluster containing byte `offset` ──────── */
+    /* -- Walk the FAT chain to the cluster containing byte `offset` -------- */
     uint32_t start_cluster_idx = offset / cluster_size;
     uint16_t cluster     = (uint16_t)node->inode;
     uint16_t prev_cluster = 0;
@@ -548,7 +548,7 @@ static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
     for (uint32_t i = 0; i < start_cluster_idx; i++) {
         uint16_t next = fat16_next_cluster(fs, cluster);
         if (next < 2 || next >= (uint16_t)FAT16_EOC) {
-            /* File ended before reaching `offset` — allocate and chain. */
+            /* File ended before reaching `offset` -- allocate and chain. */
             uint16_t nc = fat16_alloc_cluster(fs);
             if (nc == 0) return 0;   /* disk full, wrote nothing */
             if (fat16_write_fat_entry(fs, cluster, nc) < 0) {
@@ -563,7 +563,7 @@ static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
         (void)prev_cluster;
     }
 
-    /* ── Write loop: sector by sector ───────────────────────────────────── */
+    /* -- Write loop: sector by sector ------------------------------------- */
     uint32_t bytes_written = 0;
     uint32_t pos = offset;
 
@@ -612,7 +612,7 @@ static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
         }
     }
 
-    /* ── Update file size in the directory entry if the file grew ─────────── */
+    /* -- Update file size in the directory entry if the file grew ----------- */
     uint32_t new_end = offset + bytes_written;
     if (new_end > node->size) {
         node->size = new_end;
@@ -624,7 +624,7 @@ static int fat16_write(void *ctx, vfs_node_t *node, uint32_t offset,
 }
 
 /*
- * fat16_create — create a new empty file at `path` in the root directory.
+ * fat16_create -- create a new empty file at `path` in the root directory.
  *
  * Steps:
  *   1. Convert path to 8.3 name.
@@ -647,7 +647,7 @@ static int fat16_create(void *ctx, const char *path)
     uint32_t root_sectors =
         ((uint32_t)fs->root_entry_count * 32u + 511u) / 512u;
 
-    /* ── Pass 1: check for duplicate name ───────────────────────────────── */
+    /* -- Pass 1: check for duplicate name --------------------------------- */
     for (uint32_t sec = 0; sec < root_sectors; sec++) {
         if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
             return -1;
@@ -669,11 +669,11 @@ static int fat16_create(void *ctx, const char *path)
     }
 
 find_free: ;
-    /* ── Allocate the first cluster ─────────────────────────────────────── */
+    /* -- Allocate the first cluster --------------------------------------- */
     uint16_t first_cluster = fat16_alloc_cluster(fs);
     if (first_cluster == 0) return -1;   /* disk full */
 
-    /* ── Pass 2: find a free directory entry and write it ───────────────── */
+    /* -- Pass 2: find a free directory entry and write it ----------------- */
     for (uint32_t sec = 0; sec < root_sectors; sec++) {
         if (fs->sector_read(fs->ctx, fs->root_dir_lba + sec, sector_buf) < 0)
             goto create_fail;
@@ -685,7 +685,7 @@ find_free: ;
             uint8_t first = (uint8_t)dir[i].name[0];
             if (first != 0x00 && first != 0xE5) continue;
 
-            /* Found a free slot — fill it in. */
+            /* Found a free slot -- fill it in. */
             memset(&dir[i], 0, sizeof(fat16_dirent_t));
             memcpy(dir[i].name, name83, 8);
             memcpy(dir[i].ext,  ext83,  3);
@@ -708,7 +708,7 @@ create_fail:
 }
 
 /*
- * fat16_remove — delete the file at `path`.
+ * fat16_remove -- delete the file at `path`.
  *
  * Steps:
  *   1. Find the directory entry.
@@ -747,7 +747,7 @@ static int fat16_remove(void *ctx, const char *path)
                 memcmp(dir[i].ext,  ext83,  3) != 0)
                 continue;
 
-            /* Found — free the cluster chain first, then delete the entry. */
+            /* Found -- free the cluster chain first, then delete the entry. */
             uint16_t first_cluster = dir[i].first_cluster;
             fat16_free_chain(fs, first_cluster);   /* uses sector_buf */
 
@@ -773,7 +773,7 @@ static int fat16_remove(void *ctx, const char *path)
 }
 
 /*
- * fat16_stat — return metadata for the file/directory at `path`.
+ * fat16_stat -- return metadata for the file/directory at `path`.
  *
  * Scans the root directory; "/" is handled as a special case (root dir).
  * Returns 0 and fills `out` on success, -1 if not found.
@@ -820,7 +820,7 @@ static int fat16_stat(void *ctx, const char *path, vfs_stat_t *out)
 }
 
 /*
- * fat16_mkdir — create a new empty directory entry in the root directory.
+ * fat16_mkdir -- create a new empty directory entry in the root directory.
  *
  * Sets attr = FAT_ATTR_DIRECTORY with first_cluster = 0 (empty dir).
  * Subdirectory content ("." and ".." entries) is omitted for simplicity;
@@ -890,7 +890,7 @@ mkdir_find_free:;
 }
 
 /*
- * fat16_rename — rename the file or directory at `oldpath` to `newpath`.
+ * fat16_rename -- rename the file or directory at `oldpath` to `newpath`.
  *
  * Finds the old directory entry and updates the name/ext fields in-place.
  * Returns -1 if the old name is not found, the new name already exists,
@@ -970,7 +970,7 @@ static void fat16_close(void *ctx, vfs_node_t *node)
     /* FAT16 has no per-file kernel state to release */
 }
 
-/* ── VFS operations table ────────────────────────────────────────────────── */
+/* -- VFS operations table -------------------------------------------------- */
 
 const vfs_ops_t fat16_vfs_ops = {
     .open    = fat16_open,
@@ -985,7 +985,7 @@ const vfs_ops_t fat16_vfs_ops = {
     .rename  = fat16_rename,
 };
 
-/* ── Public API ──────────────────────────────────────────────────────────── */
+/* -- Public API ------------------------------------------------------------ */
 
 int fat16_mount(fat16_ctx_t *fs)
 {
@@ -997,7 +997,7 @@ int fat16_mount(fat16_ctx_t *fs)
     if (sector_buf[510] != 0x55 || sector_buf[511] != 0xAA)
         return -1;
 
-    /* Parse the BPB — it starts at byte 0 of the boot sector */
+    /* Parse the BPB -- it starts at byte 0 of the boot sector */
     fat16_bpb_t *bpb = (fat16_bpb_t *)(void *)sector_buf;
 
     fs->bytes_per_sector    = bpb->bytes_per_sector;

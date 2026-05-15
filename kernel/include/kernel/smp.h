@@ -3,20 +3,20 @@
 
 #include <stdint.h>
 
-/* ── Configuration ──────────────────────────────────────────────────────── */
+/* -- Configuration -------------------------------------------------------- */
 #define SMP_MAX_CPUS        8     /* maximum CPUs we track                  */
 
 /* Physical address where the 16-bit AP trampoline is copied.
  * SIPI vector = TRAMPOLINE_PHYS >> 12 (must be < 0x100000 and page-aligned).*/
 #define TRAMPOLINE_PHYS     0x8000u
 
-/* Offsets within the trampoline page for BSP→AP communication.
+/* Offsets within the trampoline page for BSP->AP communication.
  * Must match the constants embedded in smp_trampoline.S.                   */
 #define TRAMPOLINE_CR3      0x8F00u  /* BSP writes kernel CR3 here          */
 #define TRAMPOLINE_ENTRYC   0x8F04u  /* BSP writes ap_entry_c() VA here     */
 #define TRAMPOLINE_STACK    0x8F08u  /* BSP writes per-AP stack top VA here  */
 
-/* ── Per-CPU descriptor ─────────────────────────────────────────────────── */
+/* -- Per-CPU descriptor --------------------------------------------------- */
 typedef struct {
     uint8_t  apic_id;  /* Local APIC hardware ID of this CPU               */
     uint8_t  is_bsp;   /* 1 = Bootstrap Processor (first CPU to run GRUB)  */
@@ -24,7 +24,7 @@ typedef struct {
     uint8_t  online;   /* 1 = AP called ap_entry_c() and checked in        */
 } cpu_info_t;
 
-/* ── Intel MP floating pointer structure ────────────────────────────────── */
+/* -- Intel MP floating pointer structure ---------------------------------- */
 typedef struct __attribute__((packed)) {
     uint8_t  signature[4]; /* "_MP_"                                        */
     uint32_t phys_addr;    /* physical address of MP configuration table    */
@@ -35,7 +35,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  feature2_5[4];
 } mp_float_t;
 
-/* ── Intel MP configuration table header ───────────────────────────────── */
+/* -- Intel MP configuration table header --------------------------------- */
 typedef struct __attribute__((packed)) {
     uint8_t  signature[4]; /* "PCMP"                                        */
     uint16_t length;       /* total table length in bytes                   */
@@ -52,7 +52,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  reserved;
 } mp_config_t;
 
-/* ── MP processor entry (entry type 0) ─────────────────────────────────── */
+/* -- MP processor entry (entry type 0) ----------------------------------- */
 typedef struct __attribute__((packed)) {
     uint8_t  type;         /* 0 = processor entry                           */
     uint8_t  apic_id;      /* Local APIC ID                                 */
@@ -66,12 +66,12 @@ typedef struct __attribute__((packed)) {
 #define MP_PROC_ENABLED  0x01u
 #define MP_PROC_BSP      0x02u
 
-/* ── Global SMP state ──────────────────────────────────────────────────── */
+/* -- Global SMP state ---------------------------------------------------- */
 extern cpu_info_t        smp_cpus[SMP_MAX_CPUS];
 extern volatile uint32_t smp_cpu_count;   /* CPUs discovered via MP table   */
 extern volatile uint32_t smp_cpus_online; /* APs that called ap_entry_c()   */
 
-/* ── Pure-C helpers (testable on host) ─────────────────────────────────── */
+/* -- Pure-C helpers (testable on host) ----------------------------------- */
 
 /* Compute the byte checksum of a memory region (must equal 0 for valid MP
  * structures).  Pure C, no hardware access.                               */
@@ -120,7 +120,7 @@ uint32_t mp_parse_config(const mp_config_t *cfg,
 
 #ifdef __is_kernel
 
-/* ── Kernel-only SMP API ───────────────────────────────────────────────── */
+/* -- Kernel-only SMP API ------------------------------------------------- */
 
 /* Scan known physical addresses for the MP floating pointer structure.
  * Populates smp_cpus[] and smp_cpu_count.  Call once during kernel init. */

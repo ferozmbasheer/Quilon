@@ -1,17 +1,17 @@
 /*
- * Quilon OS — FAT16 Driver Unit Tests
+ * Quilon OS -- FAT16 Driver Unit Tests
  *
  * Tests kernel/kernel/fat16.c using a hand-crafted 10-sector FAT16 image
  * stored in a static byte array.  No hardware, no ATA.
  *
  * Test image layout (10 × 512 = 5120 bytes)
- * ──────────────────────────────────────────
+ * ------------------------------------------
  *   Sector 0  Boot sector / BPB
  *   Sector 1  FAT (entries 0-3 used, 4-9 free)
  *   Sector 2  Root directory (entries: HELLO.TXT, WORLD.TXT, then 0x00 end)
- *   Sector 3  Cluster 2 data  →  "Hello, World!"  (13 bytes)
- *   Sector 4  Cluster 3 data  →  "Hello World!"   (12 bytes)
- *   Sectors 5-9  Clusters 4-8  (free — used by write tests)
+ *   Sector 3  Cluster 2 data  ->  "Hello, World!"  (13 bytes)
+ *   Sector 4  Cluster 3 data  ->  "Hello World!"   (12 bytes)
+ *   Sectors 5-9  Clusters 4-8  (free -- used by write tests)
  *
  * BPB values:
  *   bytes_per_sector    = 512
@@ -27,7 +27,7 @@
  *   data_lba     = 3   (2 + 16×32/512 = 2 + 1)
  *   cluster2_lba = 3   (data_lba + (2-2)×1)
  *   cluster3_lba = 4
- *   cluster4_lba = 5   (first free — allocated by create/write tests)
+ *   cluster4_lba = 5   (first free -- allocated by create/write tests)
  *
  * Build & run:  cd tests && make
  */
@@ -41,7 +41,7 @@
 #include <kernel/fat16.h>
 #include <kernel/vfs.h>
 
-/* ── In-memory disk image ────────────────────────────────────────────────── */
+/* -- In-memory disk image -------------------------------------------------- */
 
 #define DISK_SECTORS 10
 static uint8_t disk[DISK_SECTORS * 512];
@@ -50,7 +50,7 @@ static void build_image(void)
 {
     memset(disk, 0, sizeof(disk));
 
-    /* ── Sector 0: Boot sector / BPB ── */
+    /* -- Sector 0: Boot sector / BPB -- */
     uint8_t *b = disk;
     /* JMP short + NOP */
     b[0x00] = 0xEB; b[0x01] = 0x58; b[0x02] = 0x90;
@@ -81,7 +81,7 @@ static void build_image(void)
     /* Boot signature */
     b[0x1FE] = 0x55; b[0x1FF] = 0xAA;
 
-    /* ── Sector 1: FAT ── */
+    /* -- Sector 1: FAT -- */
     uint8_t *fat = disk + 512;
     /* entry[0]: 0xFFF8 media descriptor copy */
     fat[0] = 0xF8; fat[1] = 0xFF;
@@ -92,7 +92,7 @@ static void build_image(void)
     /* entry[3]: 0xFFFF end-of-chain (WORLD.TXT) */
     fat[6] = 0xFF; fat[7] = 0xFF;
 
-    /* ── Sector 2: Root directory ── */
+    /* -- Sector 2: Root directory -- */
     uint8_t *root = disk + 2 * 512;
 
     /* Entry 0: HELLO.TXT, cluster=2, size=13
@@ -120,14 +120,14 @@ static void build_image(void)
     /* Entry 2 (byte offset 64): 0x00 = end of directory */
     root[64] = 0x00;
 
-    /* ── Sector 3: cluster 2 data (HELLO.TXT content) ── */
+    /* -- Sector 3: cluster 2 data (HELLO.TXT content) -- */
     memcpy(disk + 3 * 512, "Hello, World!", 13);
 
-    /* ── Sector 4: cluster 3 data (WORLD.TXT content) ── */
+    /* -- Sector 4: cluster 3 data (WORLD.TXT content) -- */
     memcpy(disk + 4 * 512, "Hello World!", 12);
 }
 
-/* ── Mock sector reader ──────────────────────────────────────────────────── */
+/* -- Mock sector reader ---------------------------------------------------- */
 
 static int mock_sector_read(void *ctx, uint32_t lba, void *buf)
 {
@@ -145,7 +145,7 @@ static int mock_sector_write(void *ctx, uint32_t lba, const void *buf)
     return 0;
 }
 
-/* ── Shared test context ──────────────────────────────────────────────────── */
+/* -- Shared test context ---------------------------------------------------- */
 
 static fat16_ctx_t g_fs;
 
@@ -166,9 +166,9 @@ static void setup_write_fs(void)
     fat16_mount(&g_fs);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 1. fat16_mount — BPB parsing
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 1. fat16_mount -- BPB parsing
+ * =========================================================================== */
 
 static void test_mount_succeeds(void)
 {
@@ -226,9 +226,9 @@ static void test_mount_fails_read_error(void)
     ASSERT_EQ(r, -1, "fat16_mount fails when sector_read returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. fat16_vfs_ops.readdir
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_readdir_entry0(void)
 {
@@ -265,9 +265,9 @@ static void test_readdir_past_end(void)
     ASSERT_EQ(r, -1, "readdir[2] returns -1 (end of directory)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3. fat16_vfs_ops.open
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_open_existing(void)
 {
@@ -327,9 +327,9 @@ static void test_open_second_file(void)
     ASSERT_EQ(node.size, 12u,  "WORLD.TXT size  = 12");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. fat16_vfs_ops.read
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_read_full_file(void)
 {
@@ -356,7 +356,7 @@ static void test_read_partial_from_offset(void)
     fat16_vfs_ops.open(&g_fs, "HELLO.TXT", &node);
 
     uint8_t buf[8];
-    /* Read bytes 7..12 of "Hello, World!" → "World!" */
+    /* Read bytes 7..12 of "Hello, World!" -> "World!" */
     int n = fat16_vfs_ops.read(&g_fs, &node, 7, 6, buf);
     ASSERT_EQ(n, 6, "partial read returns 6 bytes");
     buf[n] = '\0';
@@ -403,13 +403,13 @@ static void test_read_past_eof_offset(void)
        handle offset >= file size gracefully. */
     uint8_t buf[8];
     int n = fat16_vfs_ops.read(&g_fs, &node, 100, 8, buf);
-    /* cluster 100 doesn't exist — expect 0 (no data) */
+    /* cluster 100 doesn't exist -- expect 0 (no data) */
     ASSERT(n <= 0, "read at large offset returns <= 0");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. fat16_create
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_create_new_file(void)
 {
@@ -455,9 +455,9 @@ static void test_create_existing_name_blocked(void)
     ASSERT_EQ(r, -1, "create fails when name matches existing file");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6. fat16_write
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_write_small_content(void)
 {
@@ -523,9 +523,9 @@ static void test_write_no_write_support(void)
     ASSERT_EQ(n, -1, "write returns -1 when sector_write is NULL");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 7. fat16_remove
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_remove_existing_file(void)
 {
@@ -581,9 +581,9 @@ static void test_remove_then_create_reuses_slot(void)
     ASSERT_EQ(r, 0, "create succeeds after remove (slot reused)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {

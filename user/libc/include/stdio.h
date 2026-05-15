@@ -1,8 +1,8 @@
 /*
- * Quilon user-space libc — stdio.h
+ * Quilon user-space libc -- stdio.h
  *
  * printf and puts are implemented on top of the write() syscall.
- * There is no FILE abstraction — all output goes to stdout (fd 1).
+ * There is no FILE abstraction -- all output goes to stdout (fd 1).
  */
 
 #ifndef _STDIO_H

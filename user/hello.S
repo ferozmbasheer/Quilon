@@ -5,7 +5,7 @@
  * Quilon kernel entirely through the int $0x80 system-call interface.
  *
  * How it runs
- * ───────────
+ * -----------
  * 1. The kernel's `exec` shell command calls elf_load("HELLO.ELF").
  *    elf_load() opens the file from FAT16, reads it into a heap buffer,
  *    walks the PT_LOAD program headers, allocates fresh physical pages
@@ -25,7 +25,7 @@
  *    runs the syscall dispatcher, and returns to ring 3 via iret.
  *
  * System call convention (Quilon)
- * ───────────────────────────────
+ * -------------------------------
  *   eax = syscall number
  *   ebx = first argument
  *   ecx = second argument
@@ -38,7 +38,7 @@
  *   SYS_EXIT   = 3   exit(code)
  *
  * Build
- * ─────
+ * -----
  *   See user/Makefile.  Cross-compiled with i686-elf-gcc and linked at
  *   virtual base 0x400000 (first 4 MiB is reserved for the kernel).
  */
@@ -47,35 +47,35 @@
 .global _start
 
 _start:
-    /* ── Print line 1 ─────────────────────────────────────────────────────── */
+    /* -- Print line 1 ------------------------------------------------------- */
     movl  $1,     %eax        /* SYS_WRITE */
     movl  $1,     %ebx        /* FD_STDOUT */
     movl  $line1, %ecx        /* buf */
     movl  $line1_len, %edx    /* len */
     int   $0x80
 
-    /* ── Print line 2 ─────────────────────────────────────────────────────── */
+    /* -- Print line 2 ------------------------------------------------------- */
     movl  $1,     %eax
     movl  $1,     %ebx
     movl  $line2, %ecx
     movl  $line2_len, %edx
     int   $0x80
 
-    /* ── Print line 3 ─────────────────────────────────────────────────────── */
+    /* -- Print line 3 ------------------------------------------------------- */
     movl  $1,     %eax
     movl  $1,     %ebx
     movl  $line3, %ecx
     movl  $line3_len, %edx
     int   $0x80
 
-    /* ── Print line 4 ─────────────────────────────────────────────────────── */
+    /* -- Print line 4 ------------------------------------------------------- */
     movl  $1,     %eax
     movl  $1,     %ebx
     movl  $line4, %ecx
     movl  $line4_len, %edx
     int   $0x80
 
-    /* ── Exit cleanly with code 0 ─────────────────────────────────────────── */
+    /* -- Exit cleanly with code 0 ------------------------------------------- */
     movl  $3,     %eax        /* SYS_EXIT */
     movl  $0,     %ebx        /* exit code */
     int   $0x80
@@ -86,7 +86,7 @@ _start:
     pause
     jmp   .Lhang
 
-/* ── String data ─────────────────────────────────────────────────────────── */
+/* -- String data ----------------------------------------------------------- */
 
 line1:
     .ascii "\r\n"

@@ -8,7 +8,7 @@
  *   4. Launched from the ring-3 shell:  quilon> exec HELLOC.ELF
  *
  * Features exercised
- * ──────────────────
+ * ------------------
  *   • printf / puts   - formatted output via SYS_WRITE
  *   • malloc / free   - heap allocator via SYS_SBRK
  *   • strlen / strcmp  - user libc string functions

@@ -63,7 +63,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
     uint8_t next = (kb_write_pos + 1) % KEYBOARD_BUFFER_SIZE;
     if (next == kb_read_pos)
-        return; /* buffer full — drop character */
+        return; /* buffer full -- drop character */
 
     kb_buffer[kb_write_pos] = c;
     kb_write_pos = next;

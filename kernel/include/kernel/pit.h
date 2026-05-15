@@ -13,10 +13,10 @@ uint32_t pit_get_hz(void);
 void     pit_sleep_ticks(uint32_t ticks);
 
 /*
- * pit_divisor — compute the reload value for a given target frequency.
+ * pit_divisor -- compute the reload value for a given target frequency.
  *
  * The PIT channel 0 counter counts down from the divisor to 0 at
- * PIT_BASE_HZ ticks per second, then fires IRQ0.  Lower divisor →
+ * PIT_BASE_HZ ticks per second, then fires IRQ0.  Lower divisor ->
  * higher IRQ rate.  Exposed as an inline so it can be unit-tested
  * without any hardware.
  */

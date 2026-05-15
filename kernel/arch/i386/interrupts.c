@@ -7,6 +7,7 @@
 #include <kernel/interrupts.h>
 #include <kernel/keyboard.h>
 #include <kernel/pit.h>
+#include <kernel/mouse.h>
 
 extern void outb(unsigned short port, unsigned char data);
 extern char inb(unsigned short port);
@@ -56,7 +57,7 @@ void idt_initialize(void) {
 	unsigned long idt_address;
 	unsigned long idt_ptr[2];
 
-  /* Remap the PIC: master IRQs 0-7 → vectors 32-39, slave IRQs 8-15 → 40-47 */
+  /* Remap the PIC: master IRQs 0-7 -> vectors 32-39, slave IRQs 8-15 -> 40-47 */
 	outb(0x20, 0x11);  /* ICW1: start initialisation */
   outb(0xA0, 0x11);
   outb(0x21, 0x20);  /* ICW2: master base vector = 32 */
@@ -94,7 +95,7 @@ void idt_load_ap(void)
 }
 
 void irq0_handler(void) {
-    outb(0x20, 0x20); /* EOI — must come before pit_tick so the PIC
+    outb(0x20, 0x20); /* EOI -- must come before pit_tick so the PIC
                          is ready for the next IRQ before we process */
     pit_tick();
 }
@@ -150,8 +151,9 @@ void irq11_handler(void) {
 }
  
 void irq12_handler(void) {
-          outb(0xA0, 0x20);
-          outb(0x20, 0x20); //EOI
+    mouse_irq_handler();       /* process one byte from the PS/2 mouse */
+    outb(0xA0, 0x20);          /* EOI: slave PIC */
+    outb(0x20, 0x20);          /* EOI: master PIC */
 }
  
 void irq13_handler(void) {

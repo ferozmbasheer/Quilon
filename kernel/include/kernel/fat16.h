@@ -5,7 +5,7 @@
 #include <kernel/vfs.h>
 
 /*
- * fat16_ctx_t — state for a mounted FAT16 filesystem.
+ * fat16_ctx_t -- state for a mounted FAT16 filesystem.
  *
  * Callers fill in `sector_read` and `ctx` before calling fat16_mount().
  * fat16_mount() parses the BPB from sector 0 and fills in the rest.
@@ -22,12 +22,12 @@
  *   Typically a drive index (ATA_MASTER / ATA_SLAVE) cast to void*.
  */
 typedef struct {
-    /* ── Caller-supplied I/O back-end ───────────────────────────────────── */
+    /* -- Caller-supplied I/O back-end ------------------------------------- */
     int   (*sector_read) (void *ctx, uint32_t lba, void *buf);
     int   (*sector_write)(void *ctx, uint32_t lba, const void *buf);  /* NEW */
     void  *ctx;
 
-    /* ── Populated by fat16_mount() from the BPB ────────────────────────── */
+    /* -- Populated by fat16_mount() from the BPB -------------------------- */
     uint16_t bytes_per_sector;
     uint8_t  sectors_per_cluster;
     uint16_t reserved_sectors;
@@ -42,7 +42,7 @@ typedef struct {
 } fat16_ctx_t;
 
 /*
- * fat16_mount — parse the BPB from sector 0 and populate `fs`.
+ * fat16_mount -- parse the BPB from sector 0 and populate `fs`.
  *
  * Must be called before passing `fs` as the ctx to vfs_mount().
  *
@@ -53,7 +53,7 @@ typedef struct {
 int fat16_mount(fat16_ctx_t *fs);
 
 /*
- * fat16_vfs_ops — VFS driver vtable for FAT16.
+ * fat16_vfs_ops -- VFS driver vtable for FAT16.
  *
  * Usage:
  *   fat16_ctx_t fs = { .sector_read = my_read, .ctx = my_ctx };

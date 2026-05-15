@@ -20,7 +20,7 @@ static inline void apic_write(uint32_t reg, uint32_t val)
     (void)lapic[APIC_REG_ID / 4];
 }
 
-/* ── LAPIC enable (shared between BSP and AP paths) ─────────────────────── */
+/* -- LAPIC enable (shared between BSP and AP paths) ----------------------- */
 static void lapic_enable(void)
 {
     /* Map LAPIC MMIO if not already mapped (first call from BSP does this). */
@@ -38,13 +38,13 @@ static void lapic_enable(void)
     apic_write(APIC_REG_SVR, svr);
 }
 
-/* ── Public API ─────────────────────────────────────────────────────────── */
+/* -- Public API ----------------------------------------------------------- */
 
 void apic_initialize(void)
 {
     /* Disable the legacy PIC so it cannot inject stray interrupts while the
      * APIC is taking over.  In this kernel the PIT/scheduler still uses the
-     * original PIC interrupt path (IRQ0 → IDT[32]); disabling the PIC here
+     * original PIC interrupt path (IRQ0 -> IDT[32]); disabling the PIC here
      * means the PIT will no longer fire after this call.  For the SMP demo
      * we keep the PIC enabled and only use the APIC for IPIs.             */
 

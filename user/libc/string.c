@@ -1,5 +1,5 @@
 /*
- * Quilon user-space libc — string.c
+ * Quilon user-space libc -- string.c
  *
  * Pure C string/memory helpers with no kernel dependencies.
  * These are compiled into libc.a and linked with all user programs.

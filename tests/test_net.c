@@ -1,8 +1,8 @@
 /*
- * Quilon OS — unit tests for the TCP/IP stack helpers (section 10.3)
+ * Quilon OS -- unit tests for the TCP/IP stack helpers (section 10.3)
  *
  * Tests all pure-C static-inline functions in kernel/include/kernel/net.h.
- * No kernel code or x86 I/O is used — everything compiles on the host.
+ * No kernel code or x86 I/O is used -- everything compiles on the host.
  *
  * Build: cc -Wall -Wextra -g -std=c11 -I../kernel/include -o bin/test_net test_net.c
  */
@@ -11,7 +11,7 @@
 #include <kernel/net.h>
 #include <string.h>
 
-/* ── Byte-order helpers ───────────────────────────────────────────────── */
+/* -- Byte-order helpers ------------------------------------------------- */
 
 static void test_htons(void)
 {
@@ -33,7 +33,7 @@ static void test_htonl(void)
               "ntohl(htonl) roundtrip");
 }
 
-/* ── IP address helpers ───────────────────────────────────────────────── */
+/* -- IP address helpers ------------------------------------------------- */
 
 static void test_ip_read_write(void)
 {
@@ -54,7 +54,7 @@ static void test_ip_read_write(void)
     ASSERT_EQ(net_ip_read(rt), ip, "ip roundtrip");
 }
 
-/* ── RFC 1071 checksum ────────────────────────────────────────────────── */
+/* -- RFC 1071 checksum -------------------------------------------------- */
 
 static void test_checksum16(void)
 {
@@ -86,7 +86,7 @@ static void test_checksum16(void)
     ASSERT_EQ(net_checksum16(hdr, 20), 0x0000u,
               "verification of stored checksum returns 0");
 
-    /* Odd length: 3-byte buffer {0x01, 0x02, 0x03} → odd byte zero-padded. */
+    /* Odd length: 3-byte buffer {0x01, 0x02, 0x03} -> odd byte zero-padded. */
     uint8_t odd[3] = {0x01, 0x02, 0x03};
     uint16_t odd_csum = net_checksum16(odd, 3);
     ASSERT_NE(odd_csum, 0u, "odd-length checksum non-zero");
@@ -96,7 +96,7 @@ static void test_checksum16(void)
     ASSERT_EQ(odd_csum, odd4_csum, "odd-length matches padded");
 }
 
-/* ── TCP/UDP pseudo-header checksum ──────────────────────────────────── */
+/* -- TCP/UDP pseudo-header checksum ------------------------------------ */
 
 static void test_transport_checksum(void)
 {
@@ -139,7 +139,7 @@ static void test_transport_checksum(void)
               0x0000u, "TCP pseudo-header verify returns 0");
 }
 
-/* ── Ethernet header ─────────────────────────────────────────────────── */
+/* -- Ethernet header --------------------------------------------------- */
 
 static void test_eth_fill(void)
 {
@@ -169,7 +169,7 @@ static void test_eth_fill(void)
     ASSERT_EQ(f2[13], 0x00u, "ipv4 ethertype lo");
 }
 
-/* ── ARP packet ──────────────────────────────────────────────────────── */
+/* -- ARP packet -------------------------------------------------------- */
 
 static void test_arp_fill(void)
 {
@@ -205,7 +205,7 @@ static void test_arp_fill(void)
     ASSERT_EQ(a->operation, net_htons(ARP_OP_REPLY), "arp op reply");
 }
 
-/* ── IPv4 header ─────────────────────────────────────────────────────── */
+/* -- IPv4 header ------------------------------------------------------- */
 
 static void test_ipv4_fill(void)
 {
@@ -236,7 +236,7 @@ static void test_ipv4_fill(void)
               "ipv4 checksum valid for ICMP");
 }
 
-/* ── ICMP echo request / reply ───────────────────────────────────────── */
+/* -- ICMP echo request / reply ----------------------------------------- */
 
 static void test_icmp_fill(void)
 {
@@ -275,7 +275,7 @@ static void test_icmp_fill(void)
               "icmp custom payload checksum valid");
 }
 
-/* ── UDP header ──────────────────────────────────────────────────────── */
+/* -- UDP header -------------------------------------------------------- */
 
 static void test_udp_fill(void)
 {
@@ -291,7 +291,7 @@ static void test_udp_fill(void)
     ASSERT_EQ(h->checksum, 0u,                                "udp checksum 0");
 }
 
-/* ── TCP header ──────────────────────────────────────────────────────── */
+/* -- TCP header -------------------------------------------------------- */
 
 static void test_tcp_fill(void)
 {
@@ -317,7 +317,7 @@ static void test_tcp_fill(void)
     ASSERT_EQ(net_ntohl(h->ack), 0xDEADBEEFu, "tcp ack field");
 }
 
-/* ── Constants sanity checks ─────────────────────────────────────────── */
+/* -- Constants sanity checks ------------------------------------------- */
 
 static void test_constants(void)
 {
@@ -348,7 +348,7 @@ static void test_constants(void)
               "dhcp_msg_t size == DHCP_MIN_SIZE");
 }
 
-/* ── Full frame assembly: Ethernet + IPv4 + ICMP ─────────────────────── */
+/* -- Full frame assembly: Ethernet + IPv4 + ICMP ----------------------- */
 
 static void test_frame_assembly(void)
 {
@@ -389,7 +389,7 @@ static void test_frame_assembly(void)
     ASSERT_EQ(ih->protocol, IPPROTO_ICMP, "frame proto ICMP");
 }
 
-/* ── Entry point ─────────────────────────────────────────────────────── */
+/* -- Entry point ------------------------------------------------------- */
 
 int main(void)
 {

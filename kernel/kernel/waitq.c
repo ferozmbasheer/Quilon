@@ -1,5 +1,5 @@
 /*
- * Quilon OS — Wait Queue Implementation (section 12.2)
+ * Quilon OS -- Wait Queue Implementation (section 12.2)
  *
  * Three operations: sleep (block), wake_one, wake_all.
  *
@@ -17,7 +17,7 @@
 
 void waitq_sleep(waitq_t *wq)
 {
-    if (!current_process) return;   /* no scheduler yet — caller's loop spins */
+    if (!current_process) return;   /* no scheduler yet -- caller's loop spins */
 
     waitq_entry_t entry = { .proc = current_process, .next = wq->head };
     wq->head = &entry;

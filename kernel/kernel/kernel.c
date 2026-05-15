@@ -30,6 +30,7 @@
 #include <kernel/apic.h>
 #include <kernel/smp.h>
 #include <kernel/waitq.h>
+#include <kernel/mouse.h>
 
 extern uint32_t multiboot_info_ptr;
 
@@ -63,7 +64,7 @@ void kernel_main(void) {
 	paging_initialize();
 	kmalloc_initialize();
 
-	/* ── Paging smoke-tests ─────────────────────────────────────────────
+	/* -- Paging smoke-tests ---------------------------------------------
 	 * If any of these printf calls appear, the MMU is on and the kernel
 	 * is still executing  - the identity mapping is working.             */
 
@@ -90,7 +91,7 @@ void kernel_main(void) {
 	pmm_free_page(page_a);
 	printf("after free: %d KB free\r\n", (int)(pmm_free_page_count() * (PAGE_SIZE / 1024)));
 
-	/* ── Heap allocator smoke-tests ─────────────────────────────────────────
+	/* -- Heap allocator smoke-tests -----------------------------------------
 	 * Verify kmalloc/kfree basics: allocation, independence, and free+reuse. */
 
 	/* 1. Two independent allocations must return different, non-NULL pointers. */
@@ -129,7 +130,7 @@ void kernel_main(void) {
 	 *    the frees and coalescing above.                                   */
 	kmalloc_dump();
 
-	/* ── Section 8.3: initrd - RAM-Based Initial Filesystem ────────────────
+	/* -- Section 8.3: initrd - RAM-Based Initial Filesystem ----------------
 	 *
 	 * An initrd is a small filesystem embedded in RAM, available at boot
 	 * before any disk drivers are initialised.  GRUB passes it as a
@@ -139,7 +140,7 @@ void kernel_main(void) {
 	 * the initrd.  If there is no disk the initrd remains the active FS.
 	 *
 	 * Interactive demo:  quilon> initrd
-	 * ─────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------- */
 	printf("\r\n=== Section 8.3: initrd RAM filesystem ===\r\n");
 	{
 		static initrd_ctx_t grub_initrd_ctx;
@@ -226,7 +227,7 @@ void kernel_main(void) {
 	}
 	printf("=== Section 8.3 ready ===\r\n\r\n");
 
-	/* ── Filesystem initialisation ─────────────────────────────────────────
+	/* -- Filesystem initialisation -----------------------------------------
 	 * Probe the primary ATA bus for a disk and attempt to mount it as FAT16.
 	 * If no drive is found, or the first sector is not a valid FAT16 volume,
 	 * the shell still works  - ls/cat will report "No filesystem mounted."  */
@@ -255,7 +256,7 @@ void kernel_main(void) {
 		printf("fs: no disk detected  - filesystem unavailable\r\n");
 	}
 
-	/* ── ELF loader  - scan for executable files (section 4.12) ───────────────
+	/* -- ELF loader  - scan for executable files (section 4.12) ---------------
 	 * Walk the root directory and report any .ELF files found.
 	 * The ELF loader itself is invoked interactively with the shell `exec`
 	 * command:  quilon> exec HELLO.ELF
@@ -291,7 +292,7 @@ void kernel_main(void) {
 			       "(see ROADMAP.md 4.12 and BUILD.md)\r\n");
 	}
 
-	/* ── Section 9.1: Higher-Half Kernel demo ─────────────────────────────────
+	/* -- Section 9.1: Higher-Half Kernel demo ---------------------------------
 	 *
 	 * The kernel is now linked at virtual 0xC0100000 (higher half) but loaded
 	 * by GRUB at physical 0x100000.  KERNEL_OFFSET = 0xC0000000 is the
@@ -300,7 +301,7 @@ void kernel_main(void) {
 	 * Both PD[0] (identity map) and PD[768] (kernel-high) point to the same
 	 * physical page table, so physical 0x001xxxxx is accessible both as
 	 * virtual 0x001xxxxx (identity) and as 0xC01xxxxx (kernel symbol address).
-	 * ──────────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------------ */
 	printf("\r\n=== Section 9.1: Higher-Half Kernel ===\r\n");
 	{
 		extern uint32_t kernel_start, kernel_end;
@@ -334,7 +335,7 @@ void kernel_main(void) {
 	}
 	printf("=== Section 9.1 ready ===\r\n\r\n");
 
-	/* ── Section 9.3: Copy-on-Write fork demo ─────────────────────────────────
+	/* -- Section 9.3: Copy-on-Write fork demo ---------------------------------
 	 *
 	 * Shows that paging_fork_address_space() now uses CoW rather than eager
 	 * page copies:
@@ -347,10 +348,10 @@ void kernel_main(void) {
 	 * Interactive: quilon> fork   (ring-0 shell: reports -1, needs scheduler)
 	 *              quilon> cow    (shows refcount lifecycle; SHELL.ELF shows live
 	 *                             parent/child write isolation)
-	 * ──────────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------------ */
 	printf("=== Section 9.3: Copy-on-Write fork ===\r\n");
 	{
-		/* ── 1. PMM reference counting ───────────────────────────────── */
+		/* -- 1. PMM reference counting --------------------------------- */
 		uint32_t free_before = pmm_free_page_count();
 		void *page_a = pmm_alloc_page();
 
@@ -379,7 +380,7 @@ void kernel_main(void) {
 			       (int)pmm_free_page_count(), (int)free_before);
 		}
 
-		/* ── 2. PAGE_COW flag ──────────────────────────────────────── */
+		/* -- 2. PAGE_COW flag ---------------------------------------- */
 		printf("cow: PAGE_COW=0x%x  (bit 9, software-reserved)\r\n",
 		       (unsigned)PAGE_COW);
 		printf("cow: overlaps PRESENT?  %s  WRITABLE?  %s  USER?  %s\r\n",
@@ -387,7 +388,7 @@ void kernel_main(void) {
 		       (PAGE_COW & PAGE_WRITABLE) ? "YES (BUG)" : "no",
 		       (PAGE_COW & PAGE_USER)     ? "YES (BUG)" : "no");
 
-		/* ── 3. CoW fork free-count invariant ─────────────────────── */
+		/* -- 3. CoW fork free-count invariant ----------------------- */
 		uint32_t *pd_parent = paging_create_address_space();
 		uint32_t *pd_child  = paging_create_address_space();
 		if (pd_parent && pd_child) {
@@ -419,7 +420,7 @@ void kernel_main(void) {
 	}
 	printf("=== Section 9.3 ready ===\r\n\r\n");
 
-	/* ── Process isolation demo (section 5.1) ─────────────────────────────
+	/* -- Process isolation demo (section 5.1) -----------------------------
 	 * Show that two processes can have independent page directories at the
 	 * same virtual address range without colliding.                       */
 	{
@@ -442,7 +443,7 @@ void kernel_main(void) {
 		       "use 'exec' to run in isolation\r\n", PROCESS_MAX);
 	}
 
-	/* ── Section 6: System Call Expansion demo ───────────────────────────────
+	/* -- Section 6: System Call Expansion demo -------------------------------
 	 *
 	 * Prints the new syscall numbers (fork, sbrk, sigreturn) and the signal
 	 * constants that the rest of the kernel now supports.
@@ -509,7 +510,7 @@ void kernel_main(void) {
 		printf("=== Section 6 ready ===\r\n\r\n");
 	}
 
-	/* ── Section 10.1: PCI Bus Enumeration ───────────────────────────────────
+	/* -- Section 10.1: PCI Bus Enumeration -----------------------------------
 	 *
 	 * Walk all 256 PCI buses × 32 slots.  Each non-empty slot is recorded in
 	 * pci_devices[].  Multi-function devices (header type bit 7) have their
@@ -521,7 +522,7 @@ void kernel_main(void) {
 	 *   Bus 0 Slot 2  - Bochs/QEMU VGA                  (class 0x03)
 	 *
 	 * Interactive demo:  quilon> pci
-	 * ─────────────────────────────────────────────────────────────────────── */
+	 * ----------------------------------------------------------------------- */
 	printf("\r\n=== Section 10.1: PCI Bus Enumeration ===\r\n");
 	{
 		pci_enumerate();
@@ -553,7 +554,7 @@ void kernel_main(void) {
 	}
 	printf("=== Section 10.1 ready ===\r\n\r\n");
 
-	/* ── Section 10.2: RTL8139 Network Card Driver ───────────────────────────
+	/* -- Section 10.2: RTL8139 Network Card Driver ---------------------------
 	 *
 	 * Detects the RTL8139 via PCI, initialises it, prints the MAC address,
 	 * and transmits one ARP broadcast frame to prove the TX path works.
@@ -564,7 +565,7 @@ void kernel_main(void) {
 	 *
 	 * Interactive demo:  quilon> net       - show NIC status and MAC address
 	 *                    quilon> netsend   - transmit a test ARP frame + poll RX
-	 * ──────────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------------ */
 	printf("\r\n=== Section 10.2: RTL8139 Network Card Driver ===\r\n");
 	{
 		int nic_ok = rtl8139_init();
@@ -621,7 +622,7 @@ void kernel_main(void) {
 	}
 	printf("=== Section 10.2 ready ===\r\n\r\n");
 
-	/* ── Section 10.3: Minimal TCP/IP Stack ──────────────────────────────────
+	/* -- Section 10.3: Minimal TCP/IP Stack ----------------------------------
 	 *
 	 * Initialises the TCP/IP stack on top of the RTL8139 driver.
 	 * Provides: Ethernet II, ARP, IPv4, ICMP, UDP, TCP, and DHCP.
@@ -640,7 +641,7 @@ void kernel_main(void) {
 	 *   quilon> ip            - show current IP address
 	 *   quilon> ping 10.0.2.2 - ICMP echo to QEMU gateway
 	 *   quilon> arp           - show ARP cache
-	 * ──────────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------------ */
 	printf("\r\n=== Section 10.3: Minimal TCP/IP Stack ===\r\n");
 	{
 		printf("tcpip: initialising network stack...\r\n");
@@ -668,7 +669,7 @@ void kernel_main(void) {
 	}
 	printf("=== Section 10.3 ready ===\r\n\r\n");
 
-	/* ── Section 10.4: VGA Graphics Mode (VESA/VBE) ──────────────────────────
+	/* -- Section 10.4: VGA Graphics Mode (VESA/VBE) --------------------------
 	 *
 	 * Switches the display to a linear VESA framebuffer if GRUB negotiated a
 	 * graphics mode (set gfxmode=800x600x32 + set gfxpayload=keep in grub.cfg).
@@ -679,7 +680,7 @@ void kernel_main(void) {
 	 * via paging_map_page_alloc() in vbe_init()).
 	 *
 	 * Interactive demo:  quilon> vga   - draw gradient, color swatches, ASCII table
-	 * ──────────────────────────────────────────────────────────────────────────── */
+	 * ---------------------------------------------------------------------------- */
 	printf("\r\n=== Section 10.4: VGA Graphics Mode (VESA/VBE) ===\r\n");
 	{
 		if ((mbi->flags & MULTIBOOT_FLAG_FB) &&
@@ -713,13 +714,13 @@ void kernel_main(void) {
 	}
 	printf("=== Section 10.4 ready ===\r\n\r\n");
 
-	/* ── Section 10.5: Symmetric Multiprocessing (SMP) ───────────────────────
+	/* -- Section 10.5: Symmetric Multiprocessing (SMP) -----------------------
 	 *
 	 * Initialises the Local APIC on the Bootstrap Processor (BSP), parses the
 	 * Intel MP configuration table to discover Application Processors (APs),
 	 * and boots each AP via an INIT+SIPI sequence.
 	 *
-	 * Each AP executes a 16-bit→32-bit real-mode trampoline (copied to physical
+	 * Each AP executes a 16-bit->32-bit real-mode trampoline (copied to physical
 	 * 0x8000 before the first SIPI), enables paging with the kernel CR3, and
 	 * calls ap_entry_c() where it reloads the GDT/IDT and enters an idle loop.
 	 *
@@ -727,15 +728,15 @@ void kernel_main(void) {
 	 * simultaneous memory allocation from multiple cores is safe.
 	 *
 	 * New files:
-	 *   kernel/include/kernel/spinlock.h   — test-and-set spinlock
-	 *   kernel/include/kernel/apic.h       — LAPIC register map + ICR helpers
-	 *   kernel/include/kernel/smp.h        — cpu_info_t, MP table structs
-	 *   kernel/arch/i386/apic.c            — LAPIC init, EOI, IPI send
-	 *   kernel/arch/i386/smp.c             — MP table parse, AP boot, ap_entry_c
-	 *   kernel/arch/i386/smp_trampoline.S  — 16-bit AP startup trampoline
+	 *   kernel/include/kernel/spinlock.h   -- test-and-set spinlock
+	 *   kernel/include/kernel/apic.h       -- LAPIC register map + ICR helpers
+	 *   kernel/include/kernel/smp.h        -- cpu_info_t, MP table structs
+	 *   kernel/arch/i386/apic.c            -- LAPIC init, EOI, IPI send
+	 *   kernel/arch/i386/smp.c             -- MP table parse, AP boot, ap_entry_c
+	 *   kernel/arch/i386/smp_trampoline.S  -- 16-bit AP startup trampoline
 	 *
 	 * Try with QEMU option -smp 2 (already added to qemu.sh) to see two CPUs.
-	 * ──────────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------------ */
 	printf("\r\n=== Section 10.5: Symmetric Multiprocessing (SMP) ===\r\n");
 
 	apic_initialize();
@@ -767,7 +768,7 @@ void kernel_main(void) {
 	printf("| |_| | |_| | | | (_) | | | |\r\n");
 	printf(" \\__\\_\\__,__|_|_|\\___/|_| |_|\r\n\n");
 
-	/* ── Section 7: User Space ────────────────────────────────────────────────
+	/* -- Section 7: User Space ------------------------------------------------
 	 *
 	 * Attempt to load SHELL.ELF from the FAT16 disk and launch it as the
 	 * first ring-3 process.  This replaces the kernel's ring-0 shell_run()
@@ -785,8 +786,8 @@ void kernel_main(void) {
 	 * Fallback: if SHELL.ELF is not on disk (first build without section 7
 	 * user binaries), the kernel falls back to the ring-0 shell_run() so the
 	 * system remains usable during development.
-	 * ──────────────────────────────────────────────────────────────────────── */
-	/* ── Section 12.1: File Metadata & Directory Operations ─────────────────
+	 * ------------------------------------------------------------------------ */
+	/* -- Section 12.1: File Metadata & Directory Operations -----------------
 	 *
 	 * New syscalls: SYS_STAT(26), SYS_MKDIR(27), SYS_CHDIR(28),
 	 *               SYS_GETCWD(29), SYS_LSEEK(30), SYS_RENAME(31)
@@ -795,7 +796,7 @@ void kernel_main(void) {
 	 *            and a lseek demo (open file, seek past first word, read rest).
 	 *
 	 * Interactive: stat/pwd/cd/mkdir/rename commands in both shells.
-	 * ──────────────────────────────────────────────────────────────────────── */
+	 * ------------------------------------------------------------------------ */
 	printf("\r\n=== Section 12.1: File Metadata & Directory Ops ===\r\n");
 	printf("posix: SYS_STAT=%d  SYS_MKDIR=%d  SYS_CHDIR=%d\r\n",
 	       SYS_STAT, SYS_MKDIR, SYS_CHDIR);
@@ -803,12 +804,12 @@ void kernel_main(void) {
 	       SYS_GETCWD, SYS_LSEEK, SYS_RENAME);
 
 	if (vfs_mounted()) {
-		/* 1. getcwd — should be "/" at boot */
+		/* 1. getcwd -- should be "/" at boot */
 		char cwd_buf[VFS_PATH_MAX];
 		vfs_getcwd(cwd_buf, sizeof(cwd_buf));
 		printf("posix: getcwd = \"%s\"\r\n", cwd_buf);
 
-		/* 2. stat — probe the first directory entry for metadata */
+		/* 2. stat -- probe the first directory entry for metadata */
 		{
 			vfs_dirent_t probe;
 			if (vfs_readdir(0, &probe) == 0) {
@@ -822,7 +823,7 @@ void kernel_main(void) {
 			}
 		}
 
-		/* 3. lseek demo — open first file with >= 4 bytes, read, seek, re-read */
+		/* 3. lseek demo -- open first file with >= 4 bytes, read, seek, re-read */
 		{
 			vfs_dirent_t fent;
 			uint32_t fi = 0;
@@ -860,18 +861,18 @@ void kernel_main(void) {
 	}
 	printf("=== Section 12.1 ready ===\r\n\r\n");
 
-	/* ── Section 12.2: Blocking I/O — Sleep/Wakeup Instead of Spin-Wait ──
+	/* -- Section 12.2: Blocking I/O -- Sleep/Wakeup Instead of Spin-Wait --
 	 *
 	 * waitq_t replaces busy-loops in three subsystems:
 	 *
-	 *   keyboard_getchar()  — sleeps on kb_wq; keyboard IRQ wakes via
+	 *   keyboard_getchar()  -- sleeps on kb_wq; keyboard IRQ wakes via
 	 *                          waitq_wake_one().  No CPU burn while idle.
 	 *
-	 *   pipe_read/write()   — each pipe_t now has a wq field.  Blocked
+	 *   pipe_read/write()   -- each pipe_t now has a wq field.  Blocked
 	 *                          readers/writers sleep on p->wq; the
 	 *                          opposite side calls waitq_wake_all().
 	 *
-	 *   net_tcp_recv()      — yields between net_poll() iterations via
+	 *   net_tcp_recv()      -- yields between net_poll() iterations via
 	 *                          waitq_sleep(&g_tcp.rx_wq).  handle_tcp
 	 *                          calls waitq_wake_all() when data arrives.
 	 *
@@ -882,13 +883,13 @@ void kernel_main(void) {
 		waitq_t wq = WAITQ_INIT;
 		printf("waitq: init   head=%p (NULL)\r\n", (void*)wq.head);
 
-		/* wake_one on empty — must be a no-op */
+		/* wake_one on empty -- must be a no-op */
 		waitq_wake_one(&wq);
-		printf("waitq: wake_one on empty queue — ok\r\n");
+		printf("waitq: wake_one on empty queue -- ok\r\n");
 
-		/* wake_all on empty — must be a no-op */
+		/* wake_all on empty -- must be a no-op */
 		waitq_wake_all(&wq);
-		printf("waitq: wake_all on empty queue — ok\r\n");
+		printf("waitq: wake_all on empty queue -- ok\r\n");
 
 		printf("waitq: keyboard  now sleeps on kb_wq  (IRQ wakes)\r\n");
 		printf("waitq: pipe_read sleeps on pipe->wq\r\n");
@@ -896,6 +897,76 @@ void kernel_main(void) {
 		printf("waitq: tcp_recv  sleeps on tcp.rx_wq\r\n");
 	}
 	printf("=== Section 12.2 ready ===\r\n\r\n");
+
+	/* -- Section 12.3: Kernel Threads (clone) ---------------------------------
+	 *
+	 * SYS_CLONE (32) creates a new kernel thread that shares the caller's
+	 * address space (CLONE_VM).  Unlike fork(), no page copy occurs -- both
+	 * threads see the same physical memory immediately.
+	 *
+	 * Kernel side (syscall.c SYS_CLONE):
+	 *   1. Allocate a new process_t slot.
+	 *   2. If CLONE_VM: share parent cr3, set thread_group, copy VMAs.
+	 *   3. Build a 64-byte iret frame at the top of the thread's kernel stack
+	 *      with eip=fn, useresp=stack, cs/ss/eflags from the parent.
+	 *   4. Build a 5-word context_switch frame pointing to fork_child_return.
+	 *   5. Mark PROC_READY -- the scheduler picks it up on the next tick.
+	 *
+	 * User side (user/libc/pthread.c):
+	 *   pthread_create wraps SYS_CLONE: allocates a stack, pushes arg + NULL
+	 *   return address, calls clone(trampoline, sp, CLONE_VM|CLONE_FS|CLONE_FILES).
+	 *   pthread_join calls SYS_WAIT; pthread_exit calls SYS_EXIT.
+	 *
+	 * Interactive demo:
+	 *   quilon> thread   -- show clone constants; pthread demo if SHELL.ELF loaded.
+	 * ---------------------------------------------------------------------------- */
+	printf("\r\n=== Section 12.3: Kernel Threads (clone) ===\r\n");
+	{
+		printf("clone: SYS_CLONE=%d\r\n", SYS_CLONE);
+		printf("clone: CLONE_VM=0x%x  CLONE_FS=0x%x  CLONE_FILES=0x%x\r\n",
+		       (unsigned)CLONE_VM, (unsigned)CLONE_FS, (unsigned)CLONE_FILES);
+
+		/* Verify thread_group initialisation on a fresh PCB. */
+		process_t *tg_test = process_create("tg-test", 0, 0);
+		if (tg_test) {
+			printf("clone: new PCB thread_group=%d (expect 0 -- process leader)\r\n",
+			       (int)tg_test->thread_group);
+			/* Simulate what SYS_CLONE does: mark it as a thread of pid 0. */
+			tg_test->thread_group = 0;   /* 0 = leader; set to parent pid for threads */
+			printf("clone: PROCESS_MAX=%d slots available for threads\r\n",
+			       PROCESS_MAX);
+			tg_test->state = PROC_UNUSED;   /* free the test slot */
+		}
+
+		printf("clone: address-space sharing: CLONE_VM reuses parent cr3 (no copy)\r\n");
+		printf("clone: thread exit via SYS_EXIT -> ZOMBIE -> parent SYS_WAIT reaps\r\n");
+		printf("clone: pthread_create/join/exit in user/libc/pthread.c\r\n");
+		printf("clone: use 'thread' at the shell prompt for interactive demo\r\n");
+	}
+	printf("=== Section 12.3 ready ===\r\n\r\n");
+
+	/* -- Section 13: PS/2 Mouse Driver ---------------------------------------
+	 *
+	 * Enables the PS/2 auxiliary port on the Intel 8042 keyboard controller
+	 * and programs the mouse to send 3-byte movement packets on IRQ12.
+	 *
+	 * irq12_handler() in interrupts.c calls mouse_irq_handler(), which
+	 * accumulates bytes into a packet and updates (mouse_x, mouse_y, buttons).
+	 * When VBE is active, an 8×8 crosshair cursor is painted into the shadow
+	 * buffer and flushed to the hardware framebuffer on each packet.
+	 *
+	 * Interactive demo:  quilon> mouse   - show current cursor position
+	 * SYS_MOUSE_READ (33) exposes the state to ring-3 programs.
+	 * ------------------------------------------------------------------------ */
+	printf("\r\n=== Section 13: PS/2 Mouse Driver ===\r\n");
+	mouse_initialize();
+	printf("mouse: PS/2 auxiliary port enabled\r\n");
+	printf("mouse: data reporting active  (IRQ12 / vector 44)\r\n");
+	printf("mouse: cursor at (%d, %d)\r\n", mouse_get_x(), mouse_get_y());
+	printf("mouse: SYS_MOUSE_READ=%d  (ring-3 position query)\r\n",
+	       SYS_MOUSE_READ);
+	printf("mouse: use 'mouse' at the shell prompt to read position\r\n");
+	printf("=== Section 13 ready ===\r\n\r\n");
 
 	printf("\r\n=== Section 7: User Space ===\r\n");
 	printf("user space: SYS_READDIR=%d  (ring-3 ls)\r\n", SYS_READDIR);
@@ -948,6 +1019,6 @@ void kernel_main(void) {
 	}
 	printf("=== Section 7 fallback ===\r\n\r\n");
 
-	/* ── Fallback: kernel ring-0 shell ──────────────────────────────────── */
+	/* -- Fallback: kernel ring-0 shell ------------------------------------ */
 	shell_run();
 }

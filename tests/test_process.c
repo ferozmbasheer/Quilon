@@ -1,27 +1,27 @@
 /*
- * Quilon OS — Process Management Unit Tests (section 5.2)
+ * Quilon OS -- Process Management Unit Tests (section 5.2)
  *
- * Compiled with the native host gcc — no cross-compiler or QEMU needed.
+ * Compiled with the native host gcc -- no cross-compiler or QEMU needed.
  *
  * What is tested here (pure C, no x86 assembly):
- *   • process_init()       — all slots become PROC_UNUSED, current_process = NULL
- *   • process_create()     — allocates a slot, sets up PCB fields correctly
- *   • process_create()     — builds the initial kernel_esp frame (5 words)
- *   • process_create()     — fills slots in order, returns NULL when full
- *   • process_find()       — looks up by PID, handles out-of-range and UNUSED
- *   • process_pick_next()  — round-robin PROC_READY selection
- *   • proc_state_t values  — enum constants are distinct and non-negative
- *   • PROCESS_MAX          — compile-time check on table size
+ *   • process_init()       -- all slots become PROC_UNUSED, current_process = NULL
+ *   • process_create()     -- allocates a slot, sets up PCB fields correctly
+ *   • process_create()     -- builds the initial kernel_esp frame (5 words)
+ *   • process_create()     -- fills slots in order, returns NULL when full
+ *   • process_find()       -- looks up by PID, handles out-of-range and UNUSED
+ *   • process_pick_next()  -- round-robin PROC_READY selection
+ *   • proc_state_t values  -- enum constants are distinct and non-negative
+ *   • PROCESS_MAX          -- compile-time check on table size
  *
  * What is NOT tested (requires x86 hardware / QEMU):
- *   • context_switch()     — inline asm ESP swap, only safe on real x86
- *   • process_launch()     — calls usermode_initialize/usermode_enter (ring-3)
- *   • process_first_run    — assembly trampoline in boot.S
- *   • TSS esp0 update      — gdt_set_kernel_stack writes hardware state
+ *   • context_switch()     -- inline asm ESP swap, only safe on real x86
+ *   • process_launch()     -- calls usermode_initialize/usermode_enter (ring-3)
+ *   • process_first_run    -- assembly trampoline in boot.S
+ *   • TSS esp0 update      -- gdt_set_kernel_stack writes hardware state
  *
  * The host build does NOT define __is_kernel, so process_launch() uses the
  * stub that returns immediately (while (1) {}), and process_first_run's
- * address is stored as 0 in the initial stack frame — safe to inspect as an
+ * address is stored as 0 in the initial stack frame -- safe to inspect as an
  * integer without dereferencing.
  *
  * Build & run:  cd tests && make
@@ -35,16 +35,16 @@
 
 #include <kernel/process.h>
 
-/* ── Mocks ─────────────────────────────────────────────────────────────────
+/* -- Mocks -----------------------------------------------------------------
  * process.c calls printf() for debug output in the kernel build.  In the
  * host build those calls are absent (guarded by #ifdef __is_kernel) so no
  * mock is required.  If a future change adds printf to pure-C code paths,
  * add a mock putchar() here.
- * ──────────────────────────────────────────────────────────────────────── */
+ * ------------------------------------------------------------------------ */
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 1. State enum values
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_proc_state_values(void)
 {
@@ -60,9 +60,9 @@ static void test_proc_state_values(void)
     ASSERT(PROC_BLOCKED != PROC_ZOMBIE,  "PROC_BLOCKED!= PROC_ZOMBIE");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2. process_init
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_init_clears_table(void)
 {
@@ -92,9 +92,9 @@ static void test_init_idempotent(void)
                "double init: slots still PROC_UNUSED");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3. process_create
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_create_returns_ready(void)
 {
@@ -173,7 +173,7 @@ static void test_create_reuses_freed_slot(void)
     ASSERT_EQ(p2->pid, saved_pid, "reuses the freed slot");
 }
 
-/* ── Initial kernel stack frame ──────────────────────────────────────────── */
+/* -- Initial kernel stack frame -------------------------------------------- */
 
 static void test_create_kernel_esp_within_stack(void)
 {
@@ -222,14 +222,14 @@ static void test_create_kernel_stack_frame_layout(void)
     ASSERT_EQ(sp[1], 0u, "initial esi = 0");
     ASSERT_EQ(sp[2], 0u, "initial ebx = 0");
     ASSERT_EQ(sp[3], 0u, "initial ebp = 0");
-    /* sp[4] = ret address — in host build it is 0; in kernel it is the
+    /* sp[4] = ret address -- in host build it is 0; in kernel it is the
      * address of process_first_run.  We just verify access doesn't fault. */
     (void)sp[4];
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4. process_find
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_find_returns_correct_pcb(void)
 {
@@ -259,9 +259,9 @@ static void test_find_returns_null_for_out_of_range(void)
     ASSERT(found == NULL, "process_find returns NULL for huge PID");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5. process_pick_next  (round-robin)
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_pick_next_null_when_no_ready(void)
 {
@@ -357,9 +357,9 @@ static void test_pick_next_skips_zombie(void)
     ASSERT(next == c, "pick_next skips PROC_ZOMBIE and returns c");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6. PCB struct layout sanity checks
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_pcb_struct_sizes(void)
 {
@@ -379,9 +379,9 @@ static void test_process_max_is_reasonable(void)
     ASSERT(PROCESS_MAX <= 64, "PROCESS_MAX <= 64 (sanity bound)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 7. Parent/child PID relationship
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_child_records_parent_pid(void)
 {
@@ -408,9 +408,9 @@ static void test_no_current_process_gives_parent_zero(void)
     ASSERT_EQ(p->parent_pid, 0u, "orphan parent_pid == 0");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {
@@ -421,7 +421,7 @@ int main(void)
     RUN_SUITE(test_init_clears_table);
     RUN_SUITE(test_init_idempotent);
 
-    /* process_create — basic */
+    /* process_create -- basic */
     RUN_SUITE(test_create_returns_ready);
     RUN_SUITE(test_create_fields);
     RUN_SUITE(test_create_name_truncation);
@@ -429,7 +429,7 @@ int main(void)
     RUN_SUITE(test_create_returns_null_when_full);
     RUN_SUITE(test_create_reuses_freed_slot);
 
-    /* process_create — kernel stack frame */
+    /* process_create -- kernel stack frame */
     RUN_SUITE(test_create_kernel_esp_within_stack);
     RUN_SUITE(test_create_kernel_stack_frame_layout);
 

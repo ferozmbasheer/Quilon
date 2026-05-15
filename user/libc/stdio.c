@@ -1,19 +1,19 @@
 /*
- * Quilon user-space libc — stdio.c
+ * Quilon user-space libc -- stdio.c
  *
  * printf and friends built on top of the write() syscall.
  *
  * Design: vprintf() formats into a 512-byte stack buffer then issues a
  * single write(STDOUT_FILENO, buf, len) syscall.  No FILE objects, no
- * buffering layer — correct for a single-process demo shell.
+ * buffering layer -- correct for a single-process demo shell.
  *
  * Supported format specifiers:
- *   %d  — signed decimal integer
- *   %u  — unsigned decimal integer
- *   %x  — unsigned hexadecimal (lowercase)
- *   %s  — NUL-terminated string
- *   %c  — single character
- *   %%  — literal percent sign
+ *   %d  -- signed decimal integer
+ *   %u  -- unsigned decimal integer
+ *   %x  -- unsigned hexadecimal (lowercase)
+ *   %s  -- NUL-terminated string
+ *   %c  -- single character
+ *   %%  -- literal percent sign
  */
 
 #include <stdarg.h>
@@ -21,7 +21,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* ── Internal helpers ─────────────────────────────────────────────────── */
+/* -- Internal helpers --------------------------------------------------- */
 
 /* Convert unsigned int to decimal/hex string; return length written. */
 static int uint_to_str(char *out, unsigned int v, int base)
@@ -46,7 +46,7 @@ static int uint_to_str(char *out, unsigned int v, int base)
     return i;
 }
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* -- Public API --------------------------------------------------------- */
 
 int vprintf(const char *fmt, va_list ap)
 {
@@ -61,7 +61,7 @@ int vprintf(const char *fmt, va_list ap)
         }
         fmt++;   /* skip '%' */
 
-        /* ── Parse optional flags ───────────────────────────────────── */
+        /* -- Parse optional flags ------------------------------------- */
         int flag_left  = 0;   /* '-': left-align within field width */
         int flag_zero  = 0;   /* '0': zero-pad (numeric only) */
         int flag_plus  = 0;   /* '+': always show sign */
@@ -75,12 +75,12 @@ int vprintf(const char *fmt, va_list ap)
         }
         (void)flag_plus; (void)flag_space;   /* not yet used */
 
-        /* ── Parse optional field width ─────────────────────────────── */
+        /* -- Parse optional field width ------------------------------- */
         int width = 0;
         while (*fmt >= '0' && *fmt <= '9')
             width = width * 10 + (*fmt++ - '0');
 
-        /* ── Emit a field with optional padding ─────────────────────── */
+        /* -- Emit a field with optional padding ----------------------- */
 #define EMIT_PADDED(str, len) do {                                     \
     int _n = (len);                                                    \
     int _w = (width > _n) ? width - _n : 0;                           \

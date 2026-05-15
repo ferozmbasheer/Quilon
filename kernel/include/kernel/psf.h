@@ -1,22 +1,22 @@
 /*
- * Quilon OS — PSF2 Bitmap Font Loader  (section 11.2)
+ * Quilon OS -- PSF2 Bitmap Font Loader  (section 11.2)
  *
  * PC Screen Font 2 (PSF2) is the format used by the Linux console.
  * This header provides:
  *
- *   psf2_header_t   — the 32-byte on-disk header (packed struct)
- *   psf2_font_t     — runtime font state (pointer + geometry)
- *   psf2_parse()    — pure-C header validator; fills psf2_font_t (host testable)
- *   psf2_glyph_pixel() — pure-C pixel accessor (host testable)
+ *   psf2_header_t   -- the 32-byte on-disk header (packed struct)
+ *   psf2_font_t     -- runtime font state (pointer + geometry)
+ *   psf2_parse()    -- pure-C header validator; fills psf2_font_t (host testable)
+ *   psf2_glyph_pixel() -- pure-C pixel accessor (host testable)
  *
  * Kernel-only functions (declared here, defined in psf.c):
- *   psf2_load()          — validate + register as the active font
- *   psf2_get_font()      — return the active font (NULL if none)
- *   psf2_draw_glyph()    — render one glyph via vbe_draw_pixel
- *   psf2_make_from_builtin() — build a PSF2 image from the built-in 8×8 data
+ *   psf2_load()          -- validate + register as the active font
+ *   psf2_get_font()      -- return the active font (NULL if none)
+ *   psf2_draw_glyph()    -- render one glyph via vbe_draw_pixel
+ *   psf2_make_from_builtin() -- build a PSF2 image from the built-in 8×8 data
  *
  * Format notes
- * ────────────
+ * ------------
  * A PSF2 file is:  [psf2_header_t]  [glyph bitmaps]  [unicode table (optional)]
  *
  * Each glyph occupies exactly bytes_per_glyph bytes.  Within the glyph, each
@@ -29,7 +29,7 @@
 
 #include <stdint.h>
 
-/* ── PSF2 on-disk header ────────────────────────────────────────────────── */
+/* -- PSF2 on-disk header -------------------------------------------------- */
 
 #define PSF2_MAGIC 0x864AB572u
 
@@ -44,7 +44,7 @@ typedef struct {
     uint32_t width;           /* glyph width in pixels                      */
 } __attribute__((packed)) psf2_header_t;
 
-/* ── Runtime font state ─────────────────────────────────────────────────── */
+/* -- Runtime font state --------------------------------------------------- */
 
 typedef struct {
     const uint8_t *glyphs;        /* pointer to glyph bitmap data (not owned) */
@@ -54,7 +54,7 @@ typedef struct {
     uint32_t       glyph_count;
 } psf2_font_t;
 
-/* ── psf2_parse — pure C, host testable ────────────────────────────────── */
+/* -- psf2_parse -- pure C, host testable ---------------------------------- */
 /*
  * Parse and validate a PSF2 image.  On success, fills *out with pointers and
  * geometry derived from the header; *out->glyphs points directly into data
@@ -96,7 +96,7 @@ static inline int psf2_parse(const uint8_t *data, uint32_t len,
     return 0;
 }
 
-/* ── psf2_glyph_pixel — pure C, host testable ──────────────────────────── */
+/* -- psf2_glyph_pixel -- pure C, host testable ---------------------------- */
 /*
  * Return 1 if pixel (col, row) is lit in glyph ch, 0 otherwise.
  *
@@ -104,7 +104,7 @@ static inline int psf2_parse(const uint8_t *data, uint32_t len,
  * row  : 0 = topmost, height-1 = bottommost
  * ch   : Unicode codepoint (clamped to glyph_count by caller or here)
  *
- * Out-of-bounds col, row, or ch → 0.
+ * Out-of-bounds col, row, or ch -> 0.
  */
 static inline int psf2_glyph_pixel(const psf2_font_t *font,
                                     uint32_t ch, uint32_t col, uint32_t row)
@@ -120,10 +120,10 @@ static inline int psf2_glyph_pixel(const psf2_font_t *font,
     return (int)((glyph[byte_idx] >> bit_idx) & 1u);
 }
 
-/* ── Kernel-side API (implemented in psf.c) ─────────────────────────────── */
+/* -- Kernel-side API (implemented in psf.c) ------------------------------- */
 
 /*
- * psf2_load — validate and register a PSF2 image as the active font.
+ * psf2_load -- validate and register a PSF2 image as the active font.
  *
  * data must remain valid for the kernel's lifetime (e.g. a buffer in initrd
  * memory, a .bss static array, or a kmalloc'd region that is never freed).
@@ -141,7 +141,7 @@ int psf2_load(const uint8_t *data, uint32_t len);
 const psf2_font_t *psf2_get_font(void);
 
 /*
- * psf2_draw_glyph — render glyph ch at pixel (x, y) using the active font.
+ * psf2_draw_glyph -- render glyph ch at pixel (x, y) using the active font.
  *
  * Calls vbe_draw_pixel() for each pixel.  Must only be called after a
  * successful vbe_init() and psf2_load().
@@ -150,7 +150,7 @@ void psf2_draw_glyph(uint32_t ch, uint32_t x, uint32_t y,
                      uint32_t fg, uint32_t bg);
 
 /*
- * psf2_make_from_builtin — build a valid PSF2 image from the built-in 8×8
+ * psf2_make_from_builtin -- build a valid PSF2 image from the built-in 8×8
  * bitmaps, padded to 8×16 cell height (rows 0–7: data; rows 8–15: blank).
  *
  * Writes up to buf_len bytes into buf.  Returns the number of bytes written,

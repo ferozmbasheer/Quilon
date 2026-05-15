@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* ── Kernel heap allocator ───────────────────────────────────────────────────
+/* -- Kernel heap allocator ---------------------------------------------------
  *
  * A simple first-fit linked-list allocator.  Every allocation begins with a
  * block_header_t that records the usable size, a magic canary, a free flag,
@@ -14,10 +14,10 @@
  * The heap lives in the 1 MiB of physical RAM immediately after kernel_end,
  * which is already identity-mapped by paging_initialize().
  *
- * Call order: gdt → idt → terminal → pmm → paging → kmalloc_initialize.
+ * Call order: gdt -> idt -> terminal -> pmm -> paging -> kmalloc_initialize.
  */
 
-/* Initial heap size in bytes (1 MiB — fits comfortably inside the first 4 MiB
+/* Initial heap size in bytes (1 MiB -- fits comfortably inside the first 4 MiB
  * identity-mapped region).                                                    */
 #define HEAP_SIZE (1024u * 1024u)
 

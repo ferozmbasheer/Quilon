@@ -1,26 +1,26 @@
 /*
- * Quilon OS — ATA PIO Driver (Primary Bus)
+ * Quilon OS -- ATA PIO Driver (Primary Bus)
  *
  * Implements 28-bit LBA PIO (Programmed I/O) mode.  All I/O is performed by
  * polling status registers rather than using DMA or interrupts.  This is the
  * simplest possible ATA implementation and is good enough for a hobby OS.
  *
  * Primary ATA bus port map
- * ────────────────────────
- *   0x1F0  Data register      — 16-bit; read/write 256 words per sector
+ * ------------------------
+ *   0x1F0  Data register      -- 16-bit; read/write 256 words per sector
  *   0x1F1  Error (read) / Features (write)
  *   0x1F2  Sector count
  *   0x1F3  LBA bits  7:0
  *   0x1F4  LBA bits 15:8
  *   0x1F5  LBA bits 23:16
- *   0x1F6  Drive/Head         — [7]=1, [6]=LBA, [5]=1, [4]=drive#, [3:0]=LBA 27:24
+ *   0x1F6  Drive/Head         -- [7]=1, [6]=LBA, [5]=1, [4]=drive#, [3:0]=LBA 27:24
  *   0x1F7  Status (read) / Command (write)
  *   0x3F6  Alternate status / device control
  *
  * Drive/Head register (0x1F6) for 28-bit LBA
  *   Bits 7, 5 are always 1 (legacy OBS bits).
  *   Bit 6 = 1 selects LBA addressing (as opposed to CHS).
- *   Bit 4 = 0 → master, 1 → slave.
+ *   Bit 4 = 0 -> master, 1 -> slave.
  *   Bits 3:0 = LBA bits 27:24.
  *   So the base value for LBA mode, master = 0b11100000 = 0xE0.
  */
@@ -28,7 +28,7 @@
 #include <stdint.h>
 #include <kernel/ata.h>
 
-/* ── Primary bus port addresses ──────────────────────────────────────────── */
+/* -- Primary bus port addresses -------------------------------------------- */
 #define ATA_DATA         0x1F0
 #define ATA_ERROR        0x1F1
 #define ATA_SECTOR_COUNT 0x1F2
@@ -42,7 +42,7 @@
 /* Status register bit masks */
 #define ATA_SR_BSY   0x80   /* controller busy                        */
 #define ATA_SR_DRDY  0x40   /* drive ready                            */
-#define ATA_SR_DRQ   0x08   /* data request — drive has data for us   */
+#define ATA_SR_DRQ   0x08   /* data request -- drive has data for us   */
 #define ATA_SR_ERR   0x01   /* error flag                             */
 
 /* Command codes */
@@ -52,7 +52,7 @@
 
 static int drive_present[2] = {0, 0};
 
-/* ── Inline port I/O ─────────────────────────────────────────────────────── */
+/* -- Inline port I/O ------------------------------------------------------- */
 /*
  * Inline helpers avoid function-call overhead on the hot path (256 inw calls
  * per sector) while keeping the assembly close to the usage site.
@@ -77,10 +77,10 @@ static inline uint16_t ata_inw(uint16_t port)
     return val;
 }
 
-/* ── Polling helpers ─────────────────────────────────────────────────────── */
+/* -- Polling helpers ------------------------------------------------------- */
 
 /*
- * ata_400ns_delay — read the alternate status register four times.
+ * ata_400ns_delay -- read the alternate status register four times.
  *
  * Each read takes ~100 ns on ISA-speed hardware, giving ~400 ns total.
  * Required after selecting a drive before reading the status register, so
@@ -113,7 +113,7 @@ static int ata_wait_drq(void)
     return -1;
 }
 
-/* ── Public API ──────────────────────────────────────────────────────────── */
+/* -- Public API ------------------------------------------------------------ */
 
 int ata_initialize(void)
 {
@@ -123,7 +123,7 @@ int ata_initialize(void)
         /*
          * Select the drive.  The drive select bit (bit 4) chooses master (0)
          * or slave (1).  Bits 7, 5 and 6 (LBA mode) are set to 1.
-         * We write 0xA0 | (drv << 4) here — LBA bit 6 not set yet, that
+         * We write 0xA0 | (drv << 4) here -- LBA bit 6 not set yet, that
          * is fine for IDENTIFY which ignores LBA bits.
          */
         ata_outb(ATA_DRIVE_HEAD, (uint8_t)(0xA0 | (drv << 4)));

@@ -1,10 +1,10 @@
 /*
- * Quilon OS — initrd: RAM-Based Initial Filesystem (section 8.3)
+ * Quilon OS -- initrd: RAM-Based Initial Filesystem (section 8.3)
  *
  * A read-only VFS driver backed by a flat in-memory image.  The image can
  * come from a GRUB Multiboot module or be built synthetically in kernel RAM.
  * Because it lives entirely in memory, it is available before any disk
- * driver is initialized — a diskless kernel can still boot to a shell.
+ * driver is initialized -- a diskless kernel can still boot to a shell.
  *
  * Image format (all integers are little-endian uint32_t):
  *
@@ -22,7 +22,7 @@
 #include <kernel/initrd.h>
 #include <kernel/vfs.h>
 
-/* ── VFS driver callbacks ──────────────────────────────────────────────────── */
+/* -- VFS driver callbacks ---------------------------------------------------- */
 
 static int initrd_open(void *ctx, const char *path, vfs_node_t *out)
 {
@@ -61,7 +61,7 @@ static int initrd_read(void *ctx, vfs_node_t *node, uint32_t offset,
 static int initrd_readdir(void *ctx, const char *path, uint32_t index,
                            vfs_dirent_t *out)
 {
-    (void)path;   /* initrd is a flat filesystem — path is always "/" */
+    (void)path;   /* initrd is a flat filesystem -- path is always "/" */
     initrd_ctx_t *rd = (initrd_ctx_t *)ctx;
     if (index >= rd->file_count) return -1;
 
@@ -77,7 +77,7 @@ static int initrd_readdir(void *ctx, const char *path, uint32_t index,
 
 static void initrd_close(void *ctx, vfs_node_t *node)
 {
-    (void)ctx; (void)node;   /* nothing to release — data lives in the image */
+    (void)ctx; (void)node;   /* nothing to release -- data lives in the image */
 }
 
 const vfs_ops_t initrd_vfs_ops = {
@@ -90,7 +90,7 @@ const vfs_ops_t initrd_vfs_ops = {
     .remove  = NULL,    /* read-only filesystem */
 };
 
-/* ── initrd_mount ──────────────────────────────────────────────────────────── */
+/* -- initrd_mount ------------------------------------------------------------ */
 
 int initrd_mount(initrd_ctx_t *ctx, void *addr, uint32_t size)
 {
@@ -134,7 +134,7 @@ int initrd_mount(initrd_ctx_t *ctx, void *addr, uint32_t size)
     return 0;
 }
 
-/* ── initrd_build_demo ─────────────────────────────────────────────────────── */
+/* -- initrd_build_demo ------------------------------------------------------- */
 
 uint32_t initrd_build_demo(uint8_t *buf, uint32_t bufsize)
 {

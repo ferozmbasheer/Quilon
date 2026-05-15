@@ -85,12 +85,12 @@ void terminal_handlenewline() {
 	}
 }
 
-/* ── ANSI state ─────────────────────────────────────────────────────────── */
+/* -- ANSI state ----------------------------------------------------------- */
 
 static ansi_parser_t ansi_p;  /* zero-initialized: state=NORMAL, len=0    */
 
 /*
- * Current SGR colors (VBE path only — VGA colors are managed separately
+ * Current SGR colors (VBE path only -- VGA colors are managed separately
  * through terminal_color / terminal_setcolor).
  *
  * Defaults match what vbe_terminal_init() sets:
@@ -105,7 +105,7 @@ static int      ansi_bold = 0;
 static uint32_t ansi_saved_row = 0;
 static uint32_t ansi_saved_col = 0;
 
-/* ── ansi_execute ───────────────────────────────────────────────────────── */
+/* -- ansi_execute --------------------------------------------------------- */
 /*
  * Dispatch a parsed CSI command to the VBE or VGA backend.
  *
@@ -119,7 +119,7 @@ static void ansi_execute(const ansi_event_t *ev)
 
     switch (ev->cmd) {
 
-    /* ── Cursor position: ESC [ row ; col H  (1-indexed, 0 = 1) ─────────── */
+    /* -- Cursor position: ESC [ row ; col H  (1-indexed, 0 = 1) ----------- */
     case 'H':
     case 'f': {
         uint32_t row = (p0 > 0) ? (uint32_t)(p0 - 1) : 0u;
@@ -134,7 +134,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Cursor up: ESC [ n A ─────────────────────────────────────────────── */
+    /* -- Cursor up: ESC [ n A ----------------------------------------------- */
     case 'A': {
         int n = (p0 > 0) ? p0 : 1;
         if (vbe_active()) {
@@ -149,7 +149,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Cursor down: ESC [ n B ──────────────────────────────────────────── */
+    /* -- Cursor down: ESC [ n B -------------------------------------------- */
     case 'B': {
         int n = (p0 > 0) ? p0 : 1;
         if (vbe_active()) {
@@ -164,7 +164,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Cursor right: ESC [ n C ─────────────────────────────────────────── */
+    /* -- Cursor right: ESC [ n C ------------------------------------------- */
     case 'C': {
         int n = (p0 > 0) ? p0 : 1;
         if (vbe_active()) {
@@ -179,7 +179,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Cursor left: ESC [ n D ──────────────────────────────────────────── */
+    /* -- Cursor left: ESC [ n D -------------------------------------------- */
     case 'D': {
         int n = (p0 > 0) ? p0 : 1;
         if (vbe_active()) {
@@ -194,7 +194,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Erase in display: ESC [ 2 J (only mode 2 = full clear) ─────────── */
+    /* -- Erase in display: ESC [ 2 J (only mode 2 = full clear) ----------- */
     case 'J': {
         if (p0 == 2) {
             if (vbe_active()) {
@@ -212,7 +212,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Erase in line: ESC [ n K ────────────────────────────────────────── */
+    /* -- Erase in line: ESC [ n K ------------------------------------------ */
     case 'K': {
         if (vbe_active()) {
             vbe_terminal_erase_line(p0);
@@ -230,7 +230,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Save cursor: ESC [ s ────────────────────────────────────────────── */
+    /* -- Save cursor: ESC [ s ---------------------------------------------- */
     case 's': {
         if (vbe_active())
             vbe_terminal_get_cursor(&ansi_saved_row, &ansi_saved_col);
@@ -241,7 +241,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── Restore cursor: ESC [ u ─────────────────────────────────────────── */
+    /* -- Restore cursor: ESC [ u ------------------------------------------- */
     case 'u': {
         if (vbe_active())
             vbe_terminal_set_cursor(ansi_saved_row, ansi_saved_col);
@@ -253,7 +253,7 @@ static void ansi_execute(const ansi_event_t *ev)
         break;
     }
 
-    /* ── SGR (select graphic rendition): ESC [ params m ─────────────────── */
+    /* -- SGR (select graphic rendition): ESC [ params m ------------------- */
     case 'm': {
         int np = ev->nparams;
         if (np == 0) {
@@ -294,20 +294,20 @@ static void ansi_execute(const ansi_event_t *ev)
     }
 
     default:
-        /* Unknown CSI command — silently ignore. */
+        /* Unknown CSI command -- silently ignore. */
         break;
     }
 }
 
-/* ── Terminal lock (SMP safety) ─────────────────────────────────────────── */
+/* -- Terminal lock (SMP safety) ------------------------------------------- */
 /*
- * All terminal output — putchar and write — is serialized through tty_lock.
+ * All terminal output -- putchar and write -- is serialized through tty_lock.
  * Without this, concurrent printf() calls from the BSP and APs interleave
  * individual characters, producing garbled output like "spPinlock: PMM p]rotected".
  */
 static spinlock_t tty_lock = SPINLOCK_INIT;
 
-/* ── Public terminal API ────────────────────────────────────────────────── */
+/* -- Public terminal API -------------------------------------------------- */
 
 /* Unlocked single-character output.  Must only be called with tty_lock held. */
 static void terminal_putchar_impl(char c)
@@ -369,8 +369,12 @@ void terminal_write(const char* data, size_t size) {
     spinlock_acquire(&tty_lock);
     for (size_t i = 0; i < size; i++)
         terminal_putchar_impl(data[i]);
-    if (vbe_active()) vbe_flush();
     spinlock_release(&tty_lock);
+    /* vbe_flush() is called by pit_tick() at 100 Hz so we never hold
+     * tty_lock across the slow hardware framebuffer copy.  Holding it
+     * here would deadlock any concurrent terminal_write that fires while
+     * the flush is running (e.g. kernel demand-fault printf vs. a user
+     * thread's SYS_WRITE). */
 }
 
 void terminal_writestring(const char* data) {

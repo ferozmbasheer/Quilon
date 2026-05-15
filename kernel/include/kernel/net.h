@@ -1,13 +1,13 @@
 /*
- * Quilon OS — Minimal TCP/IP Stack (Section 10.3)
+ * Quilon OS -- Minimal TCP/IP Stack (Section 10.3)
  *
- * Layer 2  Ethernet II  — eth_hdr_t          14 bytes
- * Layer 3  ARP          — arp_pkt_t          28 bytes (IPv4 / Ethernet)
- * Layer 3  IPv4         — ipv4_hdr_t         20 bytes (no options)
- * Layer 4  ICMP         — icmp_hdr_t          8 bytes (echo header only)
- * Layer 4  UDP          — udp_hdr_t           8 bytes
- * Layer 4  TCP          — tcp_hdr_t          20 bytes (no options)
- * Application  DHCP     — dhcp_msg_t        300 bytes (minimum)
+ * Layer 2  Ethernet II  -- eth_hdr_t          14 bytes
+ * Layer 3  ARP          -- arp_pkt_t          28 bytes (IPv4 / Ethernet)
+ * Layer 3  IPv4         -- ipv4_hdr_t         20 bytes (no options)
+ * Layer 4  ICMP         -- icmp_hdr_t          8 bytes (echo header only)
+ * Layer 4  UDP          -- udp_hdr_t           8 bytes
+ * Layer 4  TCP          -- tcp_hdr_t          20 bytes (no options)
+ * Application  DHCP     -- dhcp_msg_t        300 bytes (minimum)
  *
  * All on-wire multi-byte fields are stored in network (big-endian) byte
  * order.  The pure-C helpers at the bottom of this header are
@@ -20,24 +20,24 @@
 
 #include <stdint.h>
 
-/* ── EtherType values ────────────────────────────────────────────────── */
+/* -- EtherType values -------------------------------------------------- */
 #define ETHERTYPE_IPV4   0x0800u
 #define ETHERTYPE_ARP    0x0806u
 
-/* ── IPv4 protocol numbers ───────────────────────────────────────────── */
+/* -- IPv4 protocol numbers --------------------------------------------- */
 #define IPPROTO_ICMP     1u
 #define IPPROTO_TCP      6u
 #define IPPROTO_UDP      17u
 
-/* ── ICMP type codes ─────────────────────────────────────────────────── */
+/* -- ICMP type codes --------------------------------------------------- */
 #define ICMP_ECHO_REPLY   0u
 #define ICMP_ECHO_REQUEST 8u
 
-/* ── ARP operation codes ─────────────────────────────────────────────── */
+/* -- ARP operation codes ----------------------------------------------- */
 #define ARP_OP_REQUEST   1u
 #define ARP_OP_REPLY     2u
 
-/* ── TCP flag bits (tcp_hdr_t.flags byte) ────────────────────────────── */
+/* -- TCP flag bits (tcp_hdr_t.flags byte) ------------------------------ */
 #define TCP_FIN  0x01u
 #define TCP_SYN  0x02u
 #define TCP_RST  0x04u
@@ -45,13 +45,13 @@
 #define TCP_ACK  0x10u
 #define TCP_URG  0x20u
 
-/* ── Well-known ports ────────────────────────────────────────────────── */
+/* -- Well-known ports -------------------------------------------------- */
 #define PORT_DHCP_SERVER  67u
 #define PORT_DHCP_CLIENT  68u
 #define PORT_HTTP         80u
 #define PORT_ECHO          7u   /* UDP/TCP echo server (RFC 862) */
 
-/* ── On-wire header sizes (bytes) ────────────────────────────────────── */
+/* -- On-wire header sizes (bytes) -------------------------------------- */
 #define ETH_HDR_SIZE      14u
 #define ETH_MAC_LEN        6u
 #define ARP_PKT_SIZE      28u   /* fixed for IPv4-over-Ethernet */
@@ -62,24 +62,24 @@
 #define DHCP_FIXED_SIZE  236u   /* fixed fields before magic cookie */
 #define DHCP_MIN_SIZE    300u   /* min DHCP payload (RFC 2131)     */
 
-/* ── DHCP magic cookie ───────────────────────────────────────────────── */
+/* -- DHCP magic cookie ------------------------------------------------- */
 #define DHCP_MAGIC_COOKIE  0x63825363u
 
-/* ── DHCP message type codes ─────────────────────────────────────────── */
+/* -- DHCP message type codes ------------------------------------------- */
 #define DHCP_MSG_DISCOVER  1u
 #define DHCP_MSG_OFFER     2u
 #define DHCP_MSG_REQUEST   3u
 #define DHCP_MSG_ACK       5u
 
-/* ── Stack limits ────────────────────────────────────────────────────── */
+/* -- Stack limits ------------------------------------------------------ */
 #define NET_ARP_CACHE_SIZE  4u    /* ARP cache entries              */
 #define NET_UDP_MAX_PAYLOAD 512u  /* max UDP payload buffered in RX */
 #define NET_TCP_RX_BUF      512u  /* TCP receive data buffer        */
 #define NET_ICMP_ECHO_DATA   32u  /* bytes of payload in our pings  */
 
-/* ═══════════════════════════════════════════════════════════════════════
+/* =======================================================================
  * On-wire structures (all fields in network / big-endian byte order)
- * ═══════════════════════════════════════════════════════════════════════ */
+ * ======================================================================= */
 
 typedef struct {
     uint8_t  dst[6];
@@ -160,11 +160,11 @@ typedef struct {
     uint8_t  options[64]; /* magic cookie + TLVs */
 } __attribute__((packed)) dhcp_msg_t;
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Pure-C helpers — testable on host (no x86 I/O)
- * ═══════════════════════════════════════════════════════════════════════ */
+/* =======================================================================
+ * Pure-C helpers -- testable on host (no x86 I/O)
+ * ======================================================================= */
 
-/* ── Byte-order (host = little-endian x86; network = big-endian) ─────── */
+/* -- Byte-order (host = little-endian x86; network = big-endian) ------- */
 
 static inline uint16_t net_htons(uint16_t v)
 {
@@ -181,7 +181,7 @@ static inline uint32_t net_htonl(uint32_t v)
 }
 static inline uint32_t net_ntohl(uint32_t v) { return net_htonl(v); }
 
-/* ── IP address helpers ──────────────────────────────────────────────── */
+/* -- IP address helpers ------------------------------------------------ */
 
 /* Read 4 network-byte-order bytes into a host-order uint32_t. */
 static inline uint32_t net_ip_read(const uint8_t ip[4])
@@ -202,7 +202,7 @@ static inline void net_ip_write(uint8_t dst[4], uint32_t ip)
 }
 
 /*
- * net_checksum16 — RFC 1071 one's-complement 16-bit checksum.
+ * net_checksum16 -- RFC 1071 one's-complement 16-bit checksum.
  *
  * To compute a checksum: zero the checksum field, call this function,
  * and store the returned value in the checksum field.
@@ -230,7 +230,7 @@ static inline uint16_t net_checksum16(const void *data, int len)
 }
 
 /*
- * net_transport_checksum — compute TCP or UDP pseudo-header checksum.
+ * net_transport_checksum -- compute TCP or UDP pseudo-header checksum.
  *
  * Covers: 12-byte IPv4 pseudo-header (src_ip, dst_ip, 0, proto, seg_len)
  *         + the transport segment (header + data).
@@ -269,7 +269,7 @@ static inline uint16_t net_transport_checksum(uint32_t src_ip, uint32_t dst_ip,
     return (uint16_t)~sum;
 }
 
-/* ── Frame-building helpers ──────────────────────────────────────────── */
+/* -- Frame-building helpers -------------------------------------------- */
 
 /* Fill an Ethernet header at frame[0..13]. */
 static inline void eth_fill(uint8_t *frame,
@@ -396,14 +396,14 @@ static inline void tcp_fill(uint8_t *buf,
     h->urgent     = 0;
 }
 
-/* ── ARP cache entry (used by the kernel API) ─────────────────────────── */
+/* -- ARP cache entry (used by the kernel API) --------------------------- */
 typedef struct {
     uint32_t ip;
     uint8_t  mac[6];
     int      valid;
 } arp_cache_entry_t;
 
-/* ── TCP connection state ─────────────────────────────────────────────── */
+/* -- TCP connection state ----------------------------------------------- */
 typedef enum {
     TCP_STATE_CLOSED      = 0,
     TCP_STATE_LISTEN      = 1,
@@ -413,25 +413,25 @@ typedef enum {
     TCP_STATE_CLOSE_WAIT  = 5,
 } tcp_state_t;
 
-/* ── Public kernel API ───────────────────────────────────────────────── */
+/* -- Public kernel API ------------------------------------------------- */
 
-/* net_init    — read MAC from rtl8139 and initialise state tables.
+/* net_init    -- read MAC from rtl8139 and initialise state tables.
  *               Returns 0 on success, -1 if the NIC is absent.
  *               Safe to call multiple times (idempotent). */
 int         net_init(void);
 
-/* net_set_ip  — configure our IPv4 address and gateway (host byte order). */
+/* net_set_ip  -- configure our IPv4 address and gateway (host byte order). */
 void        net_set_ip(uint32_t ip, uint32_t gateway);
 
-/* net_get_ip  — copy current IP into *ip_out (host byte order).
+/* net_get_ip  -- copy current IP into *ip_out (host byte order).
  *               Returns 1 if configured, 0 if still 0.0.0.0. */
 int         net_get_ip(uint32_t *ip_out);
 
-/* net_poll    — receive and dispatch one pending Ethernet frame.
+/* net_poll    -- receive and dispatch one pending Ethernet frame.
  *               Returns 1 if a frame was processed, 0 if ring empty. */
 int         net_poll(void);
 
-/* net_send_raw — transmit a raw Ethernet frame (thin wrapper). */
+/* net_send_raw -- transmit a raw Ethernet frame (thin wrapper). */
 int         net_send_raw(const void *frame, uint16_t len);
 
 /* ARP */
@@ -439,7 +439,7 @@ int         net_arp_lookup(uint32_t ip, uint8_t mac_out[6]);
 void        net_arp_request(uint32_t target_ip);
 void        net_arp_cache_print(void);
 
-/* ICMP — send echo request, poll for reply.  Returns 1 = reply, 0 = timeout. */
+/* ICMP -- send echo request, poll for reply.  Returns 1 = reply, 0 = timeout. */
 int         net_ping(uint32_t dst_ip);
 
 /* UDP */
@@ -455,7 +455,7 @@ int         net_tcp_recv(void *buf, uint16_t maxlen);
 void        net_tcp_close(void);
 tcp_state_t net_tcp_state(void);
 
-/* DHCP — discover → offer → request → ack; calls net_set_ip on success.
+/* DHCP -- discover -> offer -> request -> ack; calls net_set_ip on success.
  * Returns 0 if IP obtained, -1 on timeout. */
 int         net_dhcp(void);
 

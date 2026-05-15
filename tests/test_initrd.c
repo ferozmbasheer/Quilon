@@ -1,8 +1,8 @@
 /*
- * Quilon OS — initrd Unit Tests (section 8.3)
+ * Quilon OS -- initrd Unit Tests (section 8.3)
  *
  * Tests the RAM-based initial filesystem driver (kernel/kernel/initrd.c).
- * All tests run on the host with native gcc — no QEMU, no cross-compiler.
+ * All tests run on the host with native gcc -- no QEMU, no cross-compiler.
  *
  * Build & run:  cd tests && make
  */
@@ -16,11 +16,11 @@
 #include <kernel/initrd.h>
 #include <kernel/vfs.h>
 
-/* ── Image builder helpers ──────────────────────────────────────────────────
+/* -- Image builder helpers --------------------------------------------------
  *
  * build_image() constructs a minimal initrd image in `buf` from arrays of
  * names and data strings.  Returns the image size in bytes.
- * ─────────────────────────────────────────────────────────────────────────── */
+ * --------------------------------------------------------------------------- */
 
 static uint32_t build_image(uint8_t *buf, const char **names,
                              const char **datas, int n)
@@ -52,9 +52,9 @@ static uint32_t build_image(uint8_t *buf, const char **names,
     return (uint32_t)(p - buf);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 1.  initrd_mount — basic mounting
- * ═══════════════════════════════════════════════════════════════════════════ */
+/* ===========================================================================
+ * 1.  initrd_mount -- basic mounting
+ * =========================================================================== */
 
 static void test_mount_null_ctx(void)
 {
@@ -125,7 +125,7 @@ static void test_mount_truncated_name(void)
     memset(img, 0, sizeof(img));
     uint32_t count = 1;
     memcpy(img, &count, 4);
-    /* Only 6 bytes left — not enough for name(16)+size(4). */
+    /* Only 6 bytes left -- not enough for name(16)+size(4). */
 
     initrd_ctx_t ctx;
     int r = initrd_mount(&ctx, img, 10);
@@ -160,9 +160,9 @@ static void test_mount_too_many_files(void)
     ASSERT_EQ(r, -1, "initrd_mount rejects file_count > INITRD_MAX_FILES");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 2.  initrd_vfs_ops.open
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_open_existing_file(void)
 {
@@ -230,9 +230,9 @@ static void test_open_missing_file(void)
     ASSERT_EQ(r, -1, "open missing file returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 3.  initrd_vfs_ops.read
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_read_full_file(void)
 {
@@ -311,7 +311,7 @@ static void test_read_at_eof(void)
     initrd_vfs_ops.open(&ctx, "MSG.TXT", &nd);
 
     char buf[8];
-    /* offset == file size → EOF */
+    /* offset == file size -> EOF */
     int n = initrd_vfs_ops.read(&ctx, &nd, 2, sizeof(buf), (uint8_t *)buf);
     ASSERT_EQ(n, 0, "read at exact EOF returns 0");
 }
@@ -335,9 +335,9 @@ static void test_read_invalid_inode(void)
     ASSERT_EQ(n, -1, "read with out-of-range inode returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 4.  initrd_vfs_ops.readdir
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_readdir_first(void)
 {
@@ -388,9 +388,9 @@ static void test_readdir_past_end(void)
     ASSERT_EQ(r, -1, "readdir past last entry returns -1");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 5.  Read-only: write / create / remove must be NULL
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_ops_are_read_only(void)
 {
@@ -399,9 +399,9 @@ static void test_ops_are_read_only(void)
     ASSERT_NULL((void *)initrd_vfs_ops.remove, "remove op is NULL (read-only)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 6.  initrd_build_demo
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_build_demo_too_small(void)
 {
@@ -445,9 +445,9 @@ static void test_build_demo_motd_content(void)
     ASSERT_STR_EQ(content, "Welcome to Quilon OS!", "MOTD.TXT content is correct");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * 7.  VFS integration: mount via vfs_mount() and use vfs_* API
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 static void test_vfs_mount_and_open(void)
 {
@@ -551,9 +551,9 @@ static void test_vfs_remove_returns_minus1(void)
     ASSERT_EQ(r, -1, "vfs_remove on initrd returns -1 (read-only)");
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ===========================================================================
  * main
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * =========================================================================== */
 
 int main(void)
 {

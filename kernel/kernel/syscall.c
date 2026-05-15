@@ -1,11 +1,11 @@
 /*
- * Quilon OS — System Call Dispatcher
+ * Quilon OS -- System Call Dispatcher
  *
  * System calls are the only safe channel through which user-mode (ring-3)
  * code can ask the kernel to perform privileged operations.
  *
  * Mechanism
- * ─────────
+ * ---------
  * User code executes `int $0x80`.  The CPU looks up vector 0x80 in the IDT.
  * Because we set DPL=3 on that gate, ring-3 code is allowed to trigger it
  * (a DPL=0 gate would raise a GPF).  The CPU then:
@@ -18,13 +18,13 @@
  * int80_stub restores registers and `iret`s back to ring 3.
  *
  * Return value convention
- * ───────────────────────
+ * -----------------------
  * syscall_handler writes the return value into regs->eax.  int80_stub's
  * subsequent `popa` restores EAX from that slot, so the caller sees the
  * return value in EAX after `int $0x80`.
  *
  * Adding a new syscall
- * ────────────────────
+ * --------------------
  * 1. Add a #define SYS_xxx constant to syscall.h.
  * 2. Add a case in the switch below.
  * 3. Document the register arguments next to the case.
@@ -55,13 +55,14 @@
 #include <kernel/rtl8139.h>
 #include <kernel/net.h>
 #include <kernel/vbe.h>
+#include <kernel/mouse.h>
 #include <string.h>
 #endif
 
 /* Virtual address where the user heap starts (just above typical ELF range). */
 #define USER_HEAP_START  0x00800000u
 
-/* ── Kernel-only initialisation ──────────────────────────────────────────────
+/* -- Kernel-only initialisation ----------------------------------------------
  * int80_stub and IDT[] only exist in the kernel build (boot.S / interrupts.c).
  * Guard them so that syscall.c compiles cleanly on the host for unit tests.  */
 #ifdef __is_kernel
@@ -71,7 +72,7 @@
 extern void int80_stub(void);
 
 /*
- * syscall_initialize — register the int $0x80 gate in the IDT.
+ * syscall_initialize -- register the int $0x80 gate in the IDT.
  *
  * IDT_TYPE_USER_TRAP_GATE = 0xEF = P=1 | DPL=3 | type=0xF (32-bit trap gate).
  *
@@ -95,7 +96,7 @@ void syscall_initialize(void)
 #endif /* __is_kernel */
 
 /*
- * syscall_handler — C-level dispatcher for int $0x80.
+ * syscall_handler -- C-level dispatcher for int $0x80.
  *
  * Called from int80_stub with a pointer to the register save area built on
  * the kernel stack.  Dispatch is on regs->eax (the syscall number).
@@ -108,19 +109,19 @@ void syscall_handler(syscall_regs_t *regs)
 
     switch (regs->eax) {
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_WRITE (1)
-     *   EBX = fd    — FD_STDOUT (1) or FD_STDERR (2) go to the VGA terminal.
-     *                 FD_STDIN (0) or any other fd → returns 0.
-     *   ECX = buf   — pointer to the bytes to write (user-space address).
-     *   EDX = len   — number of bytes.
+     *   EBX = fd    -- FD_STDOUT (1) or FD_STDERR (2) go to the VGA terminal.
+     *                 FD_STDIN (0) or any other fd -> returns 0.
+     *   ECX = buf   -- pointer to the bytes to write (user-space address).
+     *   EDX = len   -- number of bytes.
      *   Returns: bytes written on success, 0 on unsupported fd / NULL buf.
      *
      * Security note: in a production OS you must validate that [buf, buf+len)
      * is entirely within user-accessible memory before touching it.  Here
      * the first 4 MiB is identity-mapped and user-accessible, so any pointer
      * in that range is safe to dereference.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_WRITE: {
         const char *buf = (const char *)(uintptr_t)regs->ecx;
         uint32_t    len = regs->edx;
@@ -145,11 +146,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_GETPID (2)
      *   No arguments.
      *   Returns: the current process's PID.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_GETPID:
 #ifdef __is_kernel
         ret = current_process ? current_process->pid : 0;
@@ -158,7 +159,7 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
         break;
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_EXIT (3)
      *   EBX = exit code.
      *   Does not return.
@@ -166,8 +167,8 @@ void syscall_handler(syscall_regs_t *regs)
      * Without a scheduler, "exit" means halting the CPU.  A future
      * implementation would mark the task as ZOMBIE/DEAD and call schedule()
      * to switch to the next runnable task.
-     * ──────────────────────────────────────────────────────────────────────── */
-    /* ────────────────────────────────────────────────────────────────────────
+     * ------------------------------------------------------------------------ */
+    /* ------------------------------------------------------------------------
      * SYS_EXIT (3)
      *   EBX = exit code.
      *   Does not return.
@@ -176,7 +177,7 @@ void syscall_handler(syscall_regs_t *regs)
      * wait(), and calls scheduler_yield() to hand off the CPU.  The
      * shell's exec_return_active path is kept for the longjmp-based
      * shell-exec flow (when the shell drives exec directly).
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_EXIT:
         printf("\r\n[kernel] pid %d exited (code %d)\r\n",
 #ifdef __is_kernel
@@ -187,7 +188,7 @@ void syscall_handler(syscall_regs_t *regs)
                (int)regs->ebx);
 #ifdef __is_kernel
         if (exec_return_active) {
-            /* Shell launched this program via exec_setjmp — longjmp back. */
+            /* Shell launched this program via exec_setjmp -- longjmp back. */
             exec_longjmp(&exec_return_buf, 1);
             __builtin_unreachable();
         }
@@ -199,7 +200,7 @@ void syscall_handler(syscall_regs_t *regs)
             if (_parent && _parent->state == PROC_BLOCKED)
                 _parent->state = PROC_READY;
             scheduler_yield();   /* returns only if no other runnable process */
-            for (;;) asm volatile("hlt");  /* all processes exited — halt CPU */
+            for (;;) asm volatile("hlt");  /* all processes exited -- halt CPU */
             __builtin_unreachable();
         }
         for (;;) asm volatile("hlt");
@@ -209,14 +210,14 @@ void syscall_handler(syscall_regs_t *regs)
         return;
 #endif
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_OPEN (4)
      *   EBX = pointer to null-terminated path string (user-space address).
      *   Returns: file descriptor (>= VFS_FD_BASE) on success, -1 on failure.
      *
      * Security note: the path pointer is trusted here (same caveat as
-     * SYS_WRITE — pointer validation is left for a future memory-map check).
-     * ──────────────────────────────────────────────────────────────────────── */
+     * SYS_WRITE -- pointer validation is left for a future memory-map check).
+     * ------------------------------------------------------------------------ */
     case SYS_OPEN: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -227,18 +228,18 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_READ (5)
-     *   EBX = fd — FD_STDIN (0) reads from the keyboard ring buffer.
+     *   EBX = fd -- FD_STDIN (0) reads from the keyboard ring buffer.
      *              fd >= VFS_FD_BASE reads from a VFS file.
-     *   ECX = buf — pointer to the receive buffer (user-space address).
-     *   EDX = len — maximum bytes to read.
+     *   ECX = buf -- pointer to the receive buffer (user-space address).
+     *   EDX = len -- maximum bytes to read.
      *   Returns: bytes read (0 = EOF), or -1 on error.
      *
      * FD_STDIN path: calls keyboard_getchar() in a loop for `len` bytes.
      * The ring-3 shell reads one character at a time (len=1), so each call
      * blocks until one key is pressed and returns exactly 1 byte.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_READ: {
 #ifdef __is_kernel
         char    *buf = (char *)(uintptr_t)regs->ecx;
@@ -261,11 +262,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_CLOSE (6)
      *   EBX = fd.
      *   Returns: 0 on success, -1 on error.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_CLOSE: {
 #ifdef __is_kernel
         ret = (uint32_t)vfs_close((int)regs->ebx);
@@ -275,7 +276,7 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_WAIT (7)
      *   EBX = child PID to wait for.
      *   ECX = pointer to int where exit code is written (may be 0/NULL).
@@ -284,7 +285,7 @@ void syscall_handler(syscall_regs_t *regs)
      * Blocks the caller (sets state PROC_BLOCKED) and yields the CPU.
      * The SYS_EXIT handler wakes us when the child becomes ZOMBIE.
      * We then read the exit code and reap the child (set it PROC_UNUSED).
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_WAIT: {
 #ifdef __is_kernel
         uint32_t   child_pid    = regs->ebx;
@@ -306,7 +307,7 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_EXEC (8)
      *   EBX = pointer to null-terminated path string.
      *   Returns: child PID on success, -1 on failure.
@@ -314,7 +315,7 @@ void syscall_handler(syscall_regs_t *regs)
      * Creates a new address space, loads the ELF into it, and adds a new
      * PROC_READY entry to the process table.  The child runs when the
      * scheduler picks it.  The caller can use SYS_WAIT to synchronise.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_EXEC: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -326,7 +327,7 @@ void syscall_handler(syscall_regs_t *regs)
 
         /* 2. Load the ELF into the child's address space.
          *    Use a local VMA array so the process slot is not created until
-         *    the load succeeds — avoids scheduling a process with entry=0. */
+         *    the load succeeds -- avoids scheduling a process with entry=0. */
         vma_t child_vmas[PROC_VMA_MAX];
         vma_init(child_vmas, PROC_VMA_MAX);
 
@@ -357,7 +358,7 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_FORK (9)
      *   No arguments.
      *   Returns: child PID in parent, 0 in child, -1 on failure.
@@ -375,7 +376,7 @@ void syscall_handler(syscall_regs_t *regs)
      * When first scheduled, context_switch rets to fork_child_return (boot.S),
      * which restores the full register set and irets to the user's return EIP
      * with EAX == 0.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_FORK: {
 #ifdef __is_kernel
         if (!current_process) { ret = (uint32_t)-1; break; }
@@ -409,7 +410,7 @@ void syscall_handler(syscall_regs_t *regs)
         fork_child->heap_end   = current_process->heap_end;
 
         /* 3.5. Copy VMAs: child inherits parent's address-space layout.
-         * VMA flags retain VMA_W even though PTEs are now read-only —
+         * VMA flags retain VMA_W even though PTEs are now read-only --
          * the VMA records logical permission; PTEs enforce it until CoW. */
         for (int _v = 0; _v < PROC_VMA_MAX; _v++)
             fork_child->vmas[_v] = current_process->vmas[_v];
@@ -436,7 +437,7 @@ void syscall_handler(syscall_regs_t *regs)
         /* 6. Build the 5-word context_switch frame just below the iret frame.
          *
          * context_switch pops edi, esi, ebx, ebp, then rets.
-         * We pre-push them (high→low): fork_child_return, ebp=0, ebx=0, esi=0, edi=0
+         * We pre-push them (high->low): fork_child_return, ebp=0, ebx=0, esi=0, edi=0
          */
         extern void fork_child_return(void);
         uint32_t *fork_sp = (uint32_t *)(child_ktop - 64);
@@ -444,7 +445,7 @@ void syscall_handler(syscall_regs_t *regs)
         *(--fork_sp) = 0u;   /* ebp */
         *(--fork_sp) = 0u;   /* ebx */
         *(--fork_sp) = 0u;   /* esi */
-        *(--fork_sp) = 0u;   /* edi — kernel_esp points here */
+        *(--fork_sp) = 0u;   /* edi -- kernel_esp points here */
         fork_child->kernel_esp = (uint32_t)(uintptr_t)fork_sp;
 
         ret = fork_child->pid;
@@ -454,7 +455,7 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_SBRK (10)
      *   EBX = increment (bytes, signed).  Negative increments shrink the heap.
      *   Returns: old program break (void*) on success, -1 on OOM.
@@ -468,7 +469,7 @@ void syscall_handler(syscall_regs_t *regs)
      * If current_process is NULL (ring-3 code called from exec_setjmp path),
      * a static anonymous break is used so the shell's `sbrk` command works
      * without a scheduler-managed process context.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_SBRK: {
 #ifdef __is_kernel
         int32_t  sbrk_inc = (int32_t)regs->ebx;
@@ -511,7 +512,7 @@ void syscall_handler(syscall_regs_t *regs)
             ret = old_brk;
         } else {
             /*
-             * No process context (ring-0 exec_setjmp path) — fall back to
+             * No process context (ring-0 exec_setjmp path) -- fall back to
              * eager allocation since there is no VMA table to populate.
              */
             uint32_t active_cr3;
@@ -541,7 +542,7 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_SIGRETURN (11)
      *   No arguments.
      *   Called by the signal handler trampoline stub after the user handler
@@ -550,21 +551,21 @@ void syscall_handler(syscall_regs_t *regs)
      *
      *   TODO: actual signal stack frame restore.  For now this is a no-op
      *   stub that satisfies the syscall table without crashing.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_SIGRETURN:
         ret = 0;
         break;
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_READDIR (12)
-     *   EBX = index — zero-based directory entry index.
+     *   EBX = index -- zero-based directory entry index.
      *   ECX = pointer to a user-space struct compatible with vfs_dirent_t:
      *         { char name[13]; uint32_t size; uint8_t type; }
      *   Returns: 0 on success, -1 at end-of-directory or error.
      *
      * Enables ring-3 programs to enumerate the root directory without access
      * to kernel VFS internals.  Used by the ring-3 shell's `ls` command.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_READDIR: {
 #ifdef __is_kernel
         vfs_dirent_t *ent = (vfs_dirent_t *)(uintptr_t)regs->ecx;
@@ -576,13 +577,13 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_CREATE (13)
      *   EBX = pointer to null-terminated path string (user-space address).
      *   Returns: 0 on success, -1 on failure.
      *
      * Creates a new empty file in the root directory.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_CREATE: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -593,11 +594,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_REMOVE (14)
      *   EBX = pointer to null-terminated path string.
      *   Returns: 0 on success, -1 on failure.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_REMOVE: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -608,11 +609,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_GETTICKS (15)
      *   No arguments.
      *   Returns: current PIT tick count as uint32_t.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_GETTICKS:
 #ifdef __is_kernel
         ret = pit_get_ticks();
@@ -621,11 +622,11 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
         break;
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_GETHZ (16)
      *   No arguments.
      *   Returns: PIT frequency in Hz as uint32_t.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_GETHZ:
 #ifdef __is_kernel
         ret = pit_get_hz();
@@ -634,7 +635,7 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
         break;
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
      * SYS_PIPE (17)
      *   EBX = pointer to int[2] array in user space.
      *         fds[0] = read end, fds[1] = write end.
@@ -643,7 +644,7 @@ void syscall_handler(syscall_regs_t *regs)
      * Creates an anonymous in-memory channel between two file descriptors.
      * The write end is written to with SYS_WRITE; the read end is read with
      * SYS_READ.  Data flows through a PIPE_BUF_SIZE kernel ring buffer.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_PIPE: {
 #ifdef __is_kernel
         int *fds = (int *)(uintptr_t)regs->ebx;
@@ -654,13 +655,13 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_PCI_READ — read a 32-bit DWORD from PCI configuration space.
+    /* ------------------------------------------------------------------------
+     * SYS_PCI_READ -- read a 32-bit DWORD from PCI configuration space.
      * EBX = bus (uint8_t)
      * ECX = (slot << 8) | func
      * EDX = byte offset (DWORD-aligned; low 2 bits ignored)
      * Returns: 32-bit config dword, or 0xFFFFFFFF on host builds.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_PCI_READ: {
         uint8_t bus  = (uint8_t)(regs->ebx & 0xFF);
         uint8_t slot = (uint8_t)((regs->ecx >> 8) & 0x1F);
@@ -675,16 +676,16 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_NET_SEND (19) — transmit one raw Ethernet frame via the RTL8139.
+    /* ------------------------------------------------------------------------
+     * SYS_NET_SEND (19) -- transmit one raw Ethernet frame via the RTL8139.
      *   EBX = pointer to frame bytes in user space (destination MAC first).
      *   ECX = frame byte count (must be ≤ RTL8139_TX_BUF_SIZE = 1792).
      *   Returns: 0 on success, -1 on error (NIC absent, frame too long, etc.).
      *
      * The kernel copies the frame into a kernel DMA buffer before passing it
      * to the card, so the user buffer only needs to be readable during the
-     * syscall — it need not be page-aligned or physically contiguous.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * syscall -- it need not be page-aligned or physically contiguous.
+     * ------------------------------------------------------------------------ */
     case SYS_NET_SEND: {
 #ifdef __is_kernel
         const void *buf = (const void *)(uintptr_t)regs->ebx;
@@ -697,8 +698,8 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_NET_RECV (20) — poll for a received Ethernet frame.
+    /* ------------------------------------------------------------------------
+     * SYS_NET_RECV (20) -- poll for a received Ethernet frame.
      *   EBX = pointer to receive buffer in user space.
      *   ECX = maximum bytes to copy (should be ≥ RTL8139_MAX_ETH_FRAME).
      *   Returns: frame byte count on success, 0 if ring buffer empty,
@@ -707,7 +708,7 @@ void syscall_handler(syscall_regs_t *regs)
      * This is a non-blocking poll: it returns 0 immediately if no frame is
      * waiting in the ring buffer.  The caller should loop with a delay or
      * use it in a spin loop for a bounded number of iterations.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_NET_RECV: {
 #ifdef __is_kernel
         void    *buf    = (void *)(uintptr_t)regs->ebx;
@@ -720,8 +721,8 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_NET_STATUS (21) — query NIC readiness and MAC address.
+    /* ------------------------------------------------------------------------
+     * SYS_NET_STATUS (21) -- query NIC readiness and MAC address.
      *   EBX = pointer to a 6-byte buffer to receive the MAC address,
      *         or 0/NULL to skip the MAC copy (status-only query).
      *   Returns: 1 if the RTL8139 is initialised and ready, 0 if not present.
@@ -729,7 +730,7 @@ void syscall_handler(syscall_regs_t *regs)
      * Allows ring-3 code to check whether the kernel successfully initialised
      * the NIC at boot and to read the hardware MAC address without needing
      * direct I/O port access.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_NET_STATUS: {
 #ifdef __is_kernel
         uint8_t *mac_out = (uint8_t *)(uintptr_t)regs->ebx;
@@ -746,11 +747,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_NET_PING (22) — send an ICMP echo request and wait for a reply.
+    /* ------------------------------------------------------------------------
+     * SYS_NET_PING (22) -- send an ICMP echo request and wait for a reply.
      *   EBX = destination IPv4 address (host byte order).
      *   Returns: 1 if an echo reply was received, 0 on timeout, -1 on error.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_NET_PING: {
 #ifdef __is_kernel
         ret = (uint32_t)net_ping(regs->ebx);
@@ -760,11 +761,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_NET_DHCP (23) — run DHCP discovery to obtain an IPv4 address.
+    /* ------------------------------------------------------------------------
+     * SYS_NET_DHCP (23) -- run DHCP discovery to obtain an IPv4 address.
      *   No arguments.
      *   Returns: 0 on success (IP configured), -1 on timeout or NIC absent.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_NET_DHCP: {
 #ifdef __is_kernel
         ret = (uint32_t)net_dhcp();
@@ -774,11 +775,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_NET_GETIP (24) — read the currently configured IPv4 address.
+    /* ------------------------------------------------------------------------
+     * SYS_NET_GETIP (24) -- read the currently configured IPv4 address.
      *   No arguments.
      *   Returns: host-byte-order IPv4 address, or 0 if not yet configured.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_NET_GETIP: {
 #ifdef __is_kernel
         uint32_t _ip = 0;
@@ -790,8 +791,8 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_VBE_INFO (25) — query VBE framebuffer parameters.
+    /* ------------------------------------------------------------------------
+     * SYS_VBE_INFO (25) -- query VBE framebuffer parameters.
      *   EBX = pointer to uint32_t[3] in user space.
      *         out[0] = framebuffer width  (pixels)
      *         out[1] = framebuffer height (pixels)
@@ -799,7 +800,7 @@ void syscall_handler(syscall_regs_t *regs)
      *   Returns: 1 if VBE is active, 0 if not (text mode only).
      *
      * Lets ring-3 programs know the display dimensions and colour depth.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_VBE_INFO: {
 #ifdef __is_kernel
         uint32_t *out = (uint32_t *)(uintptr_t)regs->ebx;
@@ -818,13 +819,13 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_STAT (26) — query file or directory metadata.
+    /* ------------------------------------------------------------------------
+     * SYS_STAT (26) -- query file or directory metadata.
      *   EBX = pointer to null-terminated path string.
      *   ECX = pointer to vfs_stat_t in user space
      *         { uint32_t size; uint8_t type; }
      *   Returns: 0 on success, -1 if not found or no driver support.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_STAT: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -837,11 +838,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_MKDIR (27) — create a new directory.
+    /* ------------------------------------------------------------------------
+     * SYS_MKDIR (27) -- create a new directory.
      *   EBX = pointer to null-terminated path string.
      *   Returns: 0 on success, -1 on failure.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_MKDIR: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -852,11 +853,11 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_CHDIR (28) — change the working directory.
+    /* ------------------------------------------------------------------------
+     * SYS_CHDIR (28) -- change the working directory.
      *   EBX = pointer to null-terminated path string.
      *   Returns: 0 on success, -1 on failure (not a directory, not found).
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_CHDIR: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
@@ -867,12 +868,12 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_GETCWD (29) — get the current working directory.
+    /* ------------------------------------------------------------------------
+     * SYS_GETCWD (29) -- get the current working directory.
      *   EBX = pointer to output buffer in user space.
      *   ECX = buffer length.
      *   Returns: 0 on success, -1 on failure.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_GETCWD: {
 #ifdef __is_kernel
         char    *buf = (char *)(uintptr_t)regs->ebx;
@@ -884,13 +885,13 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_LSEEK (30) — reposition the file offset.
+    /* ------------------------------------------------------------------------
+     * SYS_LSEEK (30) -- reposition the file offset.
      *   EBX = fd.
      *   ECX = offset (treated as signed int32_t).
      *   EDX = whence: 0=SEEK_SET, 1=SEEK_CUR, 2=SEEK_END.
      *   Returns: new absolute offset on success, -1 on error.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_LSEEK: {
 #ifdef __is_kernel
         ret = (uint32_t)vfs_lseek((int)regs->ebx,
@@ -902,12 +903,12 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
-     * SYS_RENAME (31) — rename a file or directory.
+    /* ------------------------------------------------------------------------
+     * SYS_RENAME (31) -- rename a file or directory.
      *   EBX = pointer to old path (null-terminated).
      *   ECX = pointer to new path (null-terminated).
      *   Returns: 0 on success, -1 on failure.
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     case SYS_RENAME: {
 #ifdef __is_kernel
         const char *oldpath = (const char *)(uintptr_t)regs->ebx;
@@ -921,9 +922,140 @@ void syscall_handler(syscall_regs_t *regs)
         break;
     }
 
-    /* ────────────────────────────────────────────────────────────────────────
+    /* ------------------------------------------------------------------------
+     * SYS_CLONE (32) -- create a kernel thread sharing the caller's address space.
+     *   EBX = fn    -- user-space function pointer where the thread will start.
+     *   ECX = stack -- user-space stack pointer (caller must allocate and set up).
+     *   EDX = flags -- CLONE_VM | CLONE_FS | CLONE_FILES.
+     *   Returns: new thread's PID (tid) on success, -1 on failure.
+     *
+     * Implementation (CLONE_VM path -- the normal pthread case):
+     *   1. Allocate a new process_t slot.
+     *   2. Share the parent's cr3 (same page directory, no copy).
+     *   3. Set thread_group to the process-group leader's PID.
+     *   4. Build a 64-byte iret frame at the top of the thread's kernel stack
+     *      with eip=fn, useresp=stack, cs/ss/eflags from the parent's saved regs.
+     *   5. Build a 5-word context_switch frame pointing to fork_child_return so
+     *      the scheduler can pick up this thread like any other process.
+     *   6. Mark PROC_READY.
+     *
+     * Without CLONE_VM, a fresh page directory is allocated (clone-as-process).
+     * CLONE_FS and CLONE_FILES are no-ops: cwd and fd tables are already global.
+     * ------------------------------------------------------------------------ */
+    case SYS_CLONE: {
+#ifdef __is_kernel
+        if (!current_process) { ret = (uint32_t)-1; break; }
+
+        uint32_t clone_fn    = regs->ebx;
+        uint32_t clone_stack = regs->ecx;
+        uint32_t clone_flags = regs->edx;
+
+        if (!clone_fn || !clone_stack) { ret = (uint32_t)-1; break; }
+
+        uint32_t thread_cr3;
+        int      owns_cr3 = 0;   /* 1 if we must free cr3 on failure */
+
+        if (clone_flags & CLONE_VM) {
+            /* Share the parent's address space -- both see the same pages. */
+            thread_cr3 = current_process->cr3;
+        } else {
+            /* New address space: fresh page directory with kernel half shared. */
+            uint32_t *new_pd = paging_create_address_space();
+            if (!new_pd) { ret = (uint32_t)-1; break; }
+            thread_cr3 = (uint32_t)(uintptr_t)new_pd;
+            owns_cr3 = 1;
+        }
+
+        /* Allocate PCB.  entry=0: kernel_esp is set manually below. */
+        process_t *thread = process_create(current_process->name, 0, thread_cr3);
+        if (!thread) {
+            if (owns_cr3) pmm_free_page((void *)(uintptr_t)thread_cr3);
+            ret = (uint32_t)-1;
+            break;
+        }
+
+        thread->parent_pid = current_process->pid;
+
+        if (clone_flags & CLONE_VM) {
+            /* Record thread-group membership: all threads share the leader PID. */
+            thread->thread_group = current_process->thread_group
+                                   ? current_process->thread_group
+                                   : current_process->pid;
+            thread->heap_end = current_process->heap_end;
+            /* Copy VMAs so demand-paging faults are resolved correctly. */
+            for (int _v = 0; _v < PROC_VMA_MAX; _v++)
+                thread->vmas[_v] = current_process->vmas[_v];
+        }
+
+        /*
+         * Build the 64-byte iret frame at the top of the thread's kernel stack.
+         *
+         * Layout (mirrors syscall_regs_t + useresp/ss, low addr to high):
+         *   frame[ 0] = ds        (user data segment)
+         *   frame[1..8]           (pusha save: edi..eax -- all 0)
+         *   frame[ 9] = int_no    (0)
+         *   frame[10] = err_code  (0)
+         *   frame[11] = eip       (clone_fn -- where the thread starts)
+         *   frame[12] = cs        (user code segment, from parent)
+         *   frame[13] = eflags    (parent's eflags, IF ensured set)
+         *   frame[14] = useresp   (clone_stack -- user stack pointer)
+         *   frame[15] = ss        (user stack segment = data segment)
+         */
+        uint8_t  *child_ktop = thread->kernel_stack + sizeof(thread->kernel_stack);
+        uint32_t *frame      = (uint32_t *)(child_ktop - 64);
+        memset(frame, 0, 64);
+
+        frame[0]  = regs->ds;                  /* user data segment */
+        frame[11] = clone_fn;                  /* eip */
+        frame[12] = regs->cs;                  /* user code segment */
+        frame[13] = regs->eflags | 0x200u;    /* eflags with IF set */
+        frame[14] = clone_stack;               /* useresp */
+        frame[15] = regs->ds;                  /* ss = data segment */
+
+        /*
+         * Build the 5-word context_switch frame just below the iret frame.
+         * Identical to SYS_FORK: context_switch pops edi/esi/ebx/ebp then rets
+         * to fork_child_return, which does popa + iret into ring 3 at clone_fn.
+         */
+        extern void fork_child_return(void);
+        uint32_t *cs_sp = frame;
+        *(--cs_sp) = (uint32_t)(uintptr_t)fork_child_return;
+        *(--cs_sp) = 0u;  /* ebp */
+        *(--cs_sp) = 0u;  /* ebx */
+        *(--cs_sp) = 0u;  /* esi */
+        *(--cs_sp) = 0u;  /* edi  ← kernel_esp points here */
+        thread->kernel_esp = (uint32_t)(uintptr_t)cs_sp;
+
+        ret = thread->pid;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+#ifdef __is_kernel
+    /* ------------------------------------------------------------------------
+     * SYS_MOUSE_READ (33) -- copy current mouse state to a user buffer.
+     *
+     *   EBX = pointer to mouse_event_t in user space
+     *
+     * Returns 1 always (the current position is always available).
+     * Returns -1 if the pointer is NULL.
+     * ------------------------------------------------------------------------ */
+    case SYS_MOUSE_READ: {
+        mouse_event_t *out = (mouse_event_t *)(uintptr_t)regs->ebx;
+        if (!out) { ret = (uint32_t)-1; break; }
+        out->x       = mouse_get_x();
+        out->y       = mouse_get_y();
+        out->buttons = mouse_get_buttons();
+        ret = 1;
+        break;
+    }
+#endif
+
+    /* ------------------------------------------------------------------------
      * Unknown syscall
-     * ──────────────────────────────────────────────────────────────────────── */
+     * ------------------------------------------------------------------------ */
     default:
         printf("[kernel] unknown syscall %d\r\n", (int)regs->eax);
         ret = (uint32_t)-1;

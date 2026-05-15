@@ -1,10 +1,10 @@
 /*
- * Quilon OS — Anonymous Pipe Ring Buffer (section 8.2 + 12.2)
+ * Quilon OS -- Anonymous Pipe Ring Buffer (section 8.2 + 12.2)
  *
  * Implements the kernel-side ring buffer for anonymous pipes.
  *
  * Blocking design (section 12.2)
- * ───────────────────────────────
+ * -------------------------------
  * Each pipe_t carries a waitq_t.  When a reader or writer cannot make
  * progress (buffer empty / full) it calls waitq_sleep(&p->wq) instead of
  * spinning.  The opposite side calls waitq_wake_all(&p->wq) after every
@@ -27,11 +27,11 @@
 #include <kernel/waitq.h>
 #endif /* __is_kernel */
 
-/* ── Pipe pool ──────────────────────────────────────────────────────────── */
+/* -- Pipe pool ------------------------------------------------------------ */
 
 pipe_t pipe_pool[PIPE_MAX];
 
-/* ── Public API ─────────────────────────────────────────────────────────── */
+/* -- Public API ----------------------------------------------------------- */
 
 int pipe_alloc(void)
 {
@@ -75,7 +75,7 @@ int pipe_write(int idx, const uint8_t *buf, uint32_t len)
         uint32_t space = pipe_space_available(idx);
         if (space == 0) {
 #ifdef __is_kernel
-            /* Buffer full — sleep until a reader drains some bytes. */
+            /* Buffer full -- sleep until a reader drains some bytes. */
             waitq_sleep(&p->wq);
             continue;
 #else

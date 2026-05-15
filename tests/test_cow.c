@@ -1,19 +1,19 @@
 /*
- * Quilon OS — Copy-on-Write fork unit tests (section 9.3)
+ * Quilon OS -- Copy-on-Write fork unit tests (section 9.3)
  *
  * What is tested (pure C, host-compiled):
  *
- *   Part 1 — PMM reference counting
+ *   Part 1 -- PMM reference counting
  *     pmm_alloc_page sets refcount = 1
  *     pmm_ref_page   increments refcount
  *     pmm_free_page  decrements refcount; only releases page when refcount == 0
  *     pmm_page_refcount returns the current count
  *
- *   Part 2 — PAGE_COW flag
+ *   Part 2 -- PAGE_COW flag
  *     PAGE_COW is defined as bit 9 (value 0x200)
  *     PAGE_COW does not overlap with PAGE_PRESENT, PAGE_WRITABLE, PAGE_USER
  *
- *   Part 3 — CoW page table logic (simulated in pure C)
+ *   Part 3 -- CoW page table logic (simulated in pure C)
  *     Simulates paging_fork_address_space and paging_cow_handle using plain
  *     uint32_t arrays (no x86 asm).  Tests:
  *       - After CoW fork: parent writable PTEs have WRITABLE cleared, COW set
@@ -21,14 +21,14 @@
  *       - After CoW fork: physical page refcount == 2
  *       - CoW handle (refcount > 1): allocates a new page, copies data,
  *         decrements old refcount, restores WRITABLE
- *       - CoW handle (refcount == 1): sole owner — restores WRITABLE in place
+ *       - CoW handle (refcount == 1): sole owner -- restores WRITABLE in place
  *         without allocation
  *
  * What is NOT tested (requires x86 asm / QEMU):
- *   paging_fork_address_space() — modifies live page directories, uses invlpg
- *   paging_cow_handle()         — uses invlpg
- *   Exception handler CoW path  — requires ring-3 execution
- *   TLB flush after fork        — requires CR3 write
+ *   paging_fork_address_space() -- modifies live page directories, uses invlpg
+ *   paging_cow_handle()         -- uses invlpg
+ *   Exception handler CoW path  -- requires ring-3 execution
+ *   TLB flush after fork        -- requires CR3 write
  *
  * Build & run:  cd tests && make
  */
@@ -41,19 +41,19 @@
 #include <kernel/pmm.h>
 #include <kernel/paging.h>
 
-/* ── Stubs required by pmm.c ────────────────────────────────────────── */
+/* -- Stubs required by pmm.c ------------------------------------------ */
 /* pmm_initialize() references these linker symbols; we provide them as
- * plain variables.  pmm_initialize() is never called in tests — we use
- * pmm_init_range() instead — but the symbols must be present for linking. */
+ * plain variables.  pmm_initialize() is never called in tests -- we use
+ * pmm_init_range() instead -- but the symbols must be present for linking. */
 uint32_t kernel_start;
 uint32_t kernel_end;
 
 /* printf.c (linked via LIBC_PRINTF) calls putchar.  We discard output. */
 void putchar(int c) { (void)c; }
 
-/* ══════════════════════════════════════════════════════════════════════
- * Part 1 — PMM reference counting
- * ══════════════════════════════════════════════════════════════════════ */
+/* ======================================================================
+ * Part 1 -- PMM reference counting
+ * ====================================================================== */
 
 static void test_pmm_alloc_sets_refcount_1(void)
 {
@@ -146,8 +146,8 @@ static void test_pmm_refcount_after_init_range(void)
     pmm_init_range(0x1000, 0x10000, 0, 0);
 
     /* Before any alloc, all refcounts should be 0 (free pages). */
-    /* Allocate and immediately free — refcount for that frame goes
-     * 0 → 1 (alloc) → 0 (free).  After free, the frame is back in
+    /* Allocate and immediately free -- refcount for that frame goes
+     * 0 -> 1 (alloc) -> 0 (free).  After free, the frame is back in
      * the pool and its refcount is 0 again.                        */
     void *page = pmm_alloc_page();
     ASSERT_EQ(pmm_page_refcount(page), 1u, "refcount is 1 after alloc");
@@ -155,9 +155,9 @@ static void test_pmm_refcount_after_init_range(void)
     ASSERT_EQ(pmm_page_refcount(page), 0u, "refcount is 0 after free");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
- * Part 2 — PAGE_COW flag
- * ══════════════════════════════════════════════════════════════════════ */
+/* ======================================================================
+ * Part 2 -- PAGE_COW flag
+ * ====================================================================== */
 
 static void test_page_cow_value(void)
 {
@@ -198,17 +198,17 @@ static void test_page_cow_paging_make_entry(void)
               "physical address preserved with PAGE_COW set");
 }
 
-/* ══════════════════════════════════════════════════════════════════════
- * Part 3 — CoW page-table logic (pure-C simulation)
+/* ======================================================================
+ * Part 3 -- CoW page-table logic (pure-C simulation)
  *
  * We cannot link paging.c on the host (it has x86 asm).  Instead we
  * replicate the CoW algorithm here using plain uint32_t arrays and the
  * real PMM.  The logic is identical to what the kernel does; only the
  * TLB-flush (invlpg) is omitted.
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 /*
- * sim_cow_fork_pte — simulate what paging_fork_address_space does to one PTE.
+ * sim_cow_fork_pte -- simulate what paging_fork_address_space does to one PTE.
  *
  * If the parent PTE is writable: mark both parent and child CoW, share page.
  * If the parent PTE is read-only: share page unchanged.
@@ -232,7 +232,7 @@ static void sim_cow_fork_pte(uint32_t *parent_pte, uint32_t *child_pte)
 }
 
 /*
- * sim_cow_handle — simulate paging_cow_handle for one PTE (no invlpg).
+ * sim_cow_handle -- simulate paging_cow_handle for one PTE (no invlpg).
  *
  * Returns 0 on success, -1 if PTE does not have PAGE_COW set or OOM.
  *
@@ -255,7 +255,7 @@ static int sim_cow_handle(uint32_t *pte)
         *pte = paging_make_entry(phys, new_flags);
     } else {
         /* Allocate a new page and drop our reference to the original.
-         * (memcpy skipped — pages not mapped in host address space.) */
+         * (memcpy skipped -- pages not mapped in host address space.) */
         void *new_phys = pmm_alloc_page();
         if (!new_phys) return -1;
         pmm_free_page((void *)(uintptr_t)phys);  /* drop our reference */
@@ -340,7 +340,7 @@ static void test_cow_fork_increments_refcount(void)
 
 static void test_cow_handle_shared_page_copies(void)
 {
-    /* Shared page: parent + child both reference it → refcount = 2.
+    /* Shared page: parent + child both reference it -> refcount = 2.
      *
      * Note: PMM returns physical addresses (e.g. 0x1000) that are not
      * mapped in the host process's virtual address space.  We only test
@@ -355,7 +355,7 @@ static void test_cow_handle_shared_page_copies(void)
         PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
     uint32_t child_pte = 0;
 
-    /* Simulate CoW fork — share the page, mark both CoW. */
+    /* Simulate CoW fork -- share the page, mark both CoW. */
     sim_cow_fork_pte(&parent_pte, &child_pte);
     ASSERT_EQ(pmm_page_refcount(data_page), 2u, "refcount == 2 after fork");
 
@@ -385,14 +385,14 @@ static void test_cow_handle_shared_page_copies(void)
               "parent PTE still points to original page");
     ASSERT(parent_pte & PAGE_COW, "parent PTE still marked CoW");
 
-    pmm_free_page(data_page);  /* parent's reference (refcount 1 → 0) */
+    pmm_free_page(data_page);  /* parent's reference (refcount 1 -> 0) */
     pmm_free_page((void *)(uintptr_t)new_phys);  /* child's copy */
 }
 
 static void test_cow_handle_sole_owner_no_copy(void)
 {
     /* If refcount == 1 (sole owner), handle_cow must NOT allocate a new
-     * page — it simply restores writability.                             */
+     * page -- it simply restores writability.                             */
     pmm_init_range(0x1000, 0x30000, 0, 0);
 
     void *data_page = pmm_alloc_page();
@@ -407,7 +407,7 @@ static void test_cow_handle_sole_owner_no_copy(void)
     int rc = sim_cow_handle(&pte);
     ASSERT_EQ(rc, 0, "sim_cow_handle returns 0 for sole owner");
 
-    /* PTE should point to the SAME physical page — no copy. */
+    /* PTE should point to the SAME physical page -- no copy. */
     ASSERT_EQ(pte & ~(uint32_t)0xFFF, (uint32_t)(uintptr_t)data_page,
               "sole-owner: PTE still points to same physical page");
     ASSERT(pte & PAGE_WRITABLE,  "sole-owner: PAGE_WRITABLE restored");
@@ -466,7 +466,7 @@ static void test_cow_full_parent_child_write_isolation(void)
     ASSERT_EQ(pmm_page_refcount(shared_page), 2u,
               "full scenario: refcount == 2 after fork");
 
-    /* Parent write: refcount > 1 → allocate a copy. */
+    /* Parent write: refcount > 1 -> allocate a copy. */
     int rc = sim_cow_handle(&parent_pte);
     ASSERT_EQ(rc, 0, "full scenario: parent CoW handle succeeds");
     uint32_t parent_phys = parent_pte & ~(uint32_t)0xFFF;
@@ -479,7 +479,7 @@ static void test_cow_full_parent_child_write_isolation(void)
     ASSERT_EQ(pmm_page_refcount(shared_page), 1u,
               "full scenario: shared refcount == 1 after parent copy");
 
-    /* Child write: refcount == 1 (sole owner) → in-place, no copy. */
+    /* Child write: refcount == 1 (sole owner) -> in-place, no copy. */
     rc = sim_cow_handle(&child_pte);
     ASSERT_EQ(rc, 0, "full scenario: child CoW handle succeeds");
     uint32_t child_phys = child_pte & ~(uint32_t)0xFFF;
@@ -496,9 +496,9 @@ static void test_cow_full_parent_child_write_isolation(void)
     pmm_free_page((void *)(uintptr_t)child_phys);   /* was shared_page */
 }
 
-/* ══════════════════════════════════════════════════════════════════════
+/* ======================================================================
  * main
- * ══════════════════════════════════════════════════════════════════════ */
+ * ====================================================================== */
 
 int main(void)
 {

@@ -1,5 +1,5 @@
 /*
- * Quilon OS — VGA Graphics Mode (VESA/VBE) driver  (section 10.4)
+ * Quilon OS -- VGA Graphics Mode (VESA/VBE) driver  (section 10.4)
  *
  * Supports 32 bpp and 24 bpp linear framebuffers.
  * GRUB sets up the mode via:
@@ -23,7 +23,7 @@
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
 
-/* ── Module state ───────────────────────────────────────────────────────── */
+/* -- Module state --------------------------------------------------------- */
 
 static vbe_info_t vbe;           /* cached copy of the framebuffer geometry */
 static bool       vbe_ready = false;
@@ -65,7 +65,7 @@ static uint32_t term_row;        /* cursor row    (char units) */
 static uint32_t term_fg;
 static uint32_t term_bg;
 
-/* ── Runtime font dimension helpers ─────────────────────────────────────── */
+/* -- Runtime font dimension helpers --------------------------------------- */
 /*
  * Return the active glyph cell width/height.  When a PSF2 font has been
  * loaded via psf2_load(), these return the PSF2 font's dimensions; otherwise
@@ -86,7 +86,7 @@ static inline uint32_t cur_font_h(void)
     return psf ? psf->height : (uint32_t)VBE_FONT_H;
 }
 
-/* ── Internal helpers ───────────────────────────────────────────────────── */
+/* -- Internal helpers ----------------------------------------------------- */
 
 /* Return a pointer to the start of pixel (x, y).
  * Writes go to the shadow buffer when it is available, otherwise directly
@@ -105,7 +105,7 @@ static inline void fb_write(uint32_t x, uint32_t y, uint32_t color)
     dirty_mark(y);
     uint8_t *p = fb_ptr(x, y);
     if (vbe.bpp == 32) {
-        /* 32 bpp: BGRX layout — write as a native 32-bit dword. */
+        /* 32 bpp: BGRX layout -- write as a native 32-bit dword. */
         *(uint32_t *)p = color;
     } else {
         /* 24 bpp: three individual bytes. */
@@ -115,7 +115,7 @@ static inline void fb_write(uint32_t x, uint32_t y, uint32_t color)
     }
 }
 
-/* ── Public drawing primitives ──────────────────────────────────────────── */
+/* -- Public drawing primitives -------------------------------------------- */
 
 void vbe_draw_pixel(uint32_t x, uint32_t y, uint32_t color)
 {
@@ -188,7 +188,7 @@ uint32_t vbe_draw_string(uint32_t x, uint32_t y, const char *s,
     return x;
 }
 
-/* ── Terminal scrolling ─────────────────────────────────────────────────── */
+/* -- Terminal scrolling --------------------------------------------------- */
 
 static void vbe_scroll_up(void)
 {
@@ -199,7 +199,7 @@ static void vbe_scroll_up(void)
     uint32_t row_b = vbe.pitch * fh;    /* bytes per text row */
     uint32_t total = row_b * (term_rows - 1u);
 
-    /* memmove shifts the whole framebuffer — mark entire screen dirty before
+    /* memmove shifts the whole framebuffer -- mark entire screen dirty before
      * the move so vbe_flush() copies the full updated content.             */
     dirty_mark_all();
     memmove(fb, fb + row_b, total);
@@ -208,7 +208,7 @@ static void vbe_scroll_up(void)
     vbe_fill_rect(0, (term_rows - 1u) * fh, vbe.width, fh, term_bg);
 }
 
-/* ── Terminal emulator ──────────────────────────────────────────────────── */
+/* -- Terminal emulator ---------------------------------------------------- */
 
 void vbe_terminal_init(void)
 {
@@ -327,7 +327,7 @@ void vbe_terminal_erase_line(int mode)
     vbe_fill_rect(x, term_row * fh, w, fh, term_bg);
 }
 
-/* ── Double-buffer flush ────────────────────────────────────────────────── */
+/* -- Double-buffer flush -------------------------------------------------- */
 
 void vbe_flush(void)
 {
@@ -341,7 +341,7 @@ void vbe_flush(void)
     dirty_y_max = 0u;
 }
 
-/* ── Initialization ─────────────────────────────────────────────────────── */
+/* -- Initialization ------------------------------------------------------- */
 
 bool vbe_init(const vbe_info_t *info)
 {
@@ -410,7 +410,7 @@ const vbe_info_t *vbe_get_info(void)
     return vbe_ready ? &vbe : (const vbe_info_t *)0;
 }
 
-/* ── Graphical demo ─────────────────────────────────────────────────────── */
+/* -- Graphical demo ------------------------------------------------------- */
 
 void vbe_demo(void)
 {
@@ -422,10 +422,10 @@ void vbe_demo(void)
     const uint32_t W = vbe.width;
     const uint32_t H = vbe.height;
 
-    /* ── 1. Full-screen background ─────────────────────────────────────── */
+    /* -- 1. Full-screen background --------------------------------------- */
     vbe_fill_rect(0, 0, W, H, VBE_COLOR_DARK_BLUE);
 
-    /* ── 2. Horizontal colour gradient bar ─────────────────────────────── */
+    /* -- 2. Horizontal colour gradient bar ------------------------------- */
     uint32_t bar_h = 32;
     for (uint32_t x = 0; x < W; x++) {
         uint32_t r = (x * 255u) / W;
@@ -436,7 +436,7 @@ void vbe_demo(void)
             vbe_draw_pixel(x, y, c);
     }
 
-    /* ── 3. Colour swatches ─────────────────────────────────────────────── */
+    /* -- 3. Colour swatches ----------------------------------------------- */
     static const uint32_t swatches[] = {
         VBE_COLOR_WHITE, VBE_COLOR_RED,   VBE_COLOR_GREEN,  VBE_COLOR_BLUE,
         VBE_COLOR_CYAN,  VBE_COLOR_MAGENTA, VBE_COLOR_YELLOW, VBE_COLOR_ORANGE,
@@ -447,7 +447,7 @@ void vbe_demo(void)
     for (uint32_t i = 0; i < 11u; i++)
         vbe_fill_rect(8u + i * (sw + 4u), swatch_y, sw, sh, swatches[i]);
 
-    /* ── 4. Font/info header ────────────────────────────────────────────── */
+    /* -- 4. Font/info header ---------------------------------------------- */
     uint32_t fw = cur_font_w();
     uint32_t fh = cur_font_h();
     uint32_t ty = swatch_y + sh + 12;
@@ -514,7 +514,7 @@ void vbe_demo(void)
     vbe_draw_string(8, ty, info_buf, VBE_COLOR_GREEN, VBE_COLOR_DARK_BLUE);
     ty += fh + 8;
 
-    /* ── 5. Full printable ASCII glyph table ────────────────────────────── */
+    /* -- 5. Full printable ASCII glyph table ------------------------------ */
     vbe_draw_string(8, ty, "Printable ASCII (0x20-0x7E):",
                     VBE_COLOR_WHITE, VBE_COLOR_DARK_BLUE);
     ty += fh + 2;
@@ -530,7 +530,7 @@ void vbe_demo(void)
     }
     ty = gy + fh + 12;
 
-    /* ── 6. Progress bar ────────────────────────────────────────────────── */
+    /* -- 6. Progress bar -------------------------------------------------- */
     uint32_t bar_w = W - 16u, bar_filled = bar_w * 3u / 4u;
     vbe_fill_rect(8, ty, bar_w, 12, VBE_COLOR_DARK_GREY);
     vbe_fill_rect(8, ty, bar_filled, 12, VBE_COLOR_GREEN);

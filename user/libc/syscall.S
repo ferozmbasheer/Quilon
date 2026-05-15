@@ -1,5 +1,5 @@
 /*
- * Quilon user-space libc — syscall.S
+ * Quilon user-space libc -- syscall.S
  *
  * Raw int $0x80 system call stubs for the Quilon kernel ABI:
  *
@@ -26,7 +26,7 @@
 
 .section .text
 
-/* ── write(int fd, const void *buf, int len) → int ──────────────────── */
+/* -- write(int fd, const void *buf, int len) -> int -------------------- */
 .global write
 write:
     pushl %ebx
@@ -38,7 +38,7 @@ write:
     popl  %ebx
     ret
 
-/* ── read(int fd, void *buf, int len) → int ─────────────────────────── */
+/* -- read(int fd, void *buf, int len) -> int --------------------------- */
 .global read
 read:
     pushl %ebx
@@ -50,7 +50,7 @@ read:
     popl  %ebx
     ret
 
-/* ── open(const char *path) → int fd ────────────────────────────────── */
+/* -- open(const char *path) -> int fd ---------------------------------- */
 .global open
 open:
     pushl %ebx
@@ -60,7 +60,7 @@ open:
     popl  %ebx
     ret
 
-/* ── close(int fd) → int ─────────────────────────────────────────────── */
+/* -- close(int fd) -> int ----------------------------------------------- */
 .global close
 close:
     pushl %ebx
@@ -70,25 +70,25 @@ close:
     popl  %ebx
     ret
 
-/* ── getpid(void) → int ──────────────────────────────────────────────── */
+/* -- getpid(void) -> int ------------------------------------------------ */
 .global getpid
 getpid:
     movl  $2, %eax          /* SYS_GETPID */
     int   $0x80
     ret
 
-/* ── exit(int code) — does not return ───────────────────────────────── */
+/* -- exit(int code) -- does not return --------------------------------- */
 .global exit
 exit:
     movl  $3,      %eax     /* SYS_EXIT */
     movl  4(%esp), %ebx     /* exit code */
     int   $0x80
-    /* kernel marks process ZOMBIE and yields — should never reach here */
+    /* kernel marks process ZOMBIE and yields -- should never reach here */
 .Lexit_spin:
     pause
     jmp   .Lexit_spin
 
-/* ── sbrk(int increment) → void* ────────────────────────────────────── */
+/* -- sbrk(int increment) -> void* -------------------------------------- */
 .global sbrk
 sbrk:
     pushl %ebx
@@ -98,7 +98,7 @@ sbrk:
     popl  %ebx
     ret
 
-/* ── exec(const char *path) → int child_pid ─────────────────────────── */
+/* -- exec(const char *path) -> int child_pid --------------------------- */
 .global exec
 exec:
     pushl %ebx
@@ -108,14 +108,14 @@ exec:
     popl  %ebx
     ret
 
-/* ── fork(void) → int (child_pid in parent, 0 in child, -1 on error) ── */
+/* -- fork(void) -> int (child_pid in parent, 0 in child, -1 on error) -- */
 .global fork
 fork:
     movl  $9, %eax          /* SYS_FORK */
     int   $0x80
     ret
 
-/* ── wait(int pid, int *exit_code) → int ────────────────────────────── */
+/* -- wait(int pid, int *exit_code) -> int ------------------------------ */
 .global wait
 wait:
     pushl %ebx
@@ -126,7 +126,7 @@ wait:
     popl  %ebx
     ret
 
-/* ── readdir(unsigned int index, dirent_t *out) → int ───────────────── */
+/* -- readdir(unsigned int index, dirent_t *out) -> int ----------------- */
 .global readdir
 readdir:
     pushl %ebx
@@ -137,7 +137,7 @@ readdir:
     popl  %ebx
     ret
 
-/* ── create(const char *path) → int ─────────────────────────────────── */
+/* -- create(const char *path) -> int ----------------------------------- */
 .global create
 create:
     pushl %ebx
@@ -147,7 +147,7 @@ create:
     popl  %ebx
     ret
 
-/* ── fremove(const char *path) → int ────────────────────────────────── */
+/* -- fremove(const char *path) -> int ---------------------------------- */
 .global fremove
 fremove:
     pushl %ebx
@@ -157,21 +157,21 @@ fremove:
     popl  %ebx
     ret
 
-/* ── getticks(void) → unsigned int ──────────────────────────────────── */
+/* -- getticks(void) -> unsigned int ------------------------------------ */
 .global getticks
 getticks:
     movl  $15, %eax         /* SYS_GETTICKS */
     int   $0x80
     ret
 
-/* ── gethz(void) → unsigned int ─────────────────────────────────────── */
+/* -- gethz(void) -> unsigned int --------------------------------------- */
 .global gethz
 gethz:
     movl  $16, %eax         /* SYS_GETHZ */
     int   $0x80
     ret
 
-/* ── pipe(int fds[2]) → int ──────────────────────────────────────────────── */
+/* -- pipe(int fds[2]) -> int ------------------------------------------------ */
 .global pipe
 pipe:
     pushl %ebx
@@ -181,7 +181,7 @@ pipe:
     popl  %ebx
     ret
 
-/* ── pci_read_u(bus, slot, func, off) → unsigned int ────────────────────── */
+/* -- pci_read_u(bus, slot, func, off) -> unsigned int ---------------------- */
 /* SYS_PCI_READ: EBX=bus, ECX=(slot<<8)|func, EDX=offset                     */
 .global pci_read_u
 pci_read_u:
@@ -196,7 +196,7 @@ pci_read_u:
     popl  %ebx
     ret
 
-/* ── net_send(const void *buf, int len) → int ───────────────────────────── */
+/* -- net_send(const void *buf, int len) -> int ----------------------------- */
 .global net_send
 net_send:
     pushl %ebx
@@ -207,7 +207,7 @@ net_send:
     popl  %ebx
     ret
 
-/* ── net_recv(void *buf, int maxlen) → int ──────────────────────────────── */
+/* -- net_recv(void *buf, int maxlen) -> int -------------------------------- */
 .global net_recv
 net_recv:
     pushl %ebx
@@ -218,7 +218,7 @@ net_recv:
     popl  %ebx
     ret
 
-/* ── net_status(unsigned char mac[6]) → int ─────────────────────────────── */
+/* -- net_status(unsigned char mac[6]) -> int ------------------------------- */
 .global net_status
 net_status:
     pushl %ebx
@@ -228,7 +228,7 @@ net_status:
     popl  %ebx
     ret
 
-/* ── net_ping(unsigned int dst_ip) → int ────────────────────────────────── */
+/* -- net_ping(unsigned int dst_ip) -> int ---------------------------------- */
 .global net_ping
 net_ping:
     pushl %ebx
@@ -238,21 +238,21 @@ net_ping:
     popl  %ebx
     ret
 
-/* ── net_dhcp(void) → int ───────────────────────────────────────────────── */
+/* -- net_dhcp(void) -> int ------------------------------------------------- */
 .global net_dhcp
 net_dhcp:
     movl  $23, %eax          /* SYS_NET_DHCP */
     int   $0x80
     ret
 
-/* ── net_getip(void) → unsigned int ─────────────────────────────────────── */
+/* -- net_getip(void) -> unsigned int --------------------------------------- */
 .global net_getip
 net_getip:
     movl  $24, %eax          /* SYS_NET_GETIP */
     int   $0x80
     ret
 
-/* ── vbe_info_u(unsigned int out[3]) → int ──────────────────────────────── */
+/* -- vbe_info_u(unsigned int out[3]) -> int -------------------------------- */
 .global vbe_info_u
 vbe_info_u:
     pushl %ebx
@@ -262,7 +262,7 @@ vbe_info_u:
     popl  %ebx
     ret
 
-/* ── stat(const char *path, stat_t *out) → int ──────────────────────────── */
+/* -- stat(const char *path, stat_t *out) -> int ---------------------------- */
 .global stat
 stat:
     pushl %ebx
@@ -273,7 +273,7 @@ stat:
     popl  %ebx
     ret
 
-/* ── mkdir(const char *path) → int ─────────────────────────────────────── */
+/* -- mkdir(const char *path) -> int --------------------------------------- */
 .global mkdir
 mkdir:
     pushl %ebx
@@ -283,7 +283,7 @@ mkdir:
     popl  %ebx
     ret
 
-/* ── chdir(const char *path) → int ─────────────────────────────────────── */
+/* -- chdir(const char *path) -> int --------------------------------------- */
 .global chdir
 chdir:
     pushl %ebx
@@ -293,9 +293,9 @@ chdir:
     popl  %ebx
     ret
 
-/* ── getcwd(char *buf, unsigned int len) → char* ────────────────────────── */
+/* -- getcwd(char *buf, unsigned int len) -> char* -------------------------- */
 /* Returns buf on success (kernel writes path into buf and returns 0),       */
-/* or NULL on failure.  Wrapper translates 0→buf, -1→NULL.                  */
+/* or NULL on failure.  Wrapper translates 0->buf, -1->NULL.                  */
 .global getcwd
 getcwd:
     pushl %ebx
@@ -314,7 +314,7 @@ getcwd:
     popl  %ebx
     ret
 
-/* ── lseek(int fd, int offset, int whence) → int ────────────────────────── */
+/* -- lseek(int fd, int offset, int whence) -> int -------------------------- */
 .global lseek
 lseek:
     pushl %ebx
@@ -326,7 +326,7 @@ lseek:
     popl  %ebx
     ret
 
-/* ── rename(const char *oldpath, const char *newpath) → int ─────────────── */
+/* -- rename(const char *oldpath, const char *newpath) -> int --------------- */
 .global rename
 rename:
     pushl %ebx
@@ -336,3 +336,54 @@ rename:
     int   $0x80
     popl  %ebx
     ret
+
+/* -- clone(void (*fn)(void), void *stack, int flags) -> int ---------------- */
+/* SYS_CLONE (32): create a kernel thread sharing the caller's address space. */
+/* fn    = EBX: user-space entry point for the new thread.                    */
+/* stack = ECX: prepared user-space stack pointer.                            */
+/* flags = EDX: CLONE_VM | CLONE_FS | CLONE_FILES for a normal thread.       */
+/* Returns new thread PID on success, -1 on failure.                          */
+.global clone
+clone:
+    pushl %ebx
+    movl  $32,       %eax    /* SYS_CLONE */
+    movl  8(%esp),   %ebx    /* fn */
+    movl  12(%esp),  %ecx    /* stack */
+    movl  16(%esp),  %edx    /* flags */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- mouse_read(mouse_event_t *out) -> int ---------------------------------- */
+/* SYS_MOUSE_READ (33): fill *out with current mouse position and buttons.    */
+/* Returns 1 on success, -1 if out is NULL.                                   */
+.global mouse_read
+mouse_read:
+    pushl %ebx
+    movl  $33,      %eax    /* SYS_MOUSE_READ */
+    movl  8(%esp),  %ebx    /* mouse_event_t *out */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
+/* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
+/* pthread_create prepares the stack so:                                      */
+/*   [esp+0]  NULL  fake return address                                       */
+/*   [esp+4]  start_routine                                                   */
+/*   [esp+8]  arg                                                             */
+/* We read fn and arg from those fixed offsets, call fn(arg), then exit(0).  */
+/* A C function cannot be used here because any compiler prologue would shift */
+/* esp before we read the offsets, corrupting fn and arg.                     */
+.global _pthread_trampoline
+_pthread_trampoline:
+    movl  4(%esp), %eax      /* eax = start_routine */
+    movl  8(%esp), %ecx      /* ecx = arg           */
+    pushl %ecx               /* push arg            */
+    call  *%eax              /* call start_routine(arg) */
+    addl  $4, %esp           /* pop arg             */
+    pushl $0                 /* exit(0)             */
+    call  exit
+.Ltramp_spin:
+    hlt
+    jmp   .Ltramp_spin

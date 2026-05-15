@@ -5,11 +5,11 @@
 #include <kernel/kmalloc.h>
 #include <kernel/paging.h>   /* PAGE_SIZE */
 
-/* ── Block header ────────────────────────────────────────────────────────────
+/* -- Block header ------------------------------------------------------------
  *
- * Layout in memory (addresses increase →):
+ * Layout in memory (addresses increase ->):
  *
- *   [ block_header_t | ← size bytes of user data → | next block_header_t | …]
+ *   [ block_header_t | ← size bytes of user data -> | next block_header_t | …]
  *
  * `size` is the number of *usable* bytes that follow this header (not counting
  * the header itself).  The next header (if any) starts at:
@@ -19,7 +19,7 @@
 
 typedef struct block_header {
     size_t            size;    /* usable bytes after the header               */
-    uint32_t          magic;   /* HEAP_MAGIC — detects corruption / bad ptrs  */
+    uint32_t          magic;   /* HEAP_MAGIC -- detects corruption / bad ptrs  */
     int               is_free; /* 1 = free, 0 = allocated                     */
     struct block_header *next; /* next block, or NULL if this is the last one */
 } block_header_t;
@@ -42,7 +42,7 @@ static inline size_t align_up(size_t n)
     return (n + ALIGN - 1u) & ~(ALIGN - 1u);
 }
 
-/* ── Heap state ──────────────────────────────────────────────────────────────
+/* -- Heap state --------------------------------------------------------------
  *
  * The heap is a contiguous byte range starting at `heap_base` and covering
  * `heap_bytes` bytes.  The linker-defined symbol `kernel_end` gives us the
@@ -53,7 +53,7 @@ extern uint32_t kernel_end;      /* defined in linker.ld */
 
 static block_header_t *heap_head = NULL;   /* first block in the linked list */
 
-/* ── kmalloc_initialize ──────────────────────────────────────────────────── */
+/* -- kmalloc_initialize ---------------------------------------------------- */
 
 void kmalloc_initialize(void)
 {
@@ -65,7 +65,7 @@ void kmalloc_initialize(void)
     /* Sanity check: the kernel is mapped into a 4 MiB window at KERNEL_OFFSET
      * (0xC0000000-0xC03FFFFF).  Verify the heap fits within that window.   */
     if (end > KERNEL_OFFSET + 4u * 1024u * 1024u) {
-        printf("kmalloc: PANIC — heap [0x%x, 0x%x) exceeds kernel 4 MiB window\r\n",
+        printf("kmalloc: PANIC -- heap [0x%x, 0x%x) exceeds kernel 4 MiB window\r\n",
                (unsigned)start, (unsigned)end);
         for (;;) asm volatile("hlt");
     }
@@ -78,7 +78,7 @@ void kmalloc_initialize(void)
     heap_head->next    = NULL;
 }
 
-/* ── kmalloc ─────────────────────────────────────────────────────────────── */
+/* -- kmalloc --------------------------------------------------------------- */
 
 void *kmalloc(size_t size)
 {
@@ -118,7 +118,7 @@ void *kmalloc(size_t size)
     return NULL;
 }
 
-/* ── kfree ───────────────────────────────────────────────────────────────── */
+/* -- kfree ----------------------------------------------------------------- */
 
 void kfree(void *ptr)
 {
@@ -134,7 +134,7 @@ void kfree(void *ptr)
         return;
     }
     if (b->is_free) {
-        /* Already free — double-free guard. */
+        /* Already free -- double-free guard. */
         printf("kfree: WARNING -- double-free detected at 0x%x, ignoring\r\n",
                (unsigned)(uintptr_t)ptr);
         return;
@@ -157,7 +157,7 @@ void kfree(void *ptr)
     }
 }
 
-/* ── kmalloc_dump ────────────────────────────────────────────────────────── */
+/* -- kmalloc_dump ---------------------------------------------------------- */
 
 void kmalloc_dump(void)
 {

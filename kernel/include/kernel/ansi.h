@@ -1,18 +1,18 @@
 /*
- * Quilon OS — ANSI/VT100 CSI escape sequence parser  (section 11.1)
+ * Quilon OS -- ANSI/VT100 CSI escape sequence parser  (section 11.1)
  *
- * Pure C — no x86 asm, no hardware calls, no kernel dependencies.
+ * Pure C -- no x86 asm, no hardware calls, no kernel dependencies.
  * Compilable and testable on the host (tests/test_ansi.c).
  *
  * Supports the VT100/ECMA-48 CSI sequences used by real-world CLI tools:
  *
- *   ESC [ Pn ; Pn H   — cursor position        (H, f)
- *   ESC [ Pn A/B/C/D  — cursor up/down/right/left
- *   ESC [ 2 J         — erase display
- *   ESC [ Pn K        — erase in line (0=to EOL, 1=to SOL, 2=whole)
- *   ESC [ Pn m        — SGR: bold, foreground/background colors
- *   ESC [ s           — save cursor position
- *   ESC [ u           — restore cursor position
+ *   ESC [ Pn ; Pn H   -- cursor position        (H, f)
+ *   ESC [ Pn A/B/C/D  -- cursor up/down/right/left
+ *   ESC [ 2 J         -- erase display
+ *   ESC [ Pn K        -- erase in line (0=to EOL, 1=to SOL, 2=whole)
+ *   ESC [ Pn m        -- SGR: bold, foreground/background colors
+ *   ESC [ s           -- save cursor position
+ *   ESC [ u           -- restore cursor position
  *
  * Usage:
  *   ansi_parser_t p;
@@ -31,30 +31,30 @@
 
 #include <stdint.h>
 
-/* ── Return values from ansi_feed ─────────────────────────────────────── */
+/* -- Return values from ansi_feed --------------------------------------- */
 #define ANSI_NONE  0   /* character consumed; sequence not yet complete */
 #define ANSI_CHAR  1   /* plain character to render: ev->ch             */
 #define ANSI_CSI   2   /* complete CSI sequence: ev->cmd, params        */
 
-/* ── Parser limits ────────────────────────────────────────────────────── */
+/* -- Parser limits ------------------------------------------------------ */
 #define ANSI_MAX_PARAMS  8   /* max semicolon-separated integers per CSI */
 #define ANSI_BUF_SIZE   24   /* max bytes accumulated between ESC[ and cmd */
 
-/* ── Parser states ────────────────────────────────────────────────────── */
+/* -- Parser states ------------------------------------------------------ */
 typedef enum {
     ANSI_STATE_NORMAL  = 0,
     ANSI_STATE_ESC     = 1,   /* saw 0x1B */
     ANSI_STATE_CSI     = 2,   /* saw 0x1B 0x5B ('[') */
 } ansi_state_t;
 
-/* ── Parser context ───────────────────────────────────────────────────── */
+/* -- Parser context ----------------------------------------------------- */
 typedef struct {
     ansi_state_t state;
     char         buf[ANSI_BUF_SIZE];  /* parameter characters */
     int          len;
 } ansi_parser_t;
 
-/* ── Parsed event ─────────────────────────────────────────────────────── */
+/* -- Parsed event ------------------------------------------------------- */
 typedef struct {
     char ch;                        /* ANSI_CHAR: the character          */
     char cmd;                       /* ANSI_CSI:  final byte (H,A,J,m…) */
@@ -62,7 +62,7 @@ typedef struct {
     int  nparams;                   /* number of valid params[] entries  */
 } ansi_event_t;
 
-/* ── ansi_parser_init ─────────────────────────────────────────────────── */
+/* -- ansi_parser_init --------------------------------------------------- */
 
 static inline void ansi_parser_init(ansi_parser_t *p)
 {
@@ -70,15 +70,15 @@ static inline void ansi_parser_init(ansi_parser_t *p)
     p->len   = 0;
 }
 
-/* ── ansi_parse_params ────────────────────────────────────────────────── */
+/* -- ansi_parse_params -------------------------------------------------- */
 /*
  * Parse a CSI parameter string (the bytes between '[' and the command
  * byte) into an array of non-negative integers.
  *
- * "31"     → {31},    nparams = 1
- * "1;32"   → {1, 32}, nparams = 2
- * ";"      → {0},     nparams = 1
- * ""       → {},      nparams = 0
+ * "31"     -> {31},    nparams = 1
+ * "1;32"   -> {1, 32}, nparams = 2
+ * ";"      -> {0},     nparams = 1
+ * ""       -> {},      nparams = 0
  *
  * Parameters separated by ';'; an empty field defaults to 0.
  * Returns the number of parameters stored (≤ max_params).
@@ -110,14 +110,14 @@ static inline int ansi_parse_params(const char *buf, int len,
     return n;
 }
 
-/* ── ansi_sgr_color ───────────────────────────────────────────────────── */
+/* -- ansi_sgr_color ----------------------------------------------------- */
 /*
  * Map an ANSI SGR color code to a 0x00RRGGBB pixel value.
  *
- * Codes 30-37  → standard foreground colors
- * Codes 40-47  → standard background colors (same palette)
- * Codes 90-97  → bright foreground colors
- * Codes 100-107 → bright background colors
+ * Codes 30-37  -> standard foreground colors
+ * Codes 40-47  -> standard background colors (same palette)
+ * Codes 90-97  -> bright foreground colors
+ * Codes 100-107 -> bright background colors
  *
  * Returns 0xFFFFFFFF for unrecognised codes.
  */
@@ -151,14 +151,14 @@ static inline uint32_t ansi_sgr_color(int code)
     return 0xFFFFFFFFu;
 }
 
-/* ── ansi_feed ────────────────────────────────────────────────────────── */
+/* -- ansi_feed ---------------------------------------------------------- */
 /*
  * Feed one character to the parser.
  *
  * Returns:
- *   ANSI_NONE — character was consumed as part of a partial escape sequence.
- *   ANSI_CHAR — ev->ch holds the plain character to render.
- *   ANSI_CSI  — ev->cmd, ev->params[0..nparams-1] describe a complete CSI command.
+ *   ANSI_NONE -- character was consumed as part of a partial escape sequence.
+ *   ANSI_CHAR -- ev->ch holds the plain character to render.
+ *   ANSI_CSI  -- ev->cmd, ev->params[0..nparams-1] describe a complete CSI command.
  */
 static inline int ansi_feed(ansi_parser_t *p, char c, ansi_event_t *ev)
 {
@@ -192,7 +192,7 @@ static inline int ansi_feed(ansi_parser_t *p, char c, ansi_event_t *ev)
             p->state   = ANSI_STATE_NORMAL;
             return ANSI_CSI;
         }
-        /* Parameter / intermediate byte — accumulate */
+        /* Parameter / intermediate byte -- accumulate */
         if (p->len < ANSI_BUF_SIZE - 1)
             p->buf[p->len++] = c;
         return ANSI_NONE;
