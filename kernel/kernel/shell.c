@@ -919,6 +919,87 @@ static void shell_cmd_thread(void)
     printf("  Run 'thread' in the ring-3 shell for a live demo.\r\n");
 }
 
+static void shell_cmd_gfx(void)
+{
+    printf("=== 2D Graphics Library (section 14.1) ===\r\n");
+
+    if (!vbe_active()) {
+        printf("gfx: VBE framebuffer not active\r\n");
+        printf("  Enable with: set gfxmode=800x600x32 in grub.cfg\r\n");
+        return;
+    }
+
+    const vbe_info_t *info = vbe_get_info();
+    uint32_t npages = vbe_shadow_page_count();
+
+    printf("Framebuffer: %dx%d @ %d bpp  pitch=%d bytes\r\n",
+           (int)info->width, (int)info->height, (int)info->bpp, (int)info->pitch);
+    printf("Shadow buffer: %u pages (%u KiB) at VBE_SHADOW_VBASE=0x%x\r\n",
+           (unsigned)npages, (unsigned)(npages * 4), (unsigned)0xC0500000u);
+
+    /* Print first few physical pages for verification. */
+    printf("Shadow pages (first 4):\r\n");
+    for (uint32_t i = 0; i < 4 && i < npages; i++)
+        printf("  page[%u] phys=0x%08x\r\n", (unsigned)i,
+               (unsigned)vbe_shadow_page_phys(i));
+
+    printf("Syscall numbers:\r\n");
+    printf("  SYS_GFX_INFO  = %d  -- gfx_info(out) -> 0 or -1\r\n", SYS_GFX_INFO);
+    printf("  SYS_GFX_MAP   = %d  -- gfx_map()     -> user VA of shadow buf\r\n", SYS_GFX_MAP);
+    printf("  SYS_GFX_FLUSH = %d  -- gfx_flush()   -> 0\r\n", SYS_GFX_FLUSH);
+
+    /* Draw a minimal desktop-style scene directly into the shadow buffer
+     * to prove vbe_fill_rect, vbe_draw_string, and vbe_flush all work.   */
+    printf("\r\nDrawing graphics demo to screen...\r\n");
+
+    uint32_t W = info->width;
+    uint32_t H = info->height;
+
+    /* Desktop background */
+    vbe_fill_rect(0, 0, W, H, 0x001E1E3Cu);
+
+    /* Title bar */
+    vbe_fill_rect(20, 20, W - 40, 24, 0x005050C8u);
+    vbe_draw_string(28, 24, "Quilon Desktop  [section 14.1 -- 2D Graphics]",
+                    0x00FFFFFFu, 0x005050C8u);
+
+    /* Close button */
+    vbe_fill_rect(W - 58, 22, 20, 20, 0x00C82828u);
+    vbe_draw_string(W - 52, 26, "X", 0x00FFFFFFu, 0x00C82828u);
+
+    /* Window content area */
+    vbe_fill_rect(20, 44, W - 40, H - 80, 0x00F0F0F0u);
+
+    /* Colour swatches — one per standard colour */
+    static const struct { uint32_t col; const char *name; } swatches[] = {
+        { 0x00FF0000u, "Red"   },
+        { 0x0000CC00u, "Green" },
+        { 0x000000FFu, "Blue"  },
+        { 0x00CCCC00u, "Yellow"},
+        { 0x00FF8800u, "Orange"},
+        { 0x00CC00CCu, "Mauve" },
+    };
+    int nsw = (int)(sizeof(swatches) / sizeof(swatches[0]));
+    for (int i = 0; i < nsw; i++) {
+        uint32_t sx = 40u + (uint32_t)i * 100u;
+        uint32_t sy = 60u;
+        vbe_fill_rect(sx, sy, 80, 60, swatches[i].col);
+        vbe_draw_string(sx + 2, sy + 64, swatches[i].name,
+                        0x00000000u, 0x00F0F0F0u);
+    }
+
+    /* Status bar at the bottom */
+    vbe_fill_rect(20, H - 36, W - 40, 20, 0x00C0C0C0u);
+    vbe_draw_string(28, H - 32, "libgfx: canvas | fill_rect | draw_rect | blit | draw_text | clip",
+                    0x00000000u, 0x00C0C0C0u);
+
+    /* Flush shadow buffer to hardware. */
+    vbe_dirty_rows(0, H);
+    vbe_flush();
+
+    printf("gfx demo written to screen (vbe_flush called).\r\n");
+}
+
 static void shell_cmd_mouse(void)
 {
     printf("=== PS/2 Mouse Driver (section 13) ===\r\n");
@@ -970,6 +1051,7 @@ static void shell_execute(const char *cmd) {
         printf("          waitq                  - wait queue demo         (section 12.2)\r\n");
         printf("          thread                 - kernel thread demo      (section 12.3)\r\n");
         printf("          mouse                  - PS/2 mouse position     (section 13)\r\n");
+        printf("          gfx                    - 2D graphics lib demo    (section 14.1)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -1065,6 +1147,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_thread();
     } else if (strcmp(cmd, "mouse") == 0) {
         shell_cmd_mouse();
+    } else if (strcmp(cmd, "gfx") == 0) {
+        shell_cmd_gfx();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

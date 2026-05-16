@@ -20,18 +20,22 @@
 
 CC = i686-elf-gcc
 
-LIBC_DIR = libc
-LIBC_A   = $(LIBC_DIR)/libc.a
-CRT0_O   = $(LIBC_DIR)/crt0.o
+LIBC_DIR   = libc
+LIBC_A     = $(LIBC_DIR)/libc.a
+CRT0_O     = $(LIBC_DIR)/crt0.o
+
+LIBGFX_DIR = libgfx
+LIBGFX_A   = $(LIBGFX_DIR)/libgfx.a
 
 # Flags for compiling user programs.
 CFLAGS  = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
-          -I$(LIBC_DIR)/include
+          -I$(LIBC_DIR)/include -I$(LIBGFX_DIR)/include
 
 # Flags for the final link step.
 # LDLIBS must appear AFTER object files (linker scans left-to-right).
+# libgfx before libc because libgfx calls malloc/free from libc.
 LDFLAGS = -m32 -ffreestanding -nostdlib -fno-pie -T link.ld
-LDLIBS  = -L$(LIBC_DIR) -lc -lgcc
+LDLIBS  = -L$(LIBGFX_DIR) -lgfx -L$(LIBC_DIR) -lc -lgcc
 
 # ── Auto-discover C programs ──────────────────────────────────────────────────
 # Scan for */main.c, strip the filename, exclude libc/.
@@ -45,13 +49,17 @@ ASM_ELFS = hello.elf
 # Disk image path (override: make disk DISK=/path/to/disk.img)
 DISK ?= ../disk.img
 
-.PHONY: all clean libc disk
+.PHONY: all clean libc libgfx disk
 
-all: libc $(ASM_ELFS) $(PROG_ELFS)
+all: libc libgfx $(ASM_ELFS) $(PROG_ELFS)
 
 # ── libc ──────────────────────────────────────────────────────────────────────
 libc:
 	$(MAKE) -C $(LIBC_DIR)
+
+# ── libgfx ────────────────────────────────────────────────────────────────────
+libgfx: libc
+	$(MAKE) -C $(LIBGFX_DIR)
 
 # ── Assembly hello demo ───────────────────────────────────────────────────────
 hello.o: hello.S
@@ -66,10 +74,10 @@ hello.elf: hello.o link.ld
 
 # ── Per-program link rule (generated for each discovered directory) ────────────
 # Expands to, e.g.:
-#   shell/shell.elf: $(CRT0_O) shell/main.o $(LIBC_A) link.ld
+#   shell/shell.elf: $(CRT0_O) shell/main.o $(LIBGFX_A) $(LIBC_A) link.ld
 #       $(CC) $(LDFLAGS) -o $@ $(CRT0_O) shell/main.o $(LDLIBS)
 define PROG_link
-$(1)/$(1).elf: $$(CRT0_O) $(1)/main.o $$(LIBC_A) link.ld
+$(1)/$(1).elf: $$(CRT0_O) $(1)/main.o $$(LIBGFX_A) $$(LIBC_A) link.ld
 	$$(CC) $$(LDFLAGS) -o $$@ $$(CRT0_O) $(1)/main.o $$(LDLIBS)
 endef
 $(foreach d,$(PROG_DIRS),$(eval $(call PROG_link,$(d))))
@@ -85,4 +93,5 @@ PROG_OBJS := $(foreach d,$(PROG_DIRS),$(d)/main.o)
 
 clean:
 	$(MAKE) -C $(LIBC_DIR) clean
+	$(MAKE) -C $(LIBGFX_DIR) clean
 	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS)

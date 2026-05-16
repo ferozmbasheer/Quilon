@@ -50,6 +50,9 @@
 #define SYS_RENAME  31  /* rename(oldpath, newpath) -> 0 or -1               */
 #define SYS_CLONE      32  /* clone(fn, stack, flags) -> tid or -1            */
 #define SYS_MOUSE_READ 33  /* mouse_read(mouse_event_t *) -> 1 or -1          */
+#define SYS_GFX_INFO   40  /* gfx_info(gfx_info_t *out) -> 0 or -1           */
+#define SYS_GFX_MAP    41  /* gfx_map() -> user VA of shadow buffer, or -1   */
+#define SYS_GFX_FLUSH  42  /* gfx_flush() -> 0; shadow buf -> hw framebuffer */
 
 /* clone() flag bits */
 #define CLONE_VM    0x0100  /* share address space (thread, not process)      */

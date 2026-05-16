@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx
 
 .PHONY: all build run clean help
 
@@ -351,6 +351,17 @@ $(BINDIR)/test_clone: test_clone.c framework.h $(PROCESS_SRC) $(VMA_SRC) $(LIBC_
 # mouse_packet_dy, and mouse_clamp are exercised without any hardware access.
 $(BINDIR)/test_mouse: test_mouse.c framework.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_mouse.c
+
+# 2D graphics library tests (section 14.1)
+# gfx.c is pure C with no kernel or hardware dependencies.  malloc/free are
+# resolved from the host libc; stdlib.h is our user libc header (declarations
+# only).  gfx.c does not call syscalls at runtime (gfx_screen_init and
+# gfx_flush issue int $0x80, but those functions are never called in tests).
+$(BINDIR)/test_gfx: test_gfx.c framework.h \
+                    ../user/libgfx/gfx.c \
+                    ../user/libgfx/include/gfx.h
+	$(CC) $(CFLAGS) -I../user/libgfx/include -I../user/libc/include \
+	    -o $@ test_gfx.c ../user/libgfx/gfx.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

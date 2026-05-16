@@ -285,6 +285,31 @@ void vbe_dirty_rows(uint32_t y, uint32_t count);
 void vbe_set_scroll_hook(void (*fn)(void));
 void vbe_set_post_scroll_hook(void (*fn)(void));
 
+/* -- 2D graphics info (section 14.1) ------------------------------------- */
+
+/*
+ * gfx_info_t -- framebuffer geometry exposed to user space via SYS_GFX_INFO.
+ * Matches the struct defined in user/libgfx/include/gfx.h.
+ */
+typedef struct {
+    uint32_t width;   /* pixels per row */
+    uint32_t height;  /* rows */
+    uint32_t pitch;   /* bytes per scanline */
+    uint32_t bpp;     /* bits per pixel (always 32 for VBE) */
+} gfx_info_t;
+
+/*
+ * vbe_shadow_page_count -- number of PMM pages that back the shadow buffer.
+ * Returns 0 if shadow buffer has not been allocated.
+ */
+uint32_t vbe_shadow_page_count(void);
+
+/*
+ * vbe_shadow_page_phys -- physical address of shadow buffer page i.
+ * Returns 0 if i >= vbe_shadow_page_count() or shadow buffer is absent.
+ */
+uint32_t vbe_shadow_page_phys(uint32_t i);
+
 /* -- Initialization ------------------------------------------------------ */
 
 /*

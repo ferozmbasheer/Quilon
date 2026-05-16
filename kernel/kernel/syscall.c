@@ -1054,6 +1054,87 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
 
     /* ------------------------------------------------------------------------
+     * SYS_GFX_INFO (40) -- query framebuffer geometry for the 2D graphics library.
+     *   EBX = pointer to gfx_info_t in user space.
+     *   Returns: 0 on success, -1 if VBE is not active or pointer is NULL.
+     * ------------------------------------------------------------------------ */
+    case SYS_GFX_INFO: {
+#ifdef __is_kernel
+        gfx_info_t *out = (gfx_info_t *)(uintptr_t)regs->ebx;
+        if (!out || !vbe_active()) { ret = (uint32_t)-1; break; }
+        const vbe_info_t *info = vbe_get_info();
+        out->width  = info->width;
+        out->height = info->height;
+        out->pitch  = info->pitch;
+        out->bpp    = info->bpp;
+        ret = 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_GFX_MAP (41) -- map the kernel shadow buffer into user address space.
+     *
+     * Maps all shadow buffer pages read-write at a fixed user-space virtual
+     * address (GFX_MAP_UADDR = 0x60000000).  Only the compositor/WM should call
+     * this; other apps draw into their own off-screen canvases.
+     *
+     *   No arguments (EBX ignored).
+     *   Returns: user-space virtual address of the shadow buffer, or -1 on error.
+     * ------------------------------------------------------------------------ */
+    case SYS_GFX_MAP: {
+#ifdef __is_kernel
+#define GFX_MAP_UADDR 0x60000000u
+        if (!vbe_active() || !current_process) { ret = (uint32_t)-1; break; }
+
+        uint32_t npages = vbe_shadow_page_count();
+        if (npages == 0) { ret = (uint32_t)-1; break; }
+
+        /* Map each shadow page into the current process's page directory at
+         * GFX_MAP_UADDR.  current_process->cr3 is a physical address that is
+         * also the virtual address (identity-mapped in the first 4 MiB).    */
+        uint32_t *pd = (uint32_t *)(uintptr_t)current_process->cr3;
+        for (uint32_t i = 0; i < npages; i++) {
+            uint32_t phys = vbe_shadow_page_phys(i);
+            if (!phys) { ret = (uint32_t)-1; break; }
+            paging_map_page_alloc_into(pd, GFX_MAP_UADDR + i * PAGE_SIZE,
+                                       phys,
+                                       PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+        }
+        /* Full TLB flush to make the new user mappings visible immediately. */
+        paging_switch(current_process->cr3);
+        ret = GFX_MAP_UADDR;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_GFX_FLUSH (42) -- copy the shadow buffer to the hardware framebuffer.
+     *
+     * Marks all rows dirty so vbe_flush() copies the entire shadow buffer,
+     * including any pixels written by user space via the SYS_GFX_MAP mapping.
+     *
+     *   No arguments.
+     *   Returns: 0 on success, -1 if VBE is not active.
+     * ------------------------------------------------------------------------ */
+    case SYS_GFX_FLUSH: {
+#ifdef __is_kernel
+        if (!vbe_active()) { ret = (uint32_t)-1; break; }
+        const vbe_info_t *info = vbe_get_info();
+        vbe_dirty_rows(0, info->height);
+        vbe_flush();
+        ret = 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
      * Unknown syscall
      * ------------------------------------------------------------------------ */
     default:

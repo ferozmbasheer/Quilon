@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <pthread.h>
+#include <gfx.h>
 
 /* -- Terminal helpers --------------------------------------------------- */
 
@@ -107,6 +108,7 @@ static void cmd_help(void)
     printf("  rename <old> <new>     - rename file or directory  (section 12.1)\r\n");
     printf("  thread                 - kernel thread demo (SYS_CLONE, section 12.3)\r\n");
     printf("  mouse                  - PS/2 mouse position and buttons (section 13)\r\n");
+    printf("  gfx                    - 2D graphics lib demo (section 14.1)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -933,6 +935,75 @@ static void cmd_mouse(void)
     printf("=== done ===\r\n");
 }
 
+static void cmd_gfx(void)
+{
+    printf("=== 2D Graphics Library Demo (section 14.1) ===\r\n");
+    printf("syscalls: GFX_INFO=%d  GFX_MAP=%d  GFX_FLUSH=%d\r\n",
+           SYS_GFX_INFO, SYS_GFX_MAP, SYS_GFX_FLUSH);
+
+    gfx_info_t info;
+    canvas_t  *scr = gfx_screen_init(&info);
+    if (!scr) {
+        printf("gfx: not available (VBE not active or map failed)\r\n");
+        return;
+    }
+
+    int W = (int)info.width;
+    int H = (int)info.height;
+
+    printf("screen: %ux%u  bpp=%u  pitch=%u bytes\r\n",
+           info.width, info.height, info.bpp, info.pitch);
+
+    /* Dark desktop background */
+    gfx_fill(scr, GFX_RGB(0x1E, 0x1E, 0x3C));
+
+    /* Title bar */
+    gfx_fill_rect(scr, (rect_t){0, 0, W, 24}, GFX_RGB(0x50, 0x50, 0xC8));
+    gfx_draw_text(scr, 4, 4, "Quilon 2D Graphics -- section 14.1",
+                  GFX_RGB(0xFF, 0xFF, 0xFF), GFX_RGB(0x50, 0x50, 0xC8));
+
+    /* Close button (top-right corner) */
+    gfx_fill_rect(scr, (rect_t){W - 22, 2, 20, 20}, GFX_RGB(0xC8, 0x28, 0x28));
+    gfx_draw_text(scr, W - 18, 4, "X",
+                  GFX_RGB(0xFF, 0xFF, 0xFF), GFX_RGB(0xC8, 0x28, 0x28));
+
+    /* Content area */
+    gfx_fill_rect(scr, (rect_t){4, 28, W - 8, H - 52}, GFX_RGB(0xF0, 0xF0, 0xF0));
+    gfx_draw_rect(scr, (rect_t){4, 28, W - 8, H - 52}, GFX_RGB(0x80, 0x80, 0x80));
+
+    /* Section label inside content area */
+    gfx_draw_text(scr, 12, 36, "libgfx canvas primitives:",
+                  GFX_RGB(0x20, 0x20, 0x60), GFX_RGB(0xF0, 0xF0, 0xF0));
+
+    /* 6 colour swatches with labels */
+    static const struct { int r, g, b; const char *name; } sw[6] = {
+        {0xC8, 0x28, 0x28, "Red"    },
+        {0x28, 0xC8, 0x28, "Green"  },
+        {0x28, 0x28, 0xC8, "Blue"   },
+        {0xC8, 0xC8, 0x28, "Yellow" },
+        {0xC8, 0x28, 0xC8, "Magenta"},
+        {0x28, 0xC8, 0xC8, "Cyan"   },
+    };
+    int i;
+    for (i = 0; i < 6; i++) {
+        int     sx  = 12 + i * 80;
+        color_t col = GFX_RGB(sw[i].r, sw[i].g, sw[i].b);
+        gfx_fill_rect(scr, (rect_t){sx, 56, 64, 32}, col);
+        gfx_draw_rect(scr, (rect_t){sx, 56, 64, 32}, GFX_RGB(0x40, 0x40, 0x40));
+        gfx_draw_text(scr, sx + 2, 92, sw[i].name,
+                      GFX_RGB(0x20, 0x20, 0x20), GFX_RGB(0xF0, 0xF0, 0xF0));
+    }
+
+    /* Grey status bar at the bottom */
+    gfx_fill_rect(scr, (rect_t){0, H - 20, W, 20}, GFX_RGB(0xA0, 0xA0, 0xA0));
+    gfx_draw_text(scr, 4, H - 16, "ring-3 user-space | libgfx | SYS_GFX_FLUSH",
+                  GFX_RGB(0x10, 0x10, 0x10), GFX_RGB(0xA0, 0xA0, 0xA0));
+
+    gfx_flush();
+    printf("gfx: scene rendered and flushed to framebuffer\r\n");
+    printf("=== done ===\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -1004,6 +1075,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "rename") == 0) cmd_rename_file(arg);
     else if (strcmp(cmd, "thread") == 0) cmd_thread();
     else if (strcmp(cmd, "mouse")  == 0) cmd_mouse();
+    else if (strcmp(cmd, "gfx")    == 0) cmd_gfx();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

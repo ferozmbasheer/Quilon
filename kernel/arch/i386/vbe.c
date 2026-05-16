@@ -36,6 +36,11 @@ static bool       vbe_ready = false;
  */
 static uint8_t *shadow_buf = NULL;
 
+/* Physical page addresses of the shadow buffer (for SYS_GFX_MAP). */
+#define SHADOW_MAX_PAGES 1024u  /* covers up to 4 MiB shadow buffer */
+static uint32_t shadow_phys[SHADOW_MAX_PAGES];
+static uint32_t shadow_npages = 0;
+
 /*
  * Dirty-row tracking: record the pixel-row range [dirty_y_min, dirty_y_max)
  * modified since the last vbe_flush().  vbe_flush() copies only that band,
@@ -415,6 +420,7 @@ bool vbe_init(const vbe_info_t *info)
      */
     {
         uint32_t shadow_pages = (bytes + (PAGE_SIZE - 1u)) / PAGE_SIZE;
+        if (shadow_pages > SHADOW_MAX_PAGES) shadow_pages = SHADOW_MAX_PAGES;
         uint32_t virt = VBE_SHADOW_VBASE;
         bool ok = true;
         for (uint32_t i = 0; i < shadow_pages; i++) {
@@ -427,6 +433,8 @@ bool vbe_init(const vbe_info_t *info)
             if (!pg) { ok = false; break; }
             paging_map_page_alloc(virt, (uint32_t)pg,
                                   PAGE_PRESENT | PAGE_WRITABLE);
+            shadow_phys[i] = (uint32_t)(uintptr_t)pg;
+            shadow_npages++;
             virt += PAGE_SIZE;
         }
         if (ok) {
@@ -449,6 +457,17 @@ bool vbe_active(void)
 const vbe_info_t *vbe_get_info(void)
 {
     return vbe_ready ? &vbe : (const vbe_info_t *)0;
+}
+
+uint32_t vbe_shadow_page_count(void)
+{
+    return shadow_npages;
+}
+
+uint32_t vbe_shadow_page_phys(uint32_t i)
+{
+    if (i >= shadow_npages) return 0;
+    return shadow_phys[i];
 }
 
 /* -- Graphical demo ------------------------------------------------------- */
