@@ -167,6 +167,8 @@ static void cursor_restore(int x, int y)
 static void cursor_paint(int x, int y)
 {
     if (!vbe_active()) return;
+    const vbe_info_t *info = vbe_get_info();
+    if (info->bpp != 32) return;   /* save/restore don't support 24-bpp */
     for (uint32_t row = 0; row < MOUSE_CURSOR_H; row++) {
         for (uint32_t col = 0; col < MOUSE_CURSOR_W; col++) {
             if (cursor_shape[row] & (0x80u >> col))
@@ -182,9 +184,14 @@ static void cursor_move(int nx, int ny)
 {
     if (!vbe_active()) return;
 
-    /* Restore the pixels that were under the old cursor position. */
-    if (cursor_drawn)
+    if (cursor_drawn) {
+        /* Write saved background pixels back into shadow_buf at the old
+         * position (direct write — fast, no dirty overhead per pixel), then
+         * tell the dirty tracker about those rows so vbe_flush copies them to
+         * the hardware framebuffer and erases the old cursor image there. */
         cursor_restore(cursor_prev_x, cursor_prev_y);
+        vbe_dirty_rows((uint32_t)cursor_prev_y, MOUSE_CURSOR_H);
+    }
 
     /* Save pixels at the new position, then draw the cursor. */
     cursor_save(nx, ny);
@@ -198,6 +205,12 @@ static void cursor_move(int nx, int ny)
     vbe_flush();
 }
 
+/* Repaint the cursor at its current position (called by the post-scroll hook). */
+static void mouse_cursor_redraw(void)
+{
+    cursor_move(mouse_x, mouse_y);
+}
+
 /* -- Public API ---------------------------------------------------------- */
 
 void mouse_initialize(void)
@@ -209,6 +222,7 @@ void mouse_initialize(void)
     ps2_send_cmd(0x20u);          /* request command byte */
     uint8_t cmd_byte = ps2_read_data();
     cmd_byte |= 0x02u;            /* bit 1 = auxiliary interrupt enable */
+    cmd_byte &= ~0x20u;           /* bit 5 = clear "auxiliary port disabled" flag */
     ps2_send_cmd(0x60u);          /* prepare to write command byte */
     ps2_send_data(cmd_byte);
 
@@ -227,6 +241,10 @@ void mouse_initialize(void)
     cursor_drawn  = 0;
     cursor_prev_x = mouse_x;
     cursor_prev_y = mouse_y;
+
+    /* Erase cursor before the scroll memmove; repaint it immediately after. */
+    vbe_set_scroll_hook(mouse_cursor_invalidate);
+    vbe_set_post_scroll_hook(mouse_cursor_redraw);
 
     /* Draw the initial cursor. */
     cursor_move(mouse_x, mouse_y);
@@ -248,12 +266,21 @@ void mouse_irq_handler(void)
 
     packet_cycle = 0;
 
-    /* Discard packets with overflow bits set (unreliable deltas). */
-    if (packet[0] & (MOUSE_X_OVERFLOW | MOUSE_Y_OVERFLOW))
-        return;
+    /* Saturate overflow packets to the 9-bit extremes rather than discarding
+     * them.  QEMU (and most hardware) clamps bytes 1/2 to ±255/256 when the
+     * overflow bits are set, so the sign bit correctly indicates direction. */
+    int dx, dy;
+    if (packet[0] & MOUSE_X_OVERFLOW)
+        dx = (packet[0] & MOUSE_X_SIGN) ? -256 : 255;
+    else
+        dx = mouse_packet_dx(packet);
 
-    int dx = mouse_packet_dx(packet);
-    int dy = mouse_packet_dy(packet);
+    if (packet[0] & MOUSE_Y_OVERFLOW)
+        /* mirror mouse_packet_dy's screen-space inversion: sign set = downward
+         * physical = positive screen Y, so raw = -256 → dy = +256. */
+        dy = (packet[0] & MOUSE_Y_SIGN) ? 256 : -255;
+    else
+        dy = mouse_packet_dy(packet);
     mouse_buttons = packet[0] & (MOUSE_BTN_LEFT | MOUSE_BTN_RIGHT | MOUSE_BTN_MIDDLE);
 
     /* Clamp cursor to screen bounds. */
@@ -272,5 +299,18 @@ void mouse_irq_handler(void)
 int     mouse_get_x(void)       { return mouse_x; }
 int     mouse_get_y(void)       { return mouse_y; }
 uint8_t mouse_get_buttons(void) { return mouse_buttons; }
+
+void mouse_cursor_invalidate(void)
+{
+    /* Erase the cursor from shadow_buf BEFORE the scroll memmove so that the
+     * cursor shape is not carried up the screen with the shifted content.
+     * dirty_mark_all() fires immediately after this hook, so we do not need
+     * to call vbe_dirty_rows here — the full-screen flush will cover it. */
+    if (cursor_drawn)
+        cursor_restore(cursor_prev_x, cursor_prev_y);
+    cursor_drawn = 0;
+    for (uint32_t i = 0; i < MOUSE_CURSOR_W * MOUSE_CURSOR_H; i++)
+        cursor_saved[i] = 0;
+}
 
 #endif /* __is_kernel */

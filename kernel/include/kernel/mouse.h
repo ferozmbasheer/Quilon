@@ -109,6 +109,17 @@ int mouse_get_x(void);
 int mouse_get_y(void);
 uint8_t mouse_get_buttons(void);
 
+/*
+ * mouse_cursor_invalidate -- erase the on-screen cursor from the shadow buffer.
+ *
+ * Restores the pixels that were saved under the cursor, marks cursor_drawn=0,
+ * and calls vbe_dirty_rows so vbe_flush picks up the erase.  Call this before
+ * any operation that rewrites shadow_buf in bulk (e.g. VBE terminal scroll),
+ * otherwise cursor_saved[] becomes stale and cursor_restore will write old
+ * pixels over the new content on the next mouse event.
+ */
+void mouse_cursor_invalidate(void);
+
 #endif /* __is_kernel */
 
 #endif /* _KERNEL_MOUSE_H */

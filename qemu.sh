@@ -23,6 +23,7 @@ if [ "$_needs_disk" = "1" ]; then
     ./create_disk.sh
 fi
 
+GDK_BACKEND=x11 \
 qemu-system-$(./target-triplet-to-arch.sh $HOST) \
     -boot order=d \
     -cdrom quilon.iso \
@@ -30,4 +31,5 @@ qemu-system-$(./target-triplet-to-arch.sh $HOST) \
     -device rtl8139,netdev=net0 \
     -netdev user,id=net0 \
     -smp 2 \
+    -display gtk \
     -serial stdio

@@ -262,6 +262,29 @@ static inline uint32_t vbe_term_rows(uint32_t height) { return height / VBE_FONT
  */
 void vbe_flush(void);
 
+/*
+ * vbe_dirty_rows -- mark a band of pixel rows as needing hardware flush.
+ *
+ * Expands [dirty_y_min, dirty_y_max) to include [y, y+count).
+ * Does NOT write any pixels.  Use this when you have already written to the
+ * shadow buffer directly (e.g. cursor erase) and need vbe_flush to pick up
+ * the change without the overhead of calling vbe_draw_pixel per pixel.
+ */
+void vbe_dirty_rows(uint32_t y, uint32_t count);
+
+/*
+ * vbe_set_scroll_hook -- register a callback invoked just before vbe_scroll_up.
+ * vbe_set_post_scroll_hook -- register a callback invoked just after vbe_scroll_up.
+ *
+ * The pre-hook lets the mouse driver erase the cursor from shadow_buf before
+ * the memmove so it is not carried up the screen with the scrolled content.
+ * The post-hook lets the mouse driver repaint the cursor immediately after
+ * the scroll completes, so it remains visible without waiting for a mouse IRQ.
+ * Pass NULL to clear either hook.
+ */
+void vbe_set_scroll_hook(void (*fn)(void));
+void vbe_set_post_scroll_hook(void (*fn)(void));
+
 /* -- Initialization ------------------------------------------------------ */
 
 /*

@@ -45,16 +45,39 @@ static uint8_t *shadow_buf = NULL;
 static uint32_t dirty_y_min = 0xFFFFFFFFu;
 static uint32_t dirty_y_max = 0u;
 
+/* Optional callbacks invoked before/after vbe_scroll_up() (registered by mouse driver). */
+static void (*pre_scroll_hook)(void)  = NULL;
+static void (*post_scroll_hook)(void) = NULL;
+
+void vbe_set_scroll_hook(void (*fn)(void))      { pre_scroll_hook  = fn; }
+void vbe_set_post_scroll_hook(void (*fn)(void)) { post_scroll_hook = fn; }
+
+/*
+ * dirty_mark / dirty_mark_all update two separate variables that together
+ * represent an interval.  On a single CPU, an IRQ (PIT at 100 Hz, mouse)
+ * can preempt between the two stores and leave dirty_y_min/dirty_y_max in
+ * an inconsistent state that causes vbe_flush to skip a frame.  Save and
+ * restore EFLAGS (which carries IF) around both stores to make the pair
+ * atomic against async IRQs.
+ */
 static inline void dirty_mark(uint32_t y)
 {
-    if (y < dirty_y_min) dirty_y_min = y;
+    uint32_t efl;
+    asm volatile("pushfl; pop %0" : "=r"(efl) :: "memory");
+    asm volatile("cli" ::: "memory");
+    if (y     < dirty_y_min) dirty_y_min = y;
     if (y + 1u > dirty_y_max) dirty_y_max = y + 1u;
+    asm volatile("push %0; popfl" :: "r"(efl) : "memory");
 }
 
 static inline void dirty_mark_all(void)
 {
+    uint32_t efl;
+    asm volatile("pushfl; pop %0" : "=r"(efl) :: "memory");
+    asm volatile("cli" ::: "memory");
     dirty_y_min = 0;
     dirty_y_max = vbe.height;
+    asm volatile("push %0; popfl" :: "r"(efl) : "memory");
 }
 
 /* Terminal state */
@@ -199,6 +222,11 @@ static void vbe_scroll_up(void)
     uint32_t row_b = vbe.pitch * fh;    /* bytes per text row */
     uint32_t total = row_b * (term_rows - 1u);
 
+    /* Give the mouse driver a chance to erase the on-screen cursor from
+     * shadow_buf before the memmove, so stale cursor_saved[] pixels are
+     * not written back over scrolled text on the next cursor_restore. */
+    if (pre_scroll_hook) pre_scroll_hook();
+
     /* memmove shifts the whole framebuffer -- mark entire screen dirty before
      * the move so vbe_flush() copies the full updated content.             */
     dirty_mark_all();
@@ -206,6 +234,9 @@ static void vbe_scroll_up(void)
 
     /* Clear the last text row. */
     vbe_fill_rect(0, (term_rows - 1u) * fh, vbe.width, fh, term_bg);
+
+    /* Let the mouse driver repaint the cursor now that shadow_buf is settled. */
+    if (post_scroll_hook) post_scroll_hook();
 }
 
 /* -- Terminal emulator ---------------------------------------------------- */
@@ -339,6 +370,16 @@ void vbe_flush(void)
            shadow_buf + off, size);
     dirty_y_min = 0xFFFFFFFFu;
     dirty_y_max = 0u;
+}
+
+void vbe_dirty_rows(uint32_t y, uint32_t count)
+{
+    if (!vbe_ready) return;
+    uint32_t y_end = y + count;
+    if (y >= vbe.height) return;
+    if (y_end > vbe.height) y_end = vbe.height;
+    if (y < dirty_y_min) dirty_y_min = y;
+    if (y_end > dirty_y_max) dirty_y_max = y_end;
 }
 
 /* -- Initialization ------------------------------------------------------- */
