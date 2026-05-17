@@ -1013,6 +1013,120 @@ static void shell_cmd_mouse(void)
     printf("=== done ===\r\n");
 }
 
+/* -- Section 14.2: Window Manager & Compositor demo --------------------- */
+
+static void shell_cmd_wm_demo(void)
+{
+    printf("=== Window Manager & Compositor (section 14.2) ===\r\n");
+
+    if (!vbe_active()) {
+        printf("VBE framebuffer not active -- text-mode summary only.\r\n\r\n");
+        printf("WM design (painter's algorithm, back-to-front):\r\n");
+        printf("  1. Fill desktop with background colour\r\n");
+        printf("  2. For each window (slot 0 = back, top = front):\r\n");
+        printf("       a. Draw title bar (focused=blue, unfocused=grey)\r\n");
+        printf("       b. Draw close button (red, right-aligned in title bar)\r\n");
+        printf("       c. Blit app back-buffer into content area\r\n");
+        printf("       d. Draw 1-px window border\r\n");
+        printf("  3. Draw mouse cursor on top of all windows\r\n");
+        printf("  4. gfx_flush() -- shadow -> physical framebuffer\r\n\r\n");
+        printf("WM state: wm_state_t holds up to %d windows.\r\n", 16);
+        printf("IPC:      apps write wm_msg_t to /wm_cmd pipe;\r\n");
+        printf("          WM writes wm_event_t to per-window event pipes.\r\n");
+        printf("Z-order:  wm_raise() rotates window to front slot;\r\n");
+        printf("          wm_hittest() iterates front-to-back for mouse clicks.\r\n");
+        printf("=== done (no VBE: graphical render skipped) ===\r\n");
+        return;
+    }
+
+    /* VBE is active: render a demonstration frame directly. */
+    const vbe_info_t *vi = vbe_get_info();
+    uint32_t sw = vi ? vi->width  : 800;
+    uint32_t sh = vi ? vi->height : 600;
+
+    /* Colour palette (0x00RRGGBB). */
+    uint32_t C_DESKTOP  = 0x001E1E3C;
+    uint32_t C_TBAR_FOC = 0x005050C8;
+    uint32_t C_TBAR_UNF = 0x003C3C3C;
+    uint32_t C_CLOSE    = 0x00C82828;
+    uint32_t C_BORDER   = 0x00646464;
+    uint32_t C_WHITE    = 0x00FFFFFF;
+    uint32_t C_BLACK    = 0x00000000;
+    uint32_t C_GREEN    = 0x0000C800;
+
+    /* 1. Desktop background. */
+    vbe_fill_rect(0, 0, sw, sh, C_DESKTOP);
+
+    /* Helper lambda-like struct: define 3 demo windows. */
+    struct { uint32_t x, y, w, h; int focused; const char *title; } wins[] = {
+        { 60,  80,  240, 120, 0, "About Quilon" },
+        { 320, 60,  280, 180, 0, "Terminal"     },
+        { 160, 310, 160,  40, 1, "Clock"        },
+    };
+    int nwins = 3;
+    uint32_t TH = 20;  /* TITLEBAR_H */
+
+    int i;
+    for (i = 0; i < nwins; i++) {
+        uint32_t x = wins[i].x, y = wins[i].y;
+        uint32_t w = wins[i].w, h = wins[i].h;
+        uint32_t tc = wins[i].focused ? C_TBAR_FOC : C_TBAR_UNF;
+
+        /* Title bar. */
+        vbe_fill_rect(x, y - TH, w, TH, tc);
+        vbe_draw_string(x + 4, y - TH + 2, wins[i].title, C_WHITE, tc);
+
+        /* Close button. */
+        uint32_t cbx = x + w - 18;
+        uint32_t cby = y - TH + 2;
+        vbe_fill_rect(cbx, cby, 16, 16, C_CLOSE);
+        vbe_draw_string(cbx + 4, cby + 2, "x", C_WHITE, C_CLOSE);
+
+        /* Content area placeholder. */
+        vbe_fill_rect(x, y, w, h, C_BLACK);
+        if (i == 1)  /* Terminal window */
+            vbe_draw_string(x + 4, y + 4, "quilon> _", C_GREEN, C_BLACK);
+        else if (i == 2)  /* Clock */
+            vbe_draw_string(x + 40, y + 12, "00:00:00", 0x0000FF80, C_BLACK);
+        else
+            vbe_draw_string(x + 8, y + 8, "Quilon OS WM 14.2", C_WHITE, C_BLACK);
+
+        /* Border: top of full window (including title bar) and sides/bottom. */
+        /* Top. */
+        vbe_fill_rect(x, y - TH, w, 1, C_BORDER);
+        /* Bottom. */
+        vbe_fill_rect(x, y + h - 1, w, 1, C_BORDER);
+        /* Left. */
+        vbe_fill_rect(x, y - TH, 1, TH + h, C_BORDER);
+        /* Right. */
+        vbe_fill_rect(x + w - 1, y - TH, 1, TH + h, C_BORDER);
+    }
+
+    /* 3. Mouse cursor (8×8 arrow, solid white). */
+    uint32_t mx = sw / 2, my = sh / 2;
+    uint8_t cursor_rows[8] = {0xFE,0xFC,0xF8,0xF0,0xE0,0xC0,0x80,0x00};
+    uint32_t r;
+    for (r = 0; r < 8; r++) {
+        uint32_t c;
+        for (c = 0; c < 8; c++) {
+            if (cursor_rows[r] & (0x80u >> c))
+                vbe_draw_pixel(mx + c, my + r, C_WHITE);
+        }
+    }
+
+    vbe_flush();
+
+    printf("WM demo frame rendered (%d windows, %ux%u screen).\r\n",
+           nwins, (unsigned)sw, (unsigned)sh);
+    printf("Algorithm: painter (back-to-front), double-buffered flush.\r\n");
+    printf("Press any key...\r\n");
+    keyboard_getchar();
+
+    /* Restore terminal. */
+    vbe_terminal_init();
+    printf("=== done ===\r\n");
+}
+
 static void shell_cmd_waitq(void)
 {
     printf("Wait queue demo (section 12.2):\r\n");
@@ -1052,6 +1166,7 @@ static void shell_execute(const char *cmd) {
         printf("          thread                 - kernel thread demo      (section 12.3)\r\n");
         printf("          mouse                  - PS/2 mouse position     (section 13)\r\n");
         printf("          gfx                    - 2D graphics lib demo    (section 14.1)\r\n");
+        printf("          wm-demo                - WM compositor demo      (section 14.2)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -1149,6 +1264,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_mouse();
     } else if (strcmp(cmd, "gfx") == 0) {
         shell_cmd_gfx();
+    } else if (strcmp(cmd, "wm-demo") == 0) {
+        shell_cmd_wm_demo();
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

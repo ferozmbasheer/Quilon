@@ -109,6 +109,7 @@ static void cmd_help(void)
     printf("  thread                 - kernel thread demo (SYS_CLONE, section 12.3)\r\n");
     printf("  mouse                  - PS/2 mouse position and buttons (section 13)\r\n");
     printf("  gfx                    - 2D graphics lib demo (section 14.1)\r\n");
+    printf("  wm-demo                - WM compositor demo   (section 14.2)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -1004,6 +1005,104 @@ static void cmd_gfx(void)
     printf("=== done ===\r\n");
 }
 
+/* -- Section 14.2: Window Manager & Compositor demo -------------------- */
+
+static void cmd_wm_demo(void)
+{
+    printf("=== Window Manager & Compositor Demo (section 14.2) ===\r\n");
+
+    gfx_info_t info;
+    canvas_t  *scr = gfx_screen_init(&info);
+    if (!scr) {
+        printf("wm-demo: VBE not active or framebuffer map failed\r\n");
+        printf("\r\nWM design summary:\r\n");
+        printf("  wm_state_t  -- window list (up to 16 windows)\r\n");
+        printf("  wm_composite() -- painter's algorithm (back-to-front)\r\n");
+        printf("  wm_hittest()   -- front-to-back to find click target\r\n");
+        printf("  wm_raise()     -- rotate window to top of z-order\r\n");
+        printf("  wm_handle_mouse_down/move/up() -- drag & focus\r\n");
+        printf("  IPC: apps write wm_msg_t to /wm_cmd pipe\r\n");
+        printf("=== done ===\r\n");
+        return;
+    }
+
+    int W = (int)info.width;
+    int H = (int)info.height;
+    printf("screen: %ux%u\r\n", (unsigned)info.width, (unsigned)info.height);
+
+    /* -- Desktop background -- */
+    gfx_fill(scr, GFX_RGB(30, 30, 60));
+
+    /* -- Simulate 3 windows using libgfx primitives -- */
+
+    /* Window layout */
+    struct {
+        int x, y, w, h, focused;
+        const char *title;
+        color_t content_col;
+        const char *content_text;
+    } wins[] = {
+        { 60,  80,  240, 120, 0, "About Quilon",
+          GFX_RGB(20,20,40),   "Quilon OS WM 14.2"  },
+        { 320, 60,  280, 180, 0, "Terminal",
+          GFX_BLACK,            "quilon> _"          },
+        { 160, 310, 160,  40, 1, "Clock",
+          GFX_RGB(10,10,10),   "00:00:00"           },
+    };
+    int TITLEBAR_H_demo = 20;
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        int  x  = wins[i].x, y = wins[i].y;
+        int  w  = wins[i].w, h = wins[i].h;
+        int  tb_y = y - TITLEBAR_H_demo;
+
+        color_t tbar = wins[i].focused ? GFX_RGB(80,80,200) : GFX_RGB(60,60,60);
+
+        /* Title bar */
+        gfx_fill_rect(scr, (rect_t){x, tb_y, w, TITLEBAR_H_demo}, tbar);
+        gfx_draw_text(scr, x + 4, tb_y + 2, wins[i].title,
+                      GFX_WHITE, tbar);
+
+        /* Close button (right side of title bar) */
+        int cbx = x + w - 18;
+        int cby = tb_y + 2;
+        gfx_fill_rect(scr, (rect_t){cbx, cby, 16, 16}, GFX_RED);
+        gfx_draw_text(scr, cbx + 4, cby + 2, "x", GFX_WHITE, GFX_RED);
+
+        /* Content area */
+        gfx_fill_rect(scr, (rect_t){x, y, w, h}, wins[i].content_col);
+        color_t fg = wins[i].focused ? GFX_RGB(0, 255, 128) : GFX_WHITE;
+        gfx_draw_text(scr, x + 8, y + 12, wins[i].content_text,
+                      fg, wins[i].content_col);
+
+        /* Border (wraps title bar + content) */
+        gfx_draw_rect(scr, (rect_t){x, tb_y, w, TITLEBAR_H_demo + h},
+                      GFX_RGB(100, 100, 100));
+    }
+
+    /* -- Mouse cursor at screen centre (8×8 arrow sprite) -- */
+    int mx = W / 2, my = H / 2;
+    static const uint8_t cshape[8] = {0xFE,0xFC,0xF8,0xF0,0xE0,0xC0,0x80,0x00};
+    int r, c;
+    for (r = 0; r < 8; r++)
+        for (c = 0; c < 8; c++)
+            if ((cshape[r] & (0x80u >> c)) && mx+c < W && my+r < H)
+                scr->pixels[(my+r) * scr->pitch + (mx+c)] = GFX_WHITE;
+
+    /* -- Status bar -- */
+    gfx_fill_rect(scr, (rect_t){0, H - 18, W, 18}, GFX_RGB(50, 50, 50));
+    gfx_draw_text(scr, 4, H - 14,
+                  "wm-demo | painter compositor | 3 windows | section 14.2",
+                  GFX_RGB(200, 200, 200), GFX_RGB(50, 50, 50));
+
+    gfx_flush();
+    printf("wm-demo: frame composited (%d windows, %ux%u)\r\n", 3,
+           (unsigned)info.width, (unsigned)info.height);
+    printf("         run 'exec wm.elf' to launch the live WM process\r\n");
+    printf("=== done ===\r\n");
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -1075,7 +1174,8 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "rename") == 0) cmd_rename_file(arg);
     else if (strcmp(cmd, "thread") == 0) cmd_thread();
     else if (strcmp(cmd, "mouse")  == 0) cmd_mouse();
-    else if (strcmp(cmd, "gfx")    == 0) cmd_gfx();
+    else if (strcmp(cmd, "gfx")     == 0) cmd_gfx();
+    else if (strcmp(cmd, "wm-demo") == 0) cmd_wm_demo();
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

@@ -38,10 +38,12 @@ LDFLAGS = -m32 -ffreestanding -nostdlib -fno-pie -T link.ld
 LDLIBS  = -L$(LIBGFX_DIR) -lgfx -L$(LIBC_DIR) -lc -lgcc
 
 # ── Auto-discover C programs ──────────────────────────────────────────────────
-# Scan for */main.c, strip the filename, exclude libc/.
-PROG_DIRS := $(filter-out libc,$(patsubst %/main.c,%,$(wildcard */main.c)))
-# Each dir produces <dir>/<dir>.elf
-PROG_ELFS := $(foreach d,$(PROG_DIRS),$(d)/$(d).elf)
+# Scan for */main.c, strip the filename, exclude libc/ and wm/ (wm has a
+# custom link rule below because it requires wm_compositor.o in addition to
+# main.o).
+PROG_DIRS := $(filter-out libc wm,$(patsubst %/main.c,%,$(wildcard */main.c)))
+# Each dir produces <dir>/<dir>.elf; wm is added manually (custom rule below).
+PROG_ELFS := $(foreach d,$(PROG_DIRS),$(d)/$(d).elf) wm/wm.elf
 
 # Assembly demo: lives at user/hello.S, defines its own _start, no libc.
 ASM_ELFS = hello.elf
@@ -88,10 +90,18 @@ $(foreach d,$(PROG_DIRS),$(eval $(call PROG_link,$(d))))
 disk: all
 	python3 ../tools/make_disk.py $(DISK) $(ASM_ELFS) $(PROG_ELFS)
 
+# ── WM override: extra compilation unit (wm_compositor.c) ────────────────────
+# The auto-generated rule only links main.o; wm needs wm_compositor.o too.
+wm/wm_compositor.o: wm/wm_compositor.c wm/wm.h
+	$(CC) $(CFLAGS) -Iwm -c -o $@ wm/wm_compositor.c
+
+wm/wm.elf: $(CRT0_O) wm/main.o wm/wm_compositor.o $(LIBGFX_A) $(LIBC_A) link.ld
+	$(CC) $(LDFLAGS) -o $@ $(CRT0_O) wm/main.o wm/wm_compositor.o $(LDLIBS)
+
 # ── Clean ─────────────────────────────────────────────────────────────────────
 PROG_OBJS := $(foreach d,$(PROG_DIRS),$(d)/main.o)
 
 clean:
 	$(MAKE) -C $(LIBC_DIR) clean
 	$(MAKE) -C $(LIBGFX_DIR) clean
-	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS)
+	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) wm/wm_compositor.o

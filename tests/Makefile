@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm
 
 .PHONY: all build run clean help
 
@@ -362,6 +362,19 @@ $(BINDIR)/test_gfx: test_gfx.c framework.h \
                     ../user/libgfx/include/gfx.h
 	$(CC) $(CFLAGS) -I../user/libgfx/include -I../user/libc/include \
 	    -o $@ test_gfx.c ../user/libgfx/gfx.c
+
+# Window Manager & Compositor tests (section 14.2)
+# wm.h contains all pure-logic inline functions (no syscalls, no hardware).
+# wm_compositor.c provides wm_composite() and wm_draw_cursor() — these call
+# libgfx so we link gfx.c alongside.  main.c is NOT linked (contains main()).
+$(BINDIR)/test_wm: test_wm.c framework.h \
+                   ../user/wm/wm.h \
+                   ../user/wm/wm_compositor.c \
+                   ../user/libgfx/gfx.c \
+                   ../user/libgfx/include/gfx.h
+	$(CC) $(CFLAGS) -I../user/libgfx/include -I../user/libc/include \
+	    -I../user/wm \
+	    -o $@ test_wm.c ../user/wm/wm_compositor.c ../user/libgfx/gfx.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 
