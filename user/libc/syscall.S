@@ -354,6 +354,20 @@ clone:
     popl  %ebx
     ret
 
+/* -- dup2(int oldfd, int newfd) -> int -------------------------------------- */
+/* SYS_DUP2 (34): redirect fd 0, 1, or 2 to an existing pipe fd.             */
+/* oldfd = EBX (existing pipe fd), newfd = ECX (0=stdin, 1/2=stdout/stderr). */
+/* Returns 0 on success, -1 on error.                                         */
+.global dup2
+dup2:
+    pushl %ebx
+    movl  $34,       %eax    /* SYS_DUP2 */
+    movl  8(%esp),   %ebx    /* oldfd */
+    movl  12(%esp),  %ecx    /* newfd */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- mouse_read(mouse_event_t *out) -> int ---------------------------------- */
 /* SYS_MOUSE_READ (33): fill *out with current mouse position and buttons.    */
 /* Returns 1 on success, -1 if out is NULL.                                   */

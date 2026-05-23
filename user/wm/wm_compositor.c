@@ -89,3 +89,24 @@ void wm_composite(wm_state_t *s, canvas_t *screen)
     /* 3. Cursor on top of everything. */
     wm_draw_cursor(screen, s->mouse_x, s->mouse_y);
 }
+
+/* ── Taskbar ─────────────────────────────────────────────────────────────── */
+
+void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
+                     const char **labels, int nlabels, int btn_w)
+{
+    int i;
+    int ty = sh - taskbar_h;
+
+    /* Bar background. */
+    gfx_fill_rect(screen, (rect_t){0, ty, sw, taskbar_h}, GFX_RGB(40,40,40));
+
+    /* One button per app. */
+    for (i = 0; i < nlabels; i++) {
+        int bx = i * btn_w;
+        gfx_fill_rect(screen, (rect_t){bx + 1, ty + 2, btn_w - 2, taskbar_h - 4},
+                      GFX_RGB(70, 70, 100));
+        gfx_draw_text(screen, bx + 6, ty + 6, labels[i],
+                      GFX_WHITE, GFX_RGB(70, 70, 100));
+    }
+}

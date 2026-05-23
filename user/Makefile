@@ -38,11 +38,10 @@ LDFLAGS = -m32 -ffreestanding -nostdlib -fno-pie -T link.ld
 LDLIBS  = -L$(LIBGFX_DIR) -lgfx -L$(LIBC_DIR) -lc -lgcc
 
 # ── Auto-discover C programs ──────────────────────────────────────────────────
-# Scan for */main.c, strip the filename, exclude libc/ and wm/ (wm has a
-# custom link rule below because it requires wm_compositor.o in addition to
-# main.o).
+# Scan for */main.c, strip the filename, exclude libc/ and wm/
+# (wm has a custom link rule below that bundles all graphical apps).
 PROG_DIRS := $(filter-out libc wm,$(patsubst %/main.c,%,$(wildcard */main.c)))
-# Each dir produces <dir>/<dir>.elf; wm is added manually (custom rule below).
+# Each dir produces <dir>/<dir>.elf; wm is added manually.
 PROG_ELFS := $(foreach d,$(PROG_DIRS),$(d)/$(d).elf) wm/wm.elf
 
 # Assembly demo: lives at user/hello.S, defines its own _start, no libc.
@@ -75,9 +74,6 @@ hello.elf: hello.o link.ld
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # ── Per-program link rule (generated for each discovered directory) ────────────
-# Expands to, e.g.:
-#   shell/shell.elf: $(CRT0_O) shell/main.o $(LIBGFX_A) $(LIBC_A) link.ld
-#       $(CC) $(LDFLAGS) -o $@ $(CRT0_O) shell/main.o $(LDLIBS)
 define PROG_link
 $(1)/$(1).elf: $$(CRT0_O) $(1)/main.o $$(LIBGFX_A) $$(LIBC_A) link.ld
 	$$(CC) $$(LDFLAGS) -o $$@ $$(CRT0_O) $(1)/main.o $$(LDLIBS)
@@ -85,18 +81,40 @@ endef
 $(foreach d,$(PROG_DIRS),$(eval $(call PROG_link,$(d))))
 
 # ── Disk image ────────────────────────────────────────────────────────────────
-# Writes the assembly demo and every auto-discovered ELF into $(DISK).
-# To add a new program to the disk: just create user/<name>/main.c.
 disk: all
 	python3 ../tools/make_disk.py $(DISK) $(ASM_ELFS) $(PROG_ELFS)
 
-# ── WM override: extra compilation unit (wm_compositor.c) ────────────────────
-# The auto-generated rule only links main.o; wm needs wm_compositor.o too.
-wm/wm_compositor.o: wm/wm_compositor.c wm/wm.h
-	$(CC) $(CFLAGS) -Iwm -c -o $@ wm/wm_compositor.c
+# ── WM: bundles the compositor + all graphical apps into one ELF ─────────────
+# Apps are clone(CLONE_VM) threads; no IPC needed — they share WM heap.
 
-wm/wm.elf: $(CRT0_O) wm/main.o wm/wm_compositor.o $(LIBGFX_A) $(LIBC_A) link.ld
-	$(CC) $(LDFLAGS) -o $@ $(CRT0_O) wm/main.o wm/wm_compositor.o $(LDLIBS)
+WM_CFLAGS = $(CFLAGS) -Iwm
+
+wm/main.o: wm/main.c wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ wm/main.c
+
+wm/wm_compositor.o: wm/wm_compositor.c wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ wm/wm_compositor.c
+
+gterm/gterm_app.o: gterm/gterm_app.c gterm/gterm.h wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ gterm/gterm_app.c
+
+clock/clock_app.o: clock/clock_app.c wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ clock/clock_app.c
+
+filebr/filebr_app.o: filebr/filebr_app.c wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ filebr/filebr_app.c
+
+textview/textview_app.o: textview/textview_app.c wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ textview/textview_app.c
+
+WM_OBJS = wm/main.o wm/wm_compositor.o \
+          gterm/gterm_app.o \
+          clock/clock_app.o \
+          filebr/filebr_app.o \
+          textview/textview_app.o
+
+wm/wm.elf: $(CRT0_O) $(WM_OBJS) $(LIBGFX_A) $(LIBC_A) link.ld
+	$(CC) $(LDFLAGS) -o $@ $(CRT0_O) $(WM_OBJS) $(LDLIBS)
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 PROG_OBJS := $(foreach d,$(PROG_DIRS),$(d)/main.o)
@@ -104,4 +122,4 @@ PROG_OBJS := $(foreach d,$(PROG_DIRS),$(d)/main.o)
 clean:
 	$(MAKE) -C $(LIBC_DIR) clean
 	$(MAKE) -C $(LIBGFX_DIR) clean
-	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) wm/wm_compositor.o
+	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) $(WM_OBJS)

@@ -110,6 +110,7 @@ static void cmd_help(void)
     printf("  mouse                  - PS/2 mouse position and buttons (section 13)\r\n");
     printf("  gfx                    - 2D graphics lib demo (section 14.1)\r\n");
     printf("  wm-demo                - WM compositor demo   (section 14.2)\r\n");
+    printf("  startx                 - launch the graphical desktop (section 14.3)\r\n");
     printf("  exit                   - exit the shell\r\n");
 }
 
@@ -1176,6 +1177,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "mouse")  == 0) cmd_mouse();
     else if (strcmp(cmd, "gfx")     == 0) cmd_gfx();
     else if (strcmp(cmd, "wm-demo") == 0) cmd_wm_demo();
+    else if (strcmp(cmd, "startx") == 0) cmd_exec("/wm.elf");
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

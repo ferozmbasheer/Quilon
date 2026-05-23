@@ -677,6 +677,89 @@ static void test_title_truncation(void)
               "title NUL-terminated within WM_TITLE_LEN");
 }
 
+/* ── Event queue ─────────────────────────────────────────────────────────── */
+
+static void test_evqueue_empty(void)
+{
+    wm_evqueue_t q;
+    q.head = q.tail = 0;
+
+    wm_event_t ev;
+    ASSERT_EQ(0, wm_evqueue_poll(&q, &ev), "poll on empty returns 0");
+}
+
+static void test_evqueue_push_poll(void)
+{
+    wm_evqueue_t q;
+    q.head = q.tail = 0;
+
+    wm_event_t in;
+    in.type    = WM_EV_KEY;
+    in.ascii   = 'A';
+    in.x = in.y = in.buttons = 0;
+    wm_evqueue_push(&q, in);
+
+    wm_event_t out;
+    ASSERT_EQ(1, wm_evqueue_poll(&q, &out), "poll returns 1 after push");
+    ASSERT_EQ((int)WM_EV_KEY, (int)out.type, "type preserved");
+    ASSERT_EQ((int)'A', (int)out.ascii,      "ascii preserved");
+    ASSERT_EQ(0, wm_evqueue_poll(&q, &out),  "queue empty after poll");
+}
+
+static void test_evqueue_fifo_order(void)
+{
+    wm_evqueue_t q;
+    q.head = q.tail = 0;
+
+    wm_event_t ev;
+    ev.x = ev.y = ev.buttons = 0;
+    ev.type = WM_EV_KEY; ev.ascii = '1'; wm_evqueue_push(&q, ev);
+    ev.type = WM_EV_KEY; ev.ascii = '2'; wm_evqueue_push(&q, ev);
+    ev.type = WM_EV_KEY; ev.ascii = '3'; wm_evqueue_push(&q, ev);
+
+    wm_evqueue_poll(&q, &ev); ASSERT_EQ((int)'1', (int)ev.ascii, "first out is '1'");
+    wm_evqueue_poll(&q, &ev); ASSERT_EQ((int)'2', (int)ev.ascii, "second out is '2'");
+    wm_evqueue_poll(&q, &ev); ASSERT_EQ((int)'3', (int)ev.ascii, "third out is '3'");
+    ASSERT_EQ(0, wm_evqueue_poll(&q, &ev),                       "empty after 3 pops");
+}
+
+static void test_evqueue_overflow_drops(void)
+{
+    wm_evqueue_t q;
+    q.head = q.tail = 0;
+
+    wm_event_t ev;
+    ev.type = WM_EV_KEY; ev.x = ev.y = ev.buttons = 0;
+
+    /* Fill to WM_EVQUEUE_DEPTH - 1 (ring buffer can hold DEPTH-1 items). */
+    int i;
+    for (i = 0; i < WM_EVQUEUE_DEPTH - 1; i++) {
+        ev.ascii = (char)(i & 0x7F);
+        wm_evqueue_push(&q, ev);
+    }
+    /* One more push should be silently dropped. */
+    ev.ascii = 0x7E;
+    wm_evqueue_push(&q, ev);
+
+    /* Count how many we can pop. */
+    int count = 0;
+    while (wm_evqueue_poll(&q, &ev)) count++;
+    ASSERT_EQ(WM_EVQUEUE_DEPTH - 1, count, "overflow drops the extra event");
+}
+
+static void test_evqueue_window_has_clean_queue(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 600);
+    int id = wm_create_window(&s, "T", 0, 50, 100, 80);
+    window_t *w = wm_find_window(&s, id);
+    ASSERT_NOTNULL(w, "window allocated");
+
+    wm_event_t ev;
+    ASSERT_EQ(0, wm_evqueue_poll(&w->events, &ev),
+              "fresh window event queue is empty");
+}
+
 /* ── Entry point ─────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -714,6 +797,12 @@ int main(void)
     RUN_SUITE(test_cursor_clip);
 
     RUN_SUITE(test_title_truncation);
+
+    RUN_SUITE(test_evqueue_empty);
+    RUN_SUITE(test_evqueue_push_poll);
+    RUN_SUITE(test_evqueue_fifo_order);
+    RUN_SUITE(test_evqueue_overflow_drops);
+    RUN_SUITE(test_evqueue_window_has_clean_queue);
 
     TEST_SUMMARY();
 }

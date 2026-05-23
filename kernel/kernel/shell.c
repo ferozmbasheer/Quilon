@@ -1167,6 +1167,7 @@ static void shell_execute(const char *cmd) {
         printf("          mouse                  - PS/2 mouse position     (section 13)\r\n");
         printf("          gfx                    - 2D graphics lib demo    (section 14.1)\r\n");
         printf("          wm-demo                - WM compositor demo      (section 14.2)\r\n");
+        printf("          startx                 - launch graphical desktop (section 14.3)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -1266,6 +1267,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_gfx();
     } else if (strcmp(cmd, "wm-demo") == 0) {
         shell_cmd_wm_demo();
+    } else if (strcmp(cmd, "startx") == 0) {
+        shell_cmd_exec("/wm.elf");
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

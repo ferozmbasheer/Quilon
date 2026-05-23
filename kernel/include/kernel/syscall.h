@@ -47,6 +47,7 @@
 #define SYS_RENAME  31  /* rename(oldpath, newpath) -> 0 or -1                      */
 #define SYS_CLONE   32  /* clone(fn, stack, flags) -> tid or -1                     */
 #define SYS_MOUSE_READ 33 /* mouse_read(mouse_event_t *out) -> 1 if event, 0 if none */
+#define SYS_DUP2    34  /* dup2(oldfd, newfd) -> 0 or -1 (newfd must be 0, 1, or 2) */
 #define SYS_GFX_INFO   40 /* gfx_info(gfx_info_t *out) -> 0 on success, -1 if no VBE */
 #define SYS_GFX_MAP    41 /* gfx_map() -> user-space VA of shadow buffer, or -1        */
 #define SYS_GFX_FLUSH  42 /* gfx_flush() -> 0; copies shadow buffer to hw framebuffer  */

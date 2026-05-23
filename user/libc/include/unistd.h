@@ -50,6 +50,7 @@
 #define SYS_RENAME  31  /* rename(oldpath, newpath) -> 0 or -1               */
 #define SYS_CLONE      32  /* clone(fn, stack, flags) -> tid or -1            */
 #define SYS_MOUSE_READ 33  /* mouse_read(mouse_event_t *) -> 1 or -1          */
+#define SYS_DUP2       34  /* dup2(oldfd, newfd) -> 0 or -1 (newfd: 0, 1, 2) */
 #define SYS_GFX_INFO   40  /* gfx_info(gfx_info_t *out) -> 0 or -1           */
 #define SYS_GFX_MAP    41  /* gfx_map() -> user VA of shadow buffer, or -1   */
 #define SYS_GFX_FLUSH  42  /* gfx_flush() -> 0; shadow buf -> hw framebuffer */
@@ -69,6 +70,7 @@ int  write(int fd, const void *buf, int len);
 int  read(int fd, void *buf, int len);
 int  open(const char *path);
 int  close(int fd);
+int  dup2(int oldfd, int newfd);  /* SYS_DUP2 -- redirect fd 0/1/2 to pipe */
 
 /* -- Process control ---------------------------------------------------- */
 int  getpid(void);

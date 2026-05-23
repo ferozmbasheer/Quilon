@@ -44,35 +44,6 @@
 #define WM_CLOSE_COL        GFX_RED
 #define WM_BORDER_COL       GFX_RGB(100, 100, 100)
 
-/* ── Window descriptor ─────────────────────────────────────────────────── */
-
-typedef struct {
-    int        id;                 /* unique ID (≥ 1); 0 = slot unused   */
-    rect_t     bounds;             /* content area: (x, y, w, h)         */
-    char       title[WM_TITLE_LEN];
-    canvas_t  *backbuf;           /* app draws here; NULL until assigned */
-    int        focused;            /* 1 = has keyboard focus              */
-    int        active;             /* 1 = slot occupied                   */
-    int        dirty;              /* 1 = backbuf has new pixels          */
-    int        evt_fd;             /* per-window event pipe fd, or -1     */
-} window_t;
-
-/* ── WM state ──────────────────────────────────────────────────────────── */
-
-typedef struct {
-    window_t windows[WM_MAX_WINDOWS];
-    int      num_windows;   /* active windows in slots 0…num_windows-1   */
-    int      next_id;       /* monotonically increasing ID counter        */
-    int      screen_w;
-    int      screen_h;
-    int      mouse_x;
-    int      mouse_y;
-    uint8_t  mouse_buttons;
-    int      drag_win_id;   /* ID of window being dragged, -1 = none     */
-    int      drag_ox;       /* cursor X offset within titlebar on drag   */
-    int      drag_oy;       /* cursor Y offset within titlebar on drag   */
-} wm_state_t;
-
 /* ── Event types (WM → app) ────────────────────────────────────────────── */
 
 typedef enum {
@@ -91,24 +62,61 @@ typedef struct {
     char         ascii;
 } wm_event_t;
 
-/* ── Command types (app → WM) ──────────────────────────────────────────── */
+/* ── Event queue (SPSC ring buffer — WM writes, app thread reads) ──────── */
 
-typedef enum {
-    WM_MSG_CREATE  = 1,
-    WM_MSG_DESTROY = 2,
-    WM_MSG_DIRTY   = 3,
-} wm_msg_type_t;
+#define WM_EVQUEUE_DEPTH  64
 
 typedef struct {
-    wm_msg_type_t type;
-    int           id;
-    int           x, y, w, h;
-    char          title[WM_TITLE_LEN];
-} wm_msg_t;
+    volatile int head;                   /* WM increments after writing  */
+    volatile int tail;                   /* app increments after reading */
+    wm_event_t   buf[WM_EVQUEUE_DEPTH];
+} wm_evqueue_t;
 
-/* IPC paths used by wm_client */
-#define WM_CMD_PATH   "/wm_cmd"
-#define WM_EVT_PATH   "/wm_evt"
+static inline void wm_evqueue_push(wm_evqueue_t *q, wm_event_t ev)
+{
+    int next = (q->head + 1) % WM_EVQUEUE_DEPTH;
+    if (next == q->tail) return;         /* full — drop the event         */
+    q->buf[q->head] = ev;
+    q->head = next;
+}
+
+static inline int wm_evqueue_poll(wm_evqueue_t *q, wm_event_t *out)
+{
+    if (q->tail == q->head) return 0;
+    *out = q->buf[q->tail];
+    q->tail = (q->tail + 1) % WM_EVQUEUE_DEPTH;
+    return 1;
+}
+
+/* ── Window descriptor ─────────────────────────────────────────────────── */
+
+typedef struct wm_window_ {
+    int            id;               /* unique ID (≥ 1); 0 = slot unused   */
+    rect_t         bounds;           /* content area: (x, y, w, h)         */
+    char           title[WM_TITLE_LEN];
+    canvas_t      *backbuf;         /* app draws here; NULL until assigned */
+    int            focused;          /* 1 = has keyboard focus              */
+    int            active;           /* 1 = slot occupied                   */
+    int            dirty;            /* 1 = backbuf has new pixels          */
+    wm_evqueue_t   events;           /* WM → app keyboard / mouse events    */
+    void         (*app_fn)(struct wm_window_ *); /* launch fn, or NULL     */
+} window_t;
+
+/* ── WM state ──────────────────────────────────────────────────────────── */
+
+typedef struct {
+    window_t windows[WM_MAX_WINDOWS];
+    int      num_windows;   /* active windows in slots 0…num_windows-1   */
+    int      next_id;       /* monotonically increasing ID counter        */
+    int      screen_w;
+    int      screen_h;
+    int      mouse_x;
+    int      mouse_y;
+    uint8_t  mouse_buttons;
+    int      drag_win_id;   /* ID of window being dragged, -1 = none     */
+    int      drag_ox;       /* cursor X offset within titlebar on drag   */
+    int      drag_oy;       /* cursor Y offset within titlebar on drag   */
+} wm_state_t;
 
 /* ======================================================================== *
  * Pure-logic inline helpers — no hardware, no syscalls, host-testable.     *
@@ -180,10 +188,14 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
 {
     int i;
     for (i = 0; i < WM_MAX_WINDOWS; i++) {
-        s->windows[i].id     = 0;
-        s->windows[i].active = 0;
-        s->windows[i].dirty  = 0;
-        s->windows[i].evt_fd = -1;
+        s->windows[i].id          = 0;
+        s->windows[i].active      = 0;
+        s->windows[i].dirty       = 0;
+        s->windows[i].focused     = 0;
+        s->windows[i].backbuf     = (canvas_t *)0;
+        s->windows[i].app_fn      = (void (*)(struct wm_window_ *))0;
+        s->windows[i].events.head = 0;
+        s->windows[i].events.tail = 0;
     }
     s->num_windows   = 0;
     s->next_id       = 1;
@@ -214,11 +226,13 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
     win->bounds.y = y;
     win->bounds.w = w < WM_MIN_W ? WM_MIN_W : w;
     win->bounds.h = h < WM_MIN_H ? WM_MIN_H : h;
-    win->focused  = 0;
-    win->active   = 1;
-    win->dirty    = 1;
-    win->backbuf  = (canvas_t *)0;
-    win->evt_fd   = -1;
+    win->focused      = 0;
+    win->active       = 1;
+    win->dirty        = 1;
+    win->backbuf      = (canvas_t *)0;
+    win->app_fn       = (void (*)(struct wm_window_ *))0;
+    win->events.head  = 0;
+    win->events.tail  = 0;
 
     /* Copy title — avoid string.h dependency. */
     for (i = 0; i < WM_TITLE_LEN - 1 && title && title[i]; i++)
@@ -403,12 +417,14 @@ static inline void wm_handle_mouse_up(wm_state_t *s)
     s->drag_win_id   = -1;
 }
 
-/* ── Compositor declarations ────────────────────────────────────────────── *
- * Implemented in user/wm/main.c (uses libgfx) and user/wm_client/wm_client.c
- * (stub for apps). Not available in the host test build unless main.c is
- * compiled alongside.                                                        */
+/* ── Compositor declarations ────────────────────────────────────────────── */
 
 void wm_composite(wm_state_t *s, canvas_t *screen);
 void wm_draw_cursor(canvas_t *screen, int mx, int my);
+void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
+                     const char **labels, int nlabels, int btn_w);
+
+/* Launch a text viewer window for the given file path. */
+void wm_open_textview(const char *path);
 
 #endif /* _USER_WM_WM_H */

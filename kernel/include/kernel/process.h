@@ -105,6 +105,9 @@ typedef struct process {
      */
     uint32_t     heap_end;          /* current program break; 0 = uninitialised */
 
+    int          stdin_fd;            /* override for fd 0: pipe fd or -1     */
+    int          stdout_fd;           /* override for fd 1/2: pipe fd or -1   */
+
     /*
      * Signal state (section 6.4).
      *

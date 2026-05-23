@@ -1,200 +1,263 @@
 /*
- * Quilon OS -- Window Manager & Compositor process (section 14.2)
+ * Quilon OS -- Window Manager & Desktop Launcher (section 14.2 revised)
  *
- * This is the WM process (wm.elf).  It:
- *   1. Maps the kernel shadow framebuffer via SYS_GFX_MAP.
- *   2. Maintains the window list (wm_state_t).
- *   3. Reads mouse events via SYS_MOUSE_READ and keyboard via SYS_READ(stdin).
- *   4. On each event, re-composites all windows and calls gfx_flush().
+ * Architecture
+ * ────────────
+ * All graphical apps run as clone(CLONE_VM) threads of this process via
+ * pthread_create().  Because they share the same virtual address space,
+ * apps can write directly into their canvas_t* (allocated here in the WM
+ * heap) with no IPC.  Keyboard events are forwarded via a per-window
+ * wm_evqueue_t — a plain struct in shared memory.
  *
- * IPC with apps
- * ─────────────
- * Apps write wm_msg_t structs to the WM command pipe (/wm_cmd).
- * The WM creates per-window event pipes (/wm_evt_<id>) and writes
- * wm_event_t structs into the focused window's event pipe on each keypress.
+ * Threads
+ * ───────
+ *   main (WM)    — mouse handling, compositing, taskbar, gfx_flush()
+ *   kbd thread   — blocks on read(0,...); routes keys to focused window
+ *   app threads  — one per running app (clone(CLONE_VM) via pthread_create)
  *
- * Compositor implementation is in wm_compositor.c (linked separately so
- * the test suite can exercise it without pulling in this main()).
+ * Desktop
+ * ───────
+ * A taskbar at the bottom of the screen lists the built-in apps.  Clicking
+ * a button launches the corresponding app in a new thread+window.
  */
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <gfx.h>
 #include "wm.h"
 
-/* mouse_read() is declared in <unistd.h> as:
- *   int mouse_read(mouse_event_t *out);
- * We use it directly — no local stub needed.                            */
+/* Forward-declared app entry points (defined in their respective .c files). */
+void gterm_app(window_t *win);
+void clock_app(window_t *win);
+void filebr_app(window_t *win);
+void textview_app(window_t *win);
 
-/* -- Demo window population -------------------------------------------- */
+/* ── App table ────────────────────────────────────────────────────────────── */
 
-static void wm_populate_demo(wm_state_t *s)
+typedef struct {
+    const char      *label;
+    void           (*fn)(window_t *);
+    int              w, h;         /* default window content size */
+    int              x, y;         /* default window position     */
+} app_entry_t;
+
+static const app_entry_t g_apps[] = {
+    { "Terminal", gterm_app,   640, 384,  40, 60 },
+    { "Clock",    clock_app,   160,  40, 440, 60 },
+    { "Files",    filebr_app,  320, 320, 200, 80 },
+};
+#define G_NOAPPS  ((int)(sizeof g_apps / sizeof g_apps[0]))
+
+#define TASKBAR_H    28
+#define TASKBAR_BTN_W 110
+
+/* ── Global WM state (shared with clone'd app threads via CLONE_VM) ──────── */
+
+static wm_state_t  g_wm;
+static canvas_t   *g_screen;
+static int         g_sw, g_sh;   /* screen dimensions */
+
+/* ── App trampoline ──────────────────────────────────────────────────────── */
+
+static void *app_trampoline(void *arg)
 {
-    int id;
-
-    id = wm_create_window(s, "About Quilon", 60, 80, 240, 120);
-    if (id > 0) {
-        window_t *w = wm_find_window(s, id);
-        if (w) {
-            w->backbuf = canvas_create(240, 120);
-            if (w->backbuf) {
-                gfx_fill(w->backbuf, GFX_RGB(20, 20, 40));
-                gfx_draw_text(w->backbuf,  8,  8, "Quilon OS",
-                              GFX_WHITE, GFX_RGB(20,20,40));
-                gfx_draw_text(w->backbuf,  8, 28, "Window Manager 14.2",
-                              GFX_RGB(180,180,255), GFX_RGB(20,20,40));
-                gfx_draw_text(w->backbuf,  8, 48, "Painter algorithm",
-                              GFX_RGB(100,200,100), GFX_RGB(20,20,40));
-                gfx_draw_text(w->backbuf,  8, 68, "Back-to-front composite",
-                              GFX_RGB(200,200,100), GFX_RGB(20,20,40));
-            }
-        }
-    }
-
-    id = wm_create_window(s, "Terminal", 320, 80, 280, 180);
-    if (id > 0) {
-        window_t *w = wm_find_window(s, id);
-        if (w) {
-            w->backbuf = canvas_create(280, 180);
-            if (w->backbuf) {
-                gfx_fill(w->backbuf, GFX_BLACK);
-                gfx_draw_text(w->backbuf, 4,  4, "quilon> _",
-                              GFX_GREEN, GFX_BLACK);
-            }
-        }
-    }
-
-    id = wm_create_window(s, "Clock", 160, 340, 160, 40);
-    if (id > 0) {
-        window_t *w = wm_find_window(s, id);
-        if (w) {
-            w->backbuf = canvas_create(160, 40);
-            if (w->backbuf) {
-                gfx_fill(w->backbuf, GFX_RGB(10, 10, 10));
-                gfx_draw_text(w->backbuf, 40, 12, "00:00:00",
-                              GFX_RGB(0, 255, 128), GFX_RGB(10,10,10));
-            }
-            w->focused = 1;
-        }
-    }
+    window_t *win = (window_t *)arg;
+    win->app_fn(win);
+    win->active = 0;
+    return NULL;
 }
 
-static void wm_free_demo(wm_state_t *s)
+/* ── Launch an app in a new window + thread ──────────────────────────────── */
+
+static void wm_launch(int app_idx)
 {
+    const app_entry_t *a = &g_apps[app_idx];
+
+    int id = wm_create_window(&g_wm, a->label, a->x, a->y + TITLEBAR_H, a->w, a->h);
+    if (id < 0) {
+        printf("[wm] no free window slot for '%s'\r\n", a->label);
+        return;
+    }
+
+    window_t *win = wm_find_window(&g_wm, id);
+    if (!win) return;
+
+    win->backbuf = canvas_create(a->w, a->h);
+    if (!win->backbuf) {
+        wm_destroy_window(&g_wm, id);
+        printf("[wm] OOM for '%s' canvas\r\n", a->label);
+        return;
+    }
+    gfx_fill(win->backbuf, GFX_BLACK);
+
+    win->app_fn = a->fn;
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, app_trampoline, win);
+
+    printf("[wm] launched '%s' (win id=%d)\r\n", a->label, id);
+}
+
+/* ── Open a file in a new textview window ────────────────────────────────── */
+
+void wm_open_textview(const char *path)
+{
+    /* Use the last component of the path as the window title. */
+    const char *title = path;
+    const char *p;
+    for (p = path; *p; p++)
+        if (*p == '/')
+            title = p + 1;
+    if (*title == '\0')
+        title = path;
+
+    int id = wm_create_window(&g_wm, title, 60, 60 + TITLEBAR_H, 560, 360);
+    if (id < 0) return;
+
+    window_t *win = wm_find_window(&g_wm, id);
+    if (!win) return;
+
+    /* Copy the path into win->title so textview_app can open it.
+     * title is short enough; path may be longer — store it in the same field
+     * (WM_TITLE_LEN is 32; for longer paths we truncate to the filename). */
     int i;
-    for (i = 0; i < s->num_windows; i++) {
-        if (s->windows[i].backbuf) {
-            canvas_free(s->windows[i].backbuf);
-            s->windows[i].backbuf = (canvas_t *)0;
-        }
-    }
+    for (i = 0; i < WM_TITLE_LEN - 1 && path[i]; i++)
+        win->title[i] = path[i];
+    win->title[i] = '\0';
+
+    win->backbuf = canvas_create(win->bounds.w, win->bounds.h);
+    if (!win->backbuf) { wm_destroy_window(&g_wm, id); return; }
+    gfx_fill(win->backbuf, GFX_BLACK);
+
+    win->app_fn = textview_app;
+
+    pthread_t tid;
+    pthread_create(&tid, NULL, app_trampoline, win);
 }
 
-/* -- WM command-pipe processing ---------------------------------------- */
+/* ── Keyboard thread ─────────────────────────────────────────────────────── */
 
-static void wm_process_msg(wm_state_t *s, const wm_msg_t *m)
+static void *kbd_thread(void *arg)
 {
-    switch (m->type) {
-    case WM_MSG_CREATE: {
-        int id = wm_create_window(s, m->title, m->x, m->y, m->w, m->h);
-        if (id > 0) {
-            window_t *w = wm_find_window(s, id);
-            if (w) {
-                w->backbuf = canvas_create(w->bounds.w, w->bounds.h);
-                if (w->backbuf) gfx_fill(w->backbuf, GFX_RGB(30,30,30));
+    (void)arg;
+    char c;
+    while (read(0, &c, 1) == 1) {
+        int i;
+        for (i = g_wm.num_windows - 1; i >= 0; i--) {
+            window_t *w = &g_wm.windows[i];
+            if (w->focused && w->active) {
+                wm_event_t ev;
+                ev.type    = WM_EV_KEY;
+                ev.ascii   = c;
+                ev.x       = 0;
+                ev.y       = 0;
+                ev.buttons = 0;
+                wm_evqueue_push(&w->events, ev);
+                break;
             }
         }
-        break;
     }
-    case WM_MSG_DESTROY:
-        wm_destroy_window(s, m->id);
-        break;
-    case WM_MSG_DIRTY: {
-        window_t *w = wm_find_window(s, m->id);
-        if (w) w->dirty = 1;
-        break;
-    }
-    default:
-        break;
-    }
+    return NULL;
 }
 
-/* -- Main event loop ---------------------------------------------------- */
+/* ── Close-button handling ───────────────────────────────────────────────── */
+
+static void wm_send_close(window_t *w)
+{
+    wm_event_t ev;
+    ev.type    = WM_EV_CLOSE;
+    ev.ascii   = 0;
+    ev.x       = ev.y = ev.buttons = 0;
+    wm_evqueue_push(&w->events, ev);
+}
+
+/* ── Main ────────────────────────────────────────────────────────────────── */
 
 int main(void)
 {
-    printf("[wm] Quilon Window Manager starting (section 14.2)\r\n");
+    printf("[wm] Quilon Desktop starting\r\n");
 
+    /* 1. Map shadow framebuffer. */
     gfx_info_t info;
-    canvas_t *screen = gfx_screen_init(&info);
-    if (!screen) {
-        printf("[wm] ERROR: could not map framebuffer (VBE not active?)\r\n");
+    g_screen = gfx_screen_init(&info);
+    if (!g_screen) {
+        printf("[wm] ERROR: gfx_screen_init failed\r\n");
         return 1;
     }
-    printf("[wm] screen %ux%u bpp=%u\r\n",
-           (unsigned)info.width, (unsigned)info.height, (unsigned)info.bpp);
+    g_sw = (int)info.width;
+    g_sh = (int)info.height;
+    printf("[wm] screen %dx%d\r\n", g_sw, g_sh);
 
-    wm_state_t state;
-    wm_state_init(&state, (int)info.width, (int)info.height);
+    /* 2. Initialise WM state (screen height minus taskbar). */
+    wm_state_init(&g_wm, g_sw, g_sh - TASKBAR_H);
 
-    wm_populate_demo(&state);
-    wm_composite(&state, screen);
+    /* 3. Start keyboard thread. */
+    pthread_t kbd_tid;
+    pthread_create(&kbd_tid, NULL, kbd_thread, NULL);
+
+    /* 4. Build the static label array for wm_draw_taskbar. */
+    const char *labels[G_NOAPPS];
+    int i;
+    for (i = 0; i < G_NOAPPS; i++) labels[i] = g_apps[i].label;
+
+    /* 5. Initial frame: desktop + taskbar. */
+    wm_composite(&g_wm, g_screen);
+    wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
+                    labels, G_NOAPPS, TASKBAR_BTN_W);
     gfx_flush();
-    printf("[wm] initial frame: %d windows composited\r\n", state.num_windows);
 
-    int cmd_fd = open(WM_CMD_PATH);
-
+    /* 6. Event loop. */
+    mouse_event_t prev = {0};
     while (1) {
-        int dirty = 0;
-
-        /* Mouse. */
+        /* -- Mouse --------------------------------------------------------- */
         mouse_event_t me;
-        if (mouse_read(&me) > 0) {
-            uint8_t prev = state.mouse_buttons;
-            if (me.buttons && !prev)
-                wm_handle_mouse_down(&state, me.x, me.y, me.buttons);
-            else if (!me.buttons && prev)
-                wm_handle_mouse_up(&state);
-            else
-                wm_handle_mouse_move(&state, me.x, me.y);
-            dirty = 1;
-        }
+        mouse_read(&me);
 
-        /* Keyboard → forward to focused window. */
-        char ch;
-        if (read(0, &ch, 1) == 1) {
-            int i;
-            for (i = state.num_windows - 1; i >= 0; i--) {
-                window_t *w = &state.windows[i];
-                if (w->focused && w->evt_fd >= 0) {
-                    wm_event_t ev;
-                    ev.type  = WM_EV_KEY;
-                    ev.ascii = ch;
-                    ev.x = ev.y = 0;
-                    ev.buttons  = 0;
-                    write(w->evt_fd, &ev, sizeof(ev));
-                    break;
+        int moved   = (me.x != prev.x || me.y != prev.y);
+        int pressed = (me.buttons && !prev.buttons);
+        int release = (!me.buttons && prev.buttons);
+
+        if (pressed) {
+            /* Check taskbar clicks first (below the desktop area). */
+            if (me.y >= g_sh - TASKBAR_H) {
+                int idx = me.x / TASKBAR_BTN_W;
+                if (idx >= 0 && idx < G_NOAPPS)
+                    wm_launch(idx);
+            } else {
+                /* Deliver to WM (raise/focus/drag). */
+                int hit = wm_hittest(&g_wm, me.x, me.y);
+                if (hit >= 0) {
+                    window_t *w = &g_wm.windows[hit];
+                    if (wm_in_close_btn(w, me.x, me.y)) {
+                        wm_send_close(w);
+                    } else {
+                        wm_handle_mouse_down(&g_wm, me.x, me.y, me.buttons);
+                    }
                 }
             }
-            dirty = 1;
+        } else if (release) {
+            wm_handle_mouse_up(&g_wm);
+        } else if (moved) {
+            wm_handle_mouse_move(&g_wm, me.x, me.y);
         }
 
-        /* App command pipe. */
-        if (cmd_fd >= 0) {
-            wm_msg_t msg;
-            if (read(cmd_fd, &msg, sizeof(msg)) == (int)sizeof(msg)) {
-                wm_process_msg(&state, &msg);
-                dirty = 1;
-            }
+        prev = me;
+
+        /* -- Composite if anything changed --------------------------------- */
+        int any_dirty = moved || pressed || release;
+        for (i = 0; i < g_wm.num_windows; i++) {
+            if (g_wm.windows[i].dirty) { any_dirty = 1; break; }
         }
 
-        if (dirty) {
-            wm_composite(&state, screen);
+        if (any_dirty) {
+            wm_composite(&g_wm, g_screen);
+            wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
+                            labels, G_NOAPPS, TASKBAR_BTN_W);
             gfx_flush();
         }
     }
 
-    wm_free_demo(&state);
     return 0;
 }

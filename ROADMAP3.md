@@ -577,275 +577,449 @@ either via a syscall or by mapping the font glyph data read-only into user space
 ### 14.2 Window Manager & Compositor
 
 **Why it matters:** A window manager is the process that owns the screen. It
-decides which window is in front, draws decorations (title bars, close buttons),
-routes mouse clicks to the right window, and composites everything into the final
-frame before flushing.
+decides which window is in front, draws decorations, routes events to the right
+app, and composites everything into the final frame before flushing. Getting the
+app↔WM relationship right is the foundation for everything in 14.3 and 14.4.
 
-Quilon's WM is a single-process compositor. It uses `SYS_GFX_MAP` to get
-exclusive write access to the shadow framebuffer, then composites all registered
-windows on every frame.
+**The IPC problem and its solution**
 
-**Window descriptor:**
+A naive design gives each app its own process (via `fork`) and uses pipes or
+shared memory to exchange pixels and events with the WM. That requires
+`SYS_MMAP` or a kernel shared-memory primitive that Quilon does not have.
+
+The simpler and correct solution for Quilon: **every graphical app runs as a
+`clone(CLONE_VM)` thread of the WM**. Because `CLONE_VM` shares the entire
+virtual address space, any pointer allocated in the WM heap is directly readable
+and writable by the app thread — no IPC, no copies, no new syscalls.
+
+```
+WM process (owns address space)
+│
+├── WM main thread    ← composites + flushes + routes events
+├── gterm thread      ← clone(CLONE_VM), draws into win->canvas directly
+├── clock thread      ← clone(CLONE_VM), draws into win->canvas directly
+└── filebr thread     ← clone(CLONE_VM), draws into win->canvas directly
+```
+
+Each app still `fork()`s child *processes* when it needs to run a separate
+program (e.g. gterm forks `shell.elf`). The `clone` is only for the graphical
+layer between the WM and its UI threads.
+
+**Shared data structures (`user/wm/wm.h`)**
 
 ```c
-/* user/wm/wm.h */
-#define WM_MAX_WINDOWS  16
-#define WM_TITLE_LEN    32
-#define TITLEBAR_H      20   /* pixels */
+/* SPSC ring buffer: WM writes events, app thread reads them.
+ * Single-producer / single-consumer — no lock needed.             */
+#define WM_EVQUEUE_DEPTH  64
+
+typedef enum { WM_EV_KEY = 1, WM_EV_MOUSE, WM_EV_CLOSE } wm_ev_type_t;
 
 typedef struct {
-    int        id;
-    rect_t     bounds;       /* position and size on screen, excluding title bar */
-    char       title[WM_TITLE_LEN];
-    canvas_t  *backbuf;      /* the app draws here */
-    int        focused;
-    int        active;
+    wm_ev_type_t type;
+    char         ascii;      /* WM_EV_KEY: ASCII char, 0 if non-printable */
+    int          mx, my;     /* WM_EV_MOUSE: screen coords */
+    int          buttons;    /* WM_EV_MOUSE: button mask */
+} wm_event_t;
+
+typedef struct {
+    volatile int head;                   /* WM increments after writing  */
+    volatile int tail;                   /* app increments after reading */
+    wm_event_t   buf[WM_EVQUEUE_DEPTH];
+} wm_evqueue_t;
+
+#define WM_MAX_WINDOWS  8
+#define WM_TITLE_LEN   32
+#define TITLEBAR_H     20
+
+typedef struct {
+    int           id;
+    rect_t        bounds;        /* content area (excludes title bar)    */
+    char          title[WM_TITLE_LEN];
+    canvas_t     *canvas;        /* app draws here; WM blits to screen   */
+    wm_evqueue_t  events;        /* WM → app keyboard / mouse events     */
+    volatile int  dirty;         /* app sets 1; WM clears after blit     */
+    int           active;        /* 1 once the app has opened it         */
+    int           focused;       /* 1 for the top-most interactive window */
 } window_t;
 ```
 
-**Compositor loop:**
+**App entry-point convention**
 
 ```c
-/* user/wm/wm.c */
+/* Every graphical app is a function with this signature. */
+typedef void (*wm_app_fn_t)(window_t *win);
 
-static canvas_t screen;      /* wraps the kernel shadow buffer via SYS_GFX_MAP */
-static window_t windows[WM_MAX_WINDOWS];
-static int      num_windows;
+/* WM launches an app by:
+ *   1. Allocating a window_t and its canvas in the WM heap.
+ *   2. Calling clone(CLONE_VM|CLONE_FS|CLONE_FILES, trampoline, win).
+ *   3. The trampoline calls app_fn(win) then exits.                   */
+```
 
-void wm_composite(void)
+**Event-queue helpers (pure inline — testable on host)**
+
+```c
+/* Push an event from the WM thread (producer side). */
+static inline void wm_evqueue_push(wm_evqueue_t *q, wm_event_t ev)
 {
-    /* 1. Clear the desktop with a background colour. */
-    gfx_fill(&screen, GFX_RGB(30, 30, 60));   /* dark blue desktop */
+    int next = (q->head + 1) % WM_EVQUEUE_DEPTH;
+    if (next == q->tail) return;   /* drop on overflow */
+    q->buf[q->head] = ev;
+    q->head = next;
+}
 
-    /* 2. Composite windows back-to-front (painter's algorithm). */
-    for (int i = 0; i < num_windows; i++) {
+/* Poll an event from the app thread (consumer side). Returns 1 on success. */
+static inline int wm_evqueue_poll(wm_evqueue_t *q, wm_event_t *out)
+{
+    if (q->tail == q->head) return 0;
+    *out = q->buf[q->tail];
+    q->tail = (q->tail + 1) % WM_EVQUEUE_DEPTH;
+    return 1;
+}
+```
+
+**Compositor (`user/wm/wm_compositor.c`)**
+
+```c
+/* Painter's algorithm: background → windows back-to-front → cursor. */
+void wm_composite(canvas_t *screen, window_t *windows, int n,
+                  int cur_x, int cur_y)
+{
+    /* 1. Desktop background. */
+    gfx_fill(screen, GFX_DARK_BLUE);
+
+    /* 2. Windows back-to-front. */
+    for (int i = 0; i < n; i++) {
         window_t *w = &windows[i];
         if (!w->active) continue;
 
-        /* Draw title bar. */
         rect_t tbar = { w->bounds.x, w->bounds.y - TITLEBAR_H,
                         w->bounds.w, TITLEBAR_H };
-        color_t tbar_col = w->focused ? GFX_RGB(80,80,200) : GFX_RGB(60,60,60);
-        gfx_fill_rect(&screen, tbar, tbar_col);
-        gfx_draw_text(&screen, tbar.x + 4, tbar.y + 4, w->title,
-                      GFX_RGB(255,255,255), tbar_col);
+        color_t tc = w->focused ? GFX_RGB(80,80,200) : GFX_RGB(60,60,60);
 
-        /* Close button — red square in top-right corner. */
-        rect_t close_btn = { tbar.x + tbar.w - 18, tbar.y + 2, 16, 16 };
-        gfx_fill_rect(&screen, close_btn, GFX_RGB(200,40,40));
+        gfx_fill_rect(screen, tbar, tc);
+        gfx_draw_text(screen, tbar.x + 4, tbar.y + 2, w->title,
+                      GFX_WHITE, tc);
 
-        /* Blit the app's back-buffer into its content area. */
-        gfx_set_clip(&screen, w->bounds);
-        gfx_blit(&screen, w->bounds.x, w->bounds.y,
-                 w->backbuf, (rect_t){0, 0, w->backbuf->w, w->backbuf->h});
-        gfx_clear_clip(&screen);
+        /* Close button. */
+        rect_t x_btn = { tbar.x + tbar.w - 18, tbar.y + 2, 16, 16 };
+        gfx_fill_rect(screen, x_btn, GFX_RED);
 
-        /* Window border. */
-        gfx_draw_rect(&screen, (rect_t){tbar.x, tbar.y,
-                                        tbar.w, tbar.h + w->bounds.h},
+        /* Blit the app canvas, clipped to its content rect. */
+        if (w->canvas) {
+            gfx_set_clip(screen, w->bounds);
+            gfx_blit(screen, w->bounds.x, w->bounds.y, w->canvas,
+                     (rect_t){0, 0, w->canvas->w, w->canvas->h});
+            gfx_clear_clip(screen);
+        }
+
+        gfx_draw_rect(screen,
+                      (rect_t){tbar.x, tbar.y, tbar.w, tbar.h + w->bounds.h},
                       GFX_RGB(100,100,100));
+
+        w->dirty = 0;
     }
 
-    /* 3. Draw the mouse cursor. */
-    wm_draw_cursor();
-
-    /* 4. Flush shadow buffer to hardware framebuffer. */
-    syscall(SYS_GFX_FLUSH, 0, 0, 0);
+    /* 3. Mouse cursor (8×8 filled triangle sprite). */
+    wm_draw_cursor(screen, cur_x, cur_y);
 }
 ```
 
-**Mouse hit-testing** (called in the main event loop when a click arrives):
+**WM main loop and desktop (`user/wm/main.c`)**
+
+The WM is both compositor and desktop launcher. It draws a taskbar at the
+bottom of the screen with one button per registered app. Clicking a button
+calls `clone(CLONE_VM|CLONE_FS|CLONE_FILES, app_trampoline, win)`.
 
 ```c
-static int wm_hittest(int mx, int my)
-{
-    /* Iterate windows front-to-back; first hit wins. */
-    for (int i = num_windows - 1; i >= 0; i--) {
-        window_t *w = &windows[i];
-        if (!w->active) continue;
-        rect_t full = { w->bounds.x, w->bounds.y - TITLEBAR_H,
-                        w->bounds.w, w->bounds.h + TITLEBAR_H };
-        if (mx >= full.x && mx < full.x + full.w &&
-            my >= full.y && my < full.y + full.h)
-            return i;
-    }
-    return -1;
-}
-```
+/* Taskbar layout constants. */
+#define TASKBAR_H     28
+#define TASKBAR_BTN_W 100
 
-**Event loop structure:**
+/* Built-in app table. */
+typedef struct { const char *label; wm_app_fn_t fn; } app_entry_t;
+extern void gterm_app(window_t *);
+extern void clock_app(window_t *);
+extern void filebr_app(window_t *);
 
-```c
-void wm_run(void)
+static const app_entry_t g_apps[] = {
+    { "Terminal", gterm_app  },
+    { "Clock",    clock_app  },
+    { "Files",    filebr_app },
+};
+
+/* --- main ---------------------------------------------------------------- */
+int main(void)
 {
-    int mouse_fd = open("/dev/mouse", O_RDONLY);
-    int kbd_fd   = open("/dev/kbd",   O_RDONLY);
+    gfx_info_t info;
+    canvas_t *screen = gfx_screen_init(&info);
+
+    /* Initialise global WM state. */
+    wm_state_t wm;
+    wm_init(&wm, screen, (int)info.width, (int)info.height - TASKBAR_H);
+
+    mouse_event_t prev_mouse = {0};
 
     while (1) {
-        /* Block until a mouse or keyboard event arrives (uses 12.2 wait queues). */
+        /* --- Mouse -------------------------------------------------------- */
         mouse_event_t me;
-        if (read(mouse_fd, &me, sizeof(me)) == sizeof(me))
-            wm_handle_mouse(&me);
+        mouse_read(&me);
+        wm_handle_mouse(&wm, me.x, me.y, me.buttons, prev_mouse.buttons);
+        prev_mouse = me;
 
-        kbd_event_t ke;
-        if (read(kbd_fd, &ke, sizeof(ke)) == sizeof(ke))
-            wm_handle_key(&ke);
+        /* Check taskbar clicks: launch apps. */
+        if ((me.buttons & MOUSE_BTN_LEFT) &&
+            !(prev_mouse.buttons & MOUSE_BTN_LEFT)) {
+            int ty = (int)info.height - TASKBAR_H;
+            if (me.y >= ty) {
+                int idx = me.x / TASKBAR_BTN_W;
+                if (idx >= 0 && idx < (int)(sizeof g_apps / sizeof g_apps[0]))
+                    wm_launch_app(&wm, &g_apps[idx]);
+            }
+        }
 
-        /* Redraw apps that marked their back-buffer dirty. */
-        wm_composite();
+        /* --- Keyboard ----------------------------------------------------- */
+        /* poll keyboard; route to focused window's event queue */
+        char c;
+        if (kbd_poll(&c)) {                    /* non-blocking keyboard read */
+            wm_event_t ev = { .type = WM_EV_KEY, .ascii = c };
+            window_t *fw = wm_focused_window(&wm);
+            if (fw) wm_evqueue_push(&fw->events, ev);
+        }
+
+        /* --- Composite + taskbar ------------------------------------------ */
+        wm_composite(screen, wm.windows, wm.num_windows,
+                     me.x, me.y);
+        wm_draw_taskbar(screen, g_apps, sizeof g_apps / sizeof g_apps[0],
+                        (int)info.width, (int)info.height, TASKBAR_H);
+        gfx_flush();
     }
 }
 ```
 
-**IPC between WM and apps:** The simplest approach is a named pipe per window.
-When an app calls `wm_open_window(title, w, h)`, the WM creates a window entry
-and returns a file descriptor to a shared-memory region for the back-buffer. Apps
-write pixels directly into that region. A second "event pipe" carries keyboard
-and mouse events from the WM to the app. This avoids inventing a new IPC
-mechanism: pipes and shared memory are already in the kernel.
+**Launching an app**
 
-> **Learning note:** The painter's algorithm (drawing windows back-to-front) is
-> the simplest correct compositing strategy. It overdraws every pixel on every
-> frame, but at 800×600×32 bpp the shadow buffer is only 1.83 MiB — a single
-> `memcpy` to flush is ~200 µs at 10 GB/s, well within a 60 Hz frame budget.
-> The 1980s Nintendo hardware used the same approach (background, then sprites,
-> front-to-back). Damage tracking (only redrawing changed regions) is an
-> optimization you can add later.
+```c
+void wm_launch_app(wm_state_t *wm, const app_entry_t *app)
+{
+    /* Find a free window slot and set it up. */
+    window_t *win = wm_alloc_window(wm, app->label, 640, 400, 80, 40);
+    if (!win) return;
+
+    /* Allocate canvas in WM heap — visible to the clone'd app immediately. */
+    win->canvas = canvas_create(win->bounds.w, win->bounds.h);
+
+    /* clone(CLONE_VM|CLONE_FS|CLONE_FILES): shares WM address space. */
+    pthread_t tid;
+    pthread_create(&tid, NULL, (void *(*)(void *))app->fn, win);
+}
+```
+
+Because the clone shares the WM's address space, `win->canvas->pixels` is the
+same physical memory in both threads. The app thread writes pixels; the WM
+thread reads and blits them. The `volatile int dirty` flag signals a repaint is
+needed without any syscall.
+
+> **Learning note:** This is exactly how early windowing systems worked. The
+> original Mac OS (1984) ran the entire application and the OS in the same
+> address space with no memory protection. The Win16 cooperative model
+> was similar. The `clone(CLONE_VM)` approach gives Quilon a real scheduler
+> (preemptive) while keeping the graphical data sharing trivially simple.
+> Memory-isolated windowing (like X11 or Wayland) requires a display server
+> protocol, shared-memory extensions, and a socket layer — all of which are
+> unnecessary complexity for a hobby OS at this stage.
 
 ---
 
-### 14.3 Graphical Terminal
+### 14.3 startx and the Graphical Terminal
 
-**Why it matters:** The ring-3 shell currently writes to the text-mode VGA
-buffer. Replacing that with a window managed by the compositor gives you a
-proper terminal application — one you can resize, move, and run alongside other
-apps.
+#### 14.3.1 startx — switching from text to graphical mode
 
-The graphical terminal (`user/gterm/`) is itself a user-space program. It:
-1. Registers a window with the WM.
-2. Forks a child running the existing `shell.elf`.
-3. Redirects the child's `stdin`/`stdout`/`stderr` to a pair of pipes.
-4. Reads the child's output, interprets ANSI sequences, and renders text into its
-   back-buffer using `libgfx`.
-5. Forwards keyboard events from the WM into the child's stdin.
+**Why it matters:** The user boots into the existing ring-3 text shell. Typing
+`startx` should hand the screen over to the WM the same way Linux hands off to
+X11. This is a one-liner in the shell, but naming it explicitly in the roadmap
+makes the boot flow obvious.
+
+Add `startx` as a command in both shells:
 
 ```c
-/* user/gterm/main.c — skeleton */
+/* user/shell/main.c and kernel/kernel/shell.c */
+} else if (strcmp(cmd, "startx") == 0) {
+    int pid = exec("/wm.elf");
+    if (pid < 0) { puts("startx: cannot exec /wm.elf\n"); continue; }
+    wait(pid, NULL);
+```
 
-#include <gfx.h>
-#include <wm_client.h>
-#include <stdio.h>
+When the WM exits (the user shuts down the graphical session), the text shell
+resumes. The VBE framebuffer is always active; there is no mode switch — the
+WM simply takes ownership of the shadow buffer and starts compositing.
+
+#### 14.3.2 Graphical Terminal as a WM app
+
+gterm becomes a `wm_app_fn_t` rather than a standalone program. It receives a
+`window_t *` already containing a canvas; it does not open a window itself.
+
+```c
+/* user/gterm/gterm_app.c */
+
 #include <unistd.h>
+#include <pthread.h>
+#include <gfx.h>
+#include "gterm.h"
+#include "../wm/wm.h"
 
-#define COLS  80
-#define ROWS  24
-#define CELL_W  8
-#define CELL_H 16
+/* ── Keyboard-forwarding thread ─────────────────────────────────────────── */
 
-static char  cell_char  [ROWS][COLS];
-static color_t cell_fg  [ROWS][COLS];
-static color_t cell_bg  [ROWS][COLS];
-static int   cursor_row, cursor_col;
-static canvas_t *backbuf;
+typedef struct { wm_evqueue_t *ev; int shell_in; } kbd_arg_t;
 
-/* ANSI state machine (mirrors the kernel tty.c machine but runs in user space) */
-static void gterm_write(const char *data, int len) { /* ... */ }
-
-static void gterm_render(void)
+static void *kbd_thread(void *arg)
 {
-    gfx_fill(backbuf, GFX_RGB(0, 0, 0));
-    for (int r = 0; r < ROWS; r++)
-    for (int c = 0; c < COLS; c++) {
-        char ch = cell_char[r][c] ? cell_char[r][c] : ' ';
-        gfx_draw_text(backbuf, c * CELL_W, r * CELL_H,
-                      (char[]){ch, 0}, cell_fg[r][c], cell_bg[r][c]);
+    kbd_arg_t *a = (kbd_arg_t *)arg;
+    wm_event_t ev;
+    while (1) {
+        /* Spin-poll the event queue; yield if empty to avoid burning CPU. */
+        if (wm_evqueue_poll(a->ev, &ev)) {
+            if (ev.type == WM_EV_KEY && ev.ascii)
+                write(a->shell_in, &ev.ascii, 1);
+            else if (ev.type == WM_EV_CLOSE)
+                break;
+        }
     }
-    /* Draw block cursor. */
-    gfx_fill_rect(backbuf,
-                  (rect_t){cursor_col*CELL_W, cursor_row*CELL_H, CELL_W, CELL_H},
-                  GFX_RGB(200, 200, 200));
-    wm_mark_dirty();
+    return NULL;
 }
 
-int main(void)
+/* ── Render ─────────────────────────────────────────────────────────────── */
+
+static void gterm_render(gterm_t *t, canvas_t *c, int cur_visible)
 {
-    int win = wm_open_window("Terminal", COLS*CELL_W, ROWS*CELL_H);
-    backbuf = wm_get_backbuf(win);
+    int r, c2;
+    gfx_fill(c, (color_t)GT_DEFAULT_BG);
+    for (r = 0; r < GTERM_ROWS; r++)
+    for (c2 = 0; c2 < GTERM_COLS; c2++) {
+        gterm_cell_t *cell = &t->cells[r][c2];
+        char str[2] = { cell->ch ? cell->ch : ' ', '\0' };
+        gfx_draw_text(c, c2 * GTERM_CELL_W, r * GTERM_CELL_H,
+                      str, (color_t)cell->fg, (color_t)cell->bg);
+    }
+    if (cur_visible) {
+        gterm_cell_t *cc = &t->cells[t->cursor_row][t->cursor_col];
+        rect_t cr = { t->cursor_col * GTERM_CELL_W,
+                      t->cursor_row * GTERM_CELL_H,
+                      GTERM_CELL_W, GTERM_CELL_H };
+        char str[2] = { cc->ch ? cc->ch : ' ', '\0' };
+        gfx_fill_rect(c, cr, (color_t)cc->fg);
+        gfx_draw_text(c, cr.x, cr.y, str,
+                      (color_t)cc->bg, (color_t)cc->fg);
+    }
+}
 
+/* ── App entry point ─────────────────────────────────────────────────────── */
+
+void gterm_app(window_t *win)
+{
+    /* 1. Pipes: parent (gterm) ↔ child (shell). */
     int to_shell[2], from_shell[2];
-    pipe(to_shell); pipe(from_shell);
+    if (pipe(to_shell) || pipe(from_shell)) { win->active = 0; return; }
 
-    if (fork() == 0) {
-        /* Child: rewire stdin/stdout/stderr to the pipes. */
-        dup2(to_shell[0],   0);
-        dup2(from_shell[1], 1);
-        dup2(from_shell[1], 2);
-        close(to_shell[0]); close(to_shell[1]);
+    /* 2. Fork the shell as a separate process. */
+    int child = fork();
+    if (child == 0) {
+        dup2(to_shell[0],   STDIN_FILENO);
+        dup2(from_shell[1], STDOUT_FILENO);
+        dup2(from_shell[1], STDERR_FILENO);
+        close(to_shell[0]);  close(to_shell[1]);
         close(from_shell[0]); close(from_shell[1]);
-        exec("/shell.elf");
+        int pid = exec("/shell.elf");
+        if (pid >= 0) wait(pid, NULL);
+        exit(0);
     }
     close(to_shell[0]); close(from_shell[1]);
 
-    char buf[256];
-    while (1) {
-        /* Read shell output → render. */
-        int n = read(from_shell[0], buf, sizeof(buf));
-        if (n > 0) { gterm_write(buf, n); gterm_render(); }
+    /* 3. Keyboard-forwarding thread: evqueue → shell stdin. */
+    kbd_arg_t karg = { &win->events, to_shell[1] };
+    pthread_t kbd_tid;
+    pthread_create(&kbd_tid, NULL, kbd_thread, &karg);
 
-        /* Read WM keyboard events → forward to shell. */
-        kbd_event_t ke;
-        if (wm_read_key(win, &ke))
-            write(to_shell[1], &ke.ascii, 1);
+    /* 4. Main loop: shell stdout → parse → render → mark dirty. */
+    gterm_t term;
+    gterm_init(&term);
+    gterm_render(&term, win->canvas, 1);
+    win->dirty = 1;
+
+    char ibuf[256];
+    while (1) {
+        int n = read(from_shell[0], ibuf, sizeof(ibuf));
+        if (n > 0) {
+            gterm_write(&term, ibuf, n);
+            gterm_render(&term, win->canvas, 1);
+            win->dirty = 1;
+        } else if (n == 0) {
+            gterm_write(&term, "\r\n[shell exited]\r\n", 18);
+            gterm_render(&term, win->canvas, 0);
+            win->dirty = 1;
+            break;
+        }
     }
+
+    close(to_shell[1]);
+    close(from_shell[0]);
+    win->active = 0;
 }
 ```
 
-The ANSI state machine in `gterm_write` is identical in structure to the one
-described in section 11.1, but it updates the `cell_char`/`cell_fg`/`cell_bg`
-grid instead of writing to a kernel buffer. This separation keeps the terminal
-logic out of the kernel entirely.
+The `kbd_thread` is a second `clone(CLONE_VM)` of the gterm thread (via
+`pthread_create`). It spin-polls `win->events` — the same struct the WM thread
+writes into — without any syscall overhead. On a single-CPU QEMU setup the WM
+thread and kbd_thread are time-sliced by the scheduler; on SMP they run in
+parallel.
 
-**Scrollback:** Add a ring buffer of `SCROLLBACK` rows above the visible grid.
-When the terminal scrolls up (a new line arrives at the bottom), copy row 0 into
-the scrollback buffer and shift the grid up by one. Mouse wheel events from the
-WM adjust a `scroll_offset` and re-render.
-
-> **Learning note:** Separating the terminal *emulator* (ANSI state machine +
-> cell grid) from the terminal *renderer* (drawing cells into a canvas) is the
-> same split used by every real terminal emulator (VTE, kitty, alacritty). The
-> emulator is pure logic with no rendering knowledge; the renderer is pure drawing
-> with no ANSI knowledge. This makes both independently testable.
+> **Learning note:** The three-thread structure here (WM thread, gterm render
+> thread, kbd thread) mirrors how real terminal emulators work. alacritty has a
+> "renderer thread" and an "event thread"; kitty has a similar split. The
+> important invariant is that only one thread writes to the canvas at a time —
+> here enforced by structure (only the gterm render thread ever calls
+> `gterm_render()`), not by a lock.
 
 ---
 
 ### 14.4 Simple GUI Apps
 
-With the graphics library and WM in place, small apps are straightforward to
-write. Each registers a window, draws into its back-buffer, and handles events.
+Each app is a `wm_app_fn_t` — a plain C function that receives its `window_t *`
+and runs until it exits. The WM launches it via `pthread_create` (which uses
+`clone(CLONE_VM)` internally), so the app's canvas is directly in WM memory.
+
+**`user/wm/apps.h`** declares all built-in apps:
+
+```c
+void gterm_app(window_t *win);   /* graphical terminal  */
+void clock_app(window_t *win);   /* digital clock       */
+void filebr_app(window_t *win);  /* file browser        */
+void textview_app(window_t *win); /* text file viewer   */
+```
 
 ---
 
 #### Clock
 
-The simplest possible app. It calls `SYS_GETTICKS` every second, converts to
-HH:MM:SS, and draws the string centred in a small window.
-
 ```c
-/* user/clock/main.c */
-int main(void)
+/* user/clock/clock_app.c */
+void clock_app(window_t *win)
 {
-    int win = wm_open_window("Clock", 160, 40);
-    canvas_t *buf = wm_get_backbuf(win);
-
-    while (1) {
-        uint32_t ticks = getticks();   /* seconds since boot */
-        int h = (ticks / 3600) % 24, m = (ticks / 60) % 60, s = ticks % 60;
+    while (win->active) {
+        uint32_t t  = getticks();             /* seconds since boot */
+        int h = (t / 3600) % 24, m = (t / 60) % 60, s = t % 60;
         char str[9];
-        snprintf(str, sizeof(str), "%02d:%02d:%02d", h, m, s);
-        gfx_fill(buf, GFX_RGB(10, 10, 10));
-        gfx_draw_text(buf, 40, 12, str, GFX_RGB(0,255,128), GFX_RGB(10,10,10));
-        wm_mark_dirty();
+        snprintf(str, sizeof str, "%02d:%02d:%02d", h, m, s);
+
+        gfx_fill(win->canvas, GFX_RGB(10, 10, 10));
+        gfx_draw_text(win->canvas, 40, 12, str,
+                      GFX_RGB(0, 255, 128), GFX_RGB(10, 10, 10));
+        win->dirty = 1;
         sleep(1);
+
+        /* Exit if the WM sent a close event. */
+        wm_event_t ev;
+        if (wm_evqueue_poll(&win->events, &ev) && ev.type == WM_EV_CLOSE)
+            break;
     }
 }
 ```
@@ -854,82 +1028,141 @@ int main(void)
 
 #### File Browser
 
-A scrollable list of the current directory. Clicking a directory entry navigates
-into it; clicking a file sends its path to a viewer app.
+A scrollable directory listing. Arrow keys and Enter navigate; clicking a file
+launches `textview_app` on a new window.
 
 ```c
-/* user/filebr/main.c — key structs */
-
+/* user/filebr/filebr_app.c — key structs */
 #define LIST_ITEM_H  16
 #define MAX_ENTRIES  64
 
-static char entries[MAX_ENTRIES][256];
-static int  is_dir[MAX_ENTRIES];
-static int  num_entries, scroll_top, selected;
+typedef struct {
+    char name[256];
+    int  is_dir;
+} fb_entry_t;
 
-static void fb_render(canvas_t *buf, int w, int h)
+static void fb_render(canvas_t *c, fb_entry_t *entries, int n,
+                      int scroll, int selected)
 {
-    gfx_fill(buf, GFX_RGB(20, 20, 20));
-    for (int i = scroll_top; i < num_entries; i++) {
-        int y = (i - scroll_top) * LIST_ITEM_H;
-        if (y + LIST_ITEM_H > h) break;
+    gfx_fill(c, GFX_RGB(20, 20, 20));
+    for (int i = scroll; i < n; i++) {
+        int y = (i - scroll) * LIST_ITEM_H;
+        if (y + LIST_ITEM_H > c->h) break;
         color_t bg = (i == selected) ? GFX_RGB(50,50,150) : GFX_RGB(20,20,20);
-        gfx_fill_rect(buf, (rect_t){0, y, w, LIST_ITEM_H}, bg);
-        color_t fg = is_dir[i] ? GFX_RGB(100,180,255) : GFX_RGB(220,220,220);
-        gfx_draw_text(buf, 4, y + 1, entries[i], fg, bg);
+        gfx_fill_rect(c, (rect_t){0, y, c->w, LIST_ITEM_H}, bg);
+        color_t fg = entries[i].is_dir ? GFX_RGB(100,180,255)
+                                       : GFX_RGB(220,220,220);
+        gfx_draw_text(c, 4, y + 1, entries[i].name, fg, bg);
+    }
+}
+
+void filebr_app(window_t *win)
+{
+    fb_entry_t entries[MAX_ENTRIES];
+    int n = 0, scroll = 0, selected = 0;
+    char cwd[256] = "/";
+
+    /* Initial directory read. */
+    n = fb_read_dir(cwd, entries, MAX_ENTRIES);
+    fb_render(win->canvas, entries, n, scroll, selected);
+    win->dirty = 1;
+
+    wm_event_t ev;
+    while (win->active) {
+        if (!wm_evqueue_poll(&win->events, &ev)) continue;
+        if (ev.type == WM_EV_CLOSE) break;
+        if (ev.type == WM_EV_KEY) {
+            if (ev.ascii == '\n' && n > 0) {
+                /* Navigate into directory or open file. */
+                if (entries[selected].is_dir) {
+                    /* chdir + re-read */
+                    n = fb_chdir_and_read(cwd, entries[selected].name,
+                                          entries, MAX_ENTRIES);
+                    scroll = selected = 0;
+                }
+            } else if (ev.ascii == 'j' || ev.ascii == '\x1b') {
+                /* down / up handled via arrow key ascii codes */
+                if (selected < n - 1) selected++;
+            } else if (ev.ascii == 'k') {
+                if (selected > 0) selected--;
+            }
+            fb_render(win->canvas, entries, n, scroll, selected);
+            win->dirty = 1;
+        }
     }
 }
 ```
-
-Mouse click handling: convert Y coordinate to `(click_y / LIST_ITEM_H) +
-scroll_top` to find which entry was clicked. A double-click (two clicks within
-300 ms) on a directory calls `chdir` + re-reads the directory; on a file it
-launches the text viewer.
 
 ---
 
 #### Text Viewer
 
-Opens a file, reads it into a buffer, and renders it one screen-height at a time.
-Mouse wheel or Page Up/Down adjust a line offset.
-
 ```c
-/* user/textview/main.c — render loop */
-static void tv_render(canvas_t *buf, char **lines, int nlines,
-                      int scroll, int rows, int cols)
+/* user/textview/textview_app.c */
+void textview_app(window_t *win)
 {
-    gfx_fill(buf, GFX_RGB(15, 15, 15));
-    for (int r = 0; r < rows && scroll + r < nlines; r++) {
-        char line[256];
-        strncpy(line, lines[scroll + r], cols);
-        line[cols] = '\0';
-        gfx_draw_text(buf, 0, r * 16, line,
-                      GFX_RGB(200,200,200), GFX_RGB(15,15,15));
+    /* Caller passes the path via win->title for simplicity. */
+    char *lines[1024];
+    int nlines = tv_read_file(win->title, lines, 1024);
+    int scroll = 0;
+    int rows   = win->canvas->h / GFX_CHAR_H;
+
+    tv_render(win->canvas, lines, nlines, scroll, rows);
+    win->dirty = 1;
+
+    wm_event_t ev;
+    while (win->active) {
+        if (!wm_evqueue_poll(&win->events, &ev)) continue;
+        if (ev.type == WM_EV_CLOSE) break;
+        if (ev.type == WM_EV_KEY) {
+            if ((ev.ascii == 'd') && scroll + rows < nlines) scroll++;
+            if ((ev.ascii == 'u') && scroll > 0)             scroll--;
+            tv_render(win->canvas, lines, nlines, scroll, rows);
+            win->dirty = 1;
+        }
     }
+    tv_free_lines(lines, nlines);
 }
 ```
 
-**Suggested layout of `user/` after section 14:**
+---
+
+**Final `user/` layout after section 14:**
 
 ```
 user/
-├── libgfx/         ← 2D graphics library (canvas, primitives, text)
-├── wm/             ← compositor (owns /dev/screen, dispatches events)
-├── wm_client/      ← thin client library for app ↔ WM IPC
-├── gterm/          ← graphical terminal (wraps shell.elf)
-├── clock/          ← digital clock app
-├── filebr/         ← file browser
-├── textview/       ← text file viewer
-└── shell/          ← existing ring-3 text shell (unchanged)
+├── libgfx/          ← 2D graphics library (unchanged from 14.1)
+├── wm/
+│   ├── wm.h         ← window_t, wm_evqueue_t, wm_state_t (shared types)
+│   ├── wm_state.c   ← wm_init, wm_alloc_window, wm_launch_app, wm_focused_window
+│   ├── wm_compositor.c ← wm_composite, wm_draw_cursor, wm_draw_taskbar
+│   └── main.c       ← event loop; desktop launcher
+├── gterm/
+│   ├── gterm.h      ← ANSI parser + cell grid (unchanged)
+│   └── gterm_app.c  ← gterm_app() — WM app function
+├── clock/
+│   └── clock_app.c
+├── filebr/
+│   └── filebr_app.c
+├── textview/
+│   └── textview_app.c
+└── shell/           ← existing ring-3 text shell; gains `startx` command
 ```
 
-> **Learning note:** Every app in section 14 is a completely ordinary ring-3 user
-> program. None of them need kernel changes beyond the three syscalls added in
-> 14.1. This is the power of a clean user-space abstraction: once the kernel
-> exposes a framebuffer and flush, the entire desktop is user-space code. Writing
-> a new app is no different from writing any other Quilon program.
+All app `.c` files are compiled into `wm.elf` — there is no separate `gterm.elf`,
+`clock.elf`, etc. The WM is a single executable that contains all graphical
+apps as statically linked functions. This keeps deployment simple (one ELF on
+the FAT16 image) and eliminates exec-time linking.
+
+> **Learning note:** Bundling apps into the compositor is how early graphical
+> systems worked — the original Macintosh Finder *was* the shell, and apps were
+> separate files only because the hardware had enough storage. For a hobby OS
+> with a 1 MB FAT16 image, a single WM+apps ELF is the practical choice. The
+> architecture still keeps each app as an isolated function with its own thread
+> and its own canvas, so splitting them out later is mechanical.
 
 ---
+
 
 ## 15. BSD Socket API for User Space
 

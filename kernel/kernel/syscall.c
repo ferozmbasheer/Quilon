@@ -128,13 +128,19 @@ void syscall_handler(syscall_regs_t *regs)
 
         if ((regs->ebx == FD_STDOUT || regs->ebx == FD_STDERR) &&
             buf != NULL) {
-            terminal_write(buf, (size_t)len);
 #ifdef __is_kernel
-            /* Mirror to serial so the output appears in QEMU -serial logs. */
-            for (uint32_t i = 0; i < len; i++)
-                serial_putchar(buf[i]);
-#endif
+            if (current_process && current_process->stdout_fd >= 0) {
+                ret = (uint32_t)vfs_write(current_process->stdout_fd, buf, len);
+            } else {
+                terminal_write(buf, (size_t)len);
+                for (uint32_t i = 0; i < len; i++)
+                    serial_putchar(buf[i]);
+                ret = len;
+            }
+#else
+            terminal_write(buf, (size_t)len);
             ret = len;
+#endif
 #ifdef __is_kernel
         } else if ((int)regs->ebx >= VFS_FD_BASE && buf != NULL) {
             /* Forward file-descriptor writes to the VFS layer (§8.1). */
@@ -246,13 +252,15 @@ void syscall_handler(syscall_regs_t *regs)
         uint32_t len = regs->edx;
         if (!buf || len == 0) { ret = (uint32_t)-1; break; }
         if ((int)regs->ebx == FD_STDIN) {
-            /* Read up to len chars from the keyboard ring buffer. */
-            uint32_t n = 0;
-            while (n < len) {
-                buf[n++] = keyboard_getchar();
-                /* Stop after filling the buffer; caller decides line-ending. */
+            if (current_process && current_process->stdin_fd >= 0) {
+                ret = (uint32_t)vfs_read(current_process->stdin_fd, buf, len);
+            } else {
+                uint32_t n = 0;
+                while (n < len) {
+                    buf[n++] = keyboard_getchar();
+                }
+                ret = n;
             }
-            ret = n;
         } else {
             ret = (uint32_t)vfs_read((int)regs->ebx, buf, len);
         }
@@ -351,6 +359,12 @@ void syscall_handler(syscall_regs_t *regs)
         for (int _v = 0; _v < PROC_VMA_MAX; _v++)
             _child->vmas[_v] = child_vmas[_v];
 
+        /* Inherit stdin/stdout pipe overrides from the spawning process. */
+        if (current_process) {
+            _child->stdin_fd  = current_process->stdin_fd;
+            _child->stdout_fd = current_process->stdout_fd;
+        }
+
         ret = _child->pid;
 #else
         ret = (uint32_t)-1;
@@ -408,6 +422,8 @@ void syscall_handler(syscall_regs_t *regs)
         }
         fork_child->parent_pid = current_process->pid;
         fork_child->heap_end   = current_process->heap_end;
+        fork_child->stdin_fd   = current_process->stdin_fd;
+        fork_child->stdout_fd  = current_process->stdout_fd;
 
         /* 3.5. Copy VMAs: child inherits parent's address-space layout.
          * VMA flags retain VMA_W even though PTEs are now read-only --
@@ -1049,6 +1065,33 @@ void syscall_handler(syscall_regs_t *regs)
         out->y       = mouse_get_y();
         out->buttons = mouse_get_buttons();
         ret = 1;
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_DUP2 (34) -- redirect a standard fd (0, 1, or 2) to a pipe fd.
+     *
+     *   EBX = oldfd  -- existing pipe fd (>= VFS_FD_BASE)
+     *   ECX = newfd  -- target standard fd (0 = stdin, 1/2 = stdout/stderr)
+     *
+     * Stores the redirect in the current process's PCB so that subsequent
+     * SYS_READ(0) and SYS_WRITE(1/2) use the pipe instead of keyboard/VGA.
+     *
+     * Returns: 0 on success, -1 on error.
+     * ------------------------------------------------------------------------ */
+    case SYS_DUP2: {
+        int oldfd = (int)regs->ebx;
+        int newfd = (int)regs->ecx;
+        if (!current_process || oldfd < 0) { ret = (uint32_t)-1; break; }
+        if (newfd == FD_STDIN) {
+            current_process->stdin_fd  = oldfd;
+            ret = 0;
+        } else if (newfd == FD_STDOUT || newfd == FD_STDERR) {
+            current_process->stdout_fd = oldfd;
+            ret = 0;
+        } else {
+            ret = (uint32_t)-1;
+        }
         break;
     }
 #endif
