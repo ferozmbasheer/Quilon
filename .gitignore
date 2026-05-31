@@ -57,3 +57,7 @@ sysroot
 tests/bin/
 *.img
 
+# Build / scratch
+build/
+*.orig
+
