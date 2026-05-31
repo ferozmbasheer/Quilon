@@ -110,6 +110,9 @@ void gfx_fill_rect(canvas_t *c, rect_t r, color_t col);
 /* Draw a 1-pixel outline of rectangle r.  Clipped. */
 void gfx_draw_rect(canvas_t *c, rect_t r, color_t col);
 
+/* Draw a 1-pixel line from (x0,y0) to (x1,y1) using Bresenham.  Clipped. */
+void gfx_draw_line(canvas_t *c, int x0, int y0, int x1, int y1, color_t col);
+
 /*
  * gfx_blit -- copy a rectangle from src into dst.
  *

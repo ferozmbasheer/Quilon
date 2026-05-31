@@ -96,6 +96,7 @@ static void wm_launch(int app_idx)
 
     pthread_t tid;
     pthread_create(&tid, NULL, app_trampoline, win);
+    win->tid = tid;
 
     printf("[wm] launched '%s' (win id=%d)\r\n", a->label, id);
 }
@@ -135,6 +136,7 @@ void wm_open_textview(const char *path)
 
     pthread_t tid;
     pthread_create(&tid, NULL, app_trampoline, win);
+    win->tid = tid;
 }
 
 /* ── Keyboard thread ─────────────────────────────────────────────────────── */
@@ -145,9 +147,9 @@ static void *kbd_thread(void *arg)
     char c;
     while (read(0, &c, 1) == 1) {
         int i;
-        for (i = g_wm.num_windows - 1; i >= 0; i--) {
+        for (i = 0; i < WM_MAX_WINDOWS; i++) {
             window_t *w = &g_wm.windows[i];
-            if (w->focused && w->active) {
+            if (w->id != 0 && w->focused && w->active) {
                 wm_event_t ev;
                 ev.type    = WM_EV_KEY;
                 ev.ascii   = c;
@@ -245,10 +247,24 @@ int main(void)
 
         prev = me;
 
-        /* -- Composite if anything changed --------------------------------- */
+        /* -- Reap windows whose app thread has exited (active == 0). ------- */
         int any_dirty = moved || pressed || release;
+        for (i = 0; i < WM_MAX_WINDOWS; i++) {
+            window_t *dw = &g_wm.windows[i];
+            if (dw->id != 0 && !dw->active) {
+                int dead_id = dw->id;
+                /* Join the thread so its PCB slot is freed (ZOMBIE→UNUSED). */
+                if (dw->tid) pthread_join(dw->tid, NULL);
+                canvas_free(dw->backbuf);
+                dw->backbuf = (canvas_t *)0;
+                wm_destroy_window(&g_wm, dead_id);
+                any_dirty = 1;
+            }
+        }
+
+        /* -- Composite if anything changed --------------------------------- */
         for (i = 0; i < g_wm.num_windows; i++) {
-            if (g_wm.windows[i].dirty) { any_dirty = 1; break; }
+            if (g_wm.windows[g_wm.z_order[i]].dirty) { any_dirty = 1; break; }
         }
 
         if (any_dirty) {

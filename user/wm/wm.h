@@ -10,15 +10,18 @@
  *
  * Z-order model
  * ─────────────
- * The windows[] array is contiguous: slots 0 … num_windows-1 are active,
- * higher slots are inactive.  Slot 0 is the back; slot num_windows-1 is
- * the front.  wm_raise() rotates the raised window to slot num_windows-1.
+ * windows[] slots are permanently assigned for the window's lifetime; the
+ * slot index never changes.  z_order[0..num_windows-1] holds the active slot
+ * indices in back-to-front order (z_order[num_windows-1] = frontmost).
+ * wm_raise() rotates only z_order[] — slot indices never move.
+ * This keeps app-thread window_t* pointers stable across raise operations.
  */
 
 #ifndef _USER_WM_WM_H
 #define _USER_WM_WM_H
 
 #include <stdint.h>
+#include <pthread.h>
 
 /* gfx.h is pulled in for canvas_t / rect_t / color_t.
  * When compiling on the host for tests, link gfx.c alongside; on the target,
@@ -36,13 +39,27 @@
 #define WM_MIN_W         64
 #define WM_MIN_H         32
 
-/* Desktop and decoration colours */
-#define WM_DESKTOP_COL      GFX_RGB(30,  30,  60 )
-#define WM_TBAR_FOCUSED     GFX_RGB(80,  80,  200)
-#define WM_TBAR_UNFOCUSED   GFX_RGB(60,  60,  60 )
+/* Desktop */
+#define WM_DESKTOP_COL      GFX_RGB( 96, 138, 175)   /* steel blue (à la twlv) */
+
+/* Title bar */
+#define WM_TBAR_FOCUSED     GFX_RGB( 72, 102, 158)   /* muted navy */
+#define WM_TBAR_UNFOCUSED   GFX_RGB(110, 110, 118)   /* gray-blue */
 #define WM_TBAR_TEXT_COL    GFX_WHITE
-#define WM_CLOSE_COL        GFX_RED
-#define WM_BORDER_COL       GFX_RGB(100, 100, 100)
+
+/* Close button */
+#define WM_CLOSE_COL        GFX_RGB(180,  50,  50)
+
+/* 3D bevel colours (used for window chrome and taskbar buttons) */
+#define WM_FRAME_BASE       GFX_RGB(207, 207, 207)   /* light gray fill */
+#define WM_FRAME_HI         GFX_WHITE                /* top / left highlight */
+#define WM_FRAME_MID        GFX_RGB(160, 160, 160)   /* inner shadow */
+#define WM_FRAME_SHADOW     GFX_RGB( 64,  64,  64)   /* bottom / right shadow */
+
+/* Taskbar */
+#define WM_TASKBAR_COL      GFX_RGB(191, 191, 191)   /* light gray */
+#define WM_TASKBTN_COL      WM_FRAME_BASE
+#define WM_TASKBTN_TEXT     GFX_BLACK
 
 /* ── Event types (WM → app) ────────────────────────────────────────────── */
 
@@ -98,6 +115,7 @@ typedef struct wm_window_ {
     int            focused;          /* 1 = has keyboard focus              */
     int            active;           /* 1 = slot occupied                   */
     int            dirty;            /* 1 = backbuf has new pixels          */
+    pthread_t      tid;              /* app thread ID for pthread_join      */
     wm_evqueue_t   events;           /* WM → app keyboard / mouse events    */
     void         (*app_fn)(struct wm_window_ *); /* launch fn, or NULL     */
 } window_t;
@@ -106,7 +124,8 @@ typedef struct wm_window_ {
 
 typedef struct {
     window_t windows[WM_MAX_WINDOWS];
-    int      num_windows;   /* active windows in slots 0…num_windows-1   */
+    int      z_order[WM_MAX_WINDOWS]; /* slot indices, back[0] to front[num_windows-1] */
+    int      num_windows;   /* number of active windows                  */
     int      next_id;       /* monotonically increasing ID counter        */
     int      screen_w;
     int      screen_h;
@@ -193,9 +212,11 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
         s->windows[i].dirty       = 0;
         s->windows[i].focused     = 0;
         s->windows[i].backbuf     = (canvas_t *)0;
+        s->windows[i].tid         = 0;
         s->windows[i].app_fn      = (void (*)(struct wm_window_ *))0;
         s->windows[i].events.head = 0;
         s->windows[i].events.tail = 0;
+        s->z_order[i]             = i;
     }
     s->num_windows   = 0;
     s->next_id       = 1;
@@ -210,18 +231,26 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
 }
 
 /*
- * wm_create_window -- allocate the next contiguous slot (slot num_windows).
+ * wm_create_window -- find the first free slot (id==0), assign it, and
+ * append it to z_order at the front (topmost).
  * Returns the new window ID on success, -1 if the table is full.
  * The caller sets w->backbuf after this call.
  */
 static inline int wm_create_window(wm_state_t *s, const char *title,
                                    int x, int y, int w, int h)
 {
-    int i;
+    int i, slot;
     if (s->num_windows >= WM_MAX_WINDOWS) return -1;
 
-    window_t *win = &s->windows[s->num_windows];
-    win->id      = s->next_id++;
+    /* Find first free slot. */
+    slot = -1;
+    for (i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (s->windows[i].id == 0) { slot = i; break; }
+    }
+    if (slot < 0) return -1;
+
+    window_t *win = &s->windows[slot];
+    win->id       = s->next_id++;
     win->bounds.x = x;
     win->bounds.y = y;
     win->bounds.w = w < WM_MIN_W ? WM_MIN_W : w;
@@ -230,6 +259,7 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
     win->active       = 1;
     win->dirty        = 1;
     win->backbuf      = (canvas_t *)0;
+    win->tid          = 0;
     win->app_fn       = (void (*)(struct wm_window_ *))0;
     win->events.head  = 0;
     win->events.tail  = 0;
@@ -239,15 +269,19 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
         win->title[i] = title[i];
     win->title[i] = '\0';
 
+    /* New window goes to the front of z_order. */
+    s->z_order[s->num_windows] = slot;
     s->num_windows++;
     return win->id;
 }
 
-/* Return slot index of window with given id, or -1. */
+/* Return slot index of window with given id, or -1.
+ * id=0 always returns -1 because 0 is the "slot free" sentinel. */
 static inline int wm_find_idx(const wm_state_t *s, int id)
 {
     int i;
-    for (i = 0; i < s->num_windows; i++) {
+    if (id == 0) return -1;
+    for (i = 0; i < WM_MAX_WINDOWS; i++) {
         if (s->windows[i].id == id)
             return i;
     }
@@ -263,30 +297,38 @@ static inline window_t *wm_find_window(wm_state_t *s, int id)
 
 /*
  * wm_destroy_window -- remove window with given id.
- * Shifts later windows down to keep the array contiguous.
- * If the destroyed window had focus, the new topmost window gets it.
+ * Clears the slot and removes it from z_order (slot index stays stable).
+ * If the destroyed window had focus, the new frontmost window gets it.
  */
 static inline void wm_destroy_window(wm_state_t *s, int id)
 {
-    int idx = wm_find_idx(s, id);
-    if (idx < 0) return;
+    int slot = wm_find_idx(s, id);
+    if (slot < 0) return;
 
-    int had_focus = s->windows[idx].focused;
+    int had_focus = s->windows[slot].focused;
 
-    /* Compact the array. */
-    int i;
-    for (i = idx; i < s->num_windows - 1; i++)
-        s->windows[i] = s->windows[i + 1];
+    /* Remove slot from z_order, shifting later entries left. */
+    int i, z_pos = -1;
+    for (i = 0; i < s->num_windows; i++) {
+        if (s->z_order[i] == slot) { z_pos = i; break; }
+    }
+    if (z_pos >= 0) {
+        for (i = z_pos; i < s->num_windows - 1; i++)
+            s->z_order[i] = s->z_order[i + 1];
+    }
+
+    /* Clear the slot — id=0 marks it free for reuse. */
+    s->windows[slot].id      = 0;
+    s->windows[slot].active  = 0;
+    s->windows[slot].focused = 0;
+    s->windows[slot].tid     = 0;
 
     s->num_windows--;
-    if (s->num_windows > 0)
-        s->windows[s->num_windows].active = 0;
 
-    /* Transfer focus to the new topmost window if needed. */
+    /* Transfer focus to the new frontmost window if needed. */
     if (had_focus && s->num_windows > 0) {
-        for (i = 0; i < s->num_windows; i++)
-            s->windows[i].focused = 0;
-        s->windows[s->num_windows - 1].focused = 1;
+        int top = s->z_order[s->num_windows - 1];
+        s->windows[top].focused = 1;
     }
 
     if (s->drag_win_id == id)
@@ -294,44 +336,47 @@ static inline void wm_destroy_window(wm_state_t *s, int id)
 }
 
 /*
- * wm_hittest -- return slot index of the topmost window under (mx, my), or -1.
- * Iterates front-to-back (highest index first).
+ * wm_hittest -- return stable slot index of the topmost window under (mx, my),
+ * or -1 if nothing is hit.  Iterates z_order front-to-back.
  */
 static inline int wm_hittest(const wm_state_t *s, int mx, int my)
 {
     int i;
     for (i = s->num_windows - 1; i >= 0; i--) {
-        if (wm_in_window(&s->windows[i], mx, my))
-            return i;
+        int slot = s->z_order[i];
+        if (wm_in_window(&s->windows[slot], mx, my))
+            return slot;
     }
     return -1;
 }
 
 /*
- * wm_raise -- move window at slot idx to the front (slot num_windows-1)
- * by rotating the array entries.
+ * wm_raise -- bring window at stable slot index to the front of z_order.
+ * Only rotates z_order[]; the slot and the window_t* it points to never move.
  */
-static inline void wm_raise(wm_state_t *s, int idx)
+static inline void wm_raise(wm_state_t *s, int slot)
 {
-    if (idx < 0 || idx >= s->num_windows) return;
-    if (idx == s->num_windows - 1) return;  /* already at front */
+    int i, z_pos = -1;
+    for (i = 0; i < s->num_windows; i++) {
+        if (s->z_order[i] == slot) { z_pos = i; break; }
+    }
+    if (z_pos < 0) return;
+    if (z_pos == s->num_windows - 1) return;  /* already at front */
 
-    window_t tmp = s->windows[idx];
-    int i;
-    for (i = idx; i < s->num_windows - 1; i++)
-        s->windows[i] = s->windows[i + 1];
-    s->windows[s->num_windows - 1] = tmp;
+    for (i = z_pos; i < s->num_windows - 1; i++)
+        s->z_order[i] = s->z_order[i + 1];
+    s->z_order[s->num_windows - 1] = slot;
 }
 
 /*
- * wm_focus -- give keyboard focus to the window at slot idx.
+ * wm_focus -- give keyboard focus to the window at stable slot index.
  * Clears focus on all other windows.
  */
-static inline void wm_focus(wm_state_t *s, int idx)
+static inline void wm_focus(wm_state_t *s, int slot)
 {
     int i;
-    for (i = 0; i < s->num_windows; i++)
-        s->windows[i].focused = (i == idx) ? 1 : 0;
+    for (i = 0; i < WM_MAX_WINDOWS; i++)
+        s->windows[i].focused = (i == slot && s->windows[i].id != 0) ? 1 : 0;
 }
 
 /* ── Mouse event handling ──────────────────────────────────────────────── */
@@ -356,8 +401,7 @@ static inline void wm_handle_mouse_down(wm_state_t *s,
     int win_id = s->windows[idx].id;
 
     wm_raise(s, idx);
-    /* After raise, the window is at num_windows-1. */
-    idx = s->num_windows - 1;
+    /* idx is a stable slot index — still valid after raise. */
     wm_focus(s, idx);
 
     window_t *w = &s->windows[idx];

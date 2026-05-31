@@ -193,8 +193,12 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
                (int)regs->ebx);
 #ifdef __is_kernel
-        if (exec_return_active) {
-            /* Shell launched this program via exec_setjmp -- longjmp back. */
+        if (exec_return_active &&
+            (!current_process || current_process->thread_group == 0)) {
+            /* Shell launched this program via exec_setjmp -- longjmp back.
+             * CLONE_VM threads (thread_group != 0) must NOT longjmp: they
+             * share the WM's address space and their exit must go through the
+             * normal ZOMBIE path so the WM can pthread_join them.           */
             exec_longjmp(&exec_return_buf, 1);
             __builtin_unreachable();
         }

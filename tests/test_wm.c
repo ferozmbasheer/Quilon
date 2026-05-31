@@ -335,9 +335,9 @@ static void test_raise(void)
     int idx_a = wm_find_idx(&s, id_a);
     wm_raise(&s, idx_a);
 
-    /* Now A should be at the top (highest slot index). */
-    int top_idx = s.num_windows - 1;
-    ASSERT_EQ(s.windows[top_idx].id, id_a, "A is at top after raise");
+    /* Now A should be at the front of z_order. */
+    int top_slot = s.z_order[s.num_windows - 1];
+    ASSERT_EQ(s.windows[top_slot].id, id_a, "A is at top after raise");
 
     /* Hit test should now find A in the overlap. */
     int hit = wm_hittest(&s, 120, 180);
@@ -347,7 +347,8 @@ static void test_raise(void)
     /* Raising the already-front window is a no-op. */
     int before = wm_find_idx(&s, id_a);
     wm_raise(&s, before);
-    ASSERT_EQ(s.windows[s.num_windows-1].id, id_a, "raising front is no-op");
+    top_slot = s.z_order[s.num_windows - 1];
+    ASSERT_EQ(s.windows[top_slot].id, id_a, "raising front is no-op");
     ASSERT_EQ(s.num_windows, 2, "num_windows unchanged after raise");
 }
 
@@ -409,10 +410,10 @@ static void test_mouse_down_raise_focus(void)
     int tb_y = 120 - TITLEBAR_H + TITLEBAR_H / 2;
     wm_handle_mouse_down(&s, 55, tb_y, 1);
 
-    /* A should now be on top and focused. */
-    int top = s.num_windows - 1;
-    ASSERT_EQ(s.windows[top].id, id_a, "click raises A to front");
-    ASSERT_EQ(s.windows[top].focused, 1, "raised window is focused");
+    /* A should now be at the front of z_order and focused. */
+    int top_slot = s.z_order[s.num_windows - 1];
+    ASSERT_EQ(s.windows[top_slot].id, id_a, "click raises A to front");
+    ASSERT_EQ(s.windows[top_slot].focused, 1, "raised window is focused");
     ASSERT_EQ(s.drag_win_id, id_a, "dragging A (click in titlebar)");
 }
 
@@ -504,8 +505,8 @@ static void test_compositor_desktop_bg(void)
     /* No windows: composite should fill with desktop colour. */
     wm_composite(&s, screen);
     int bg_pixels = count_col(screen, WM_DESKTOP_COL);
-    /* Most pixels (minus cursor) should be desktop colour. */
-    ASSERT(bg_pixels > 150 * 200 - 64, "almost all pixels are desktop colour");
+    /* Most pixels (minus cursor + drop shadow, ~130 pixels max) should be desktop colour. */
+    ASSERT(bg_pixels > 150 * 200 - 512, "almost all pixels are desktop colour");
 
     canvas_free(screen);
 }

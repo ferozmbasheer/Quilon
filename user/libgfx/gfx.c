@@ -343,6 +343,25 @@ void gfx_blit(canvas_t *dst, int dx, int dy,
     }
 }
 
+void gfx_draw_line(canvas_t *c, int x0, int y0, int x1, int y1, color_t col)
+{
+    if (!c) return;
+    int dx = x1 - x0, dy = y1 - y0;
+    int sx = (dx < 0) ? -1 : 1;
+    int sy = (dy < 0) ? -1 : 1;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    int err = dx - dy;
+    while (1) {
+        if (pixel_visible(c, x0, y0))
+            c->pixels[y0 * c->pitch + x0] = col;
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = err * 2;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 <  dx) { err += dx; y0 += sy; }
+    }
+}
+
 void gfx_draw_text(canvas_t *c, int x, int y,
                    const char *str, color_t fg, color_t bg)
 {
