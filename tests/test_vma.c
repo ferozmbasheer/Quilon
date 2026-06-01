@@ -312,6 +312,72 @@ static void test_stack_vma(void)
     ASSERT_NULL(v, "stack VMA: address below VMA start is not found");
 }
 
+/* -- vma_range_ok (syscall copyin/copyout validation primitive) ------------- */
+
+static void test_range_basic(void)
+{
+    vma_t vmas[PROC_VMA_MAX];
+    vma_init(vmas, PROC_VMA_MAX);
+    vma_add(vmas, PROC_VMA_MAX, 0x1000u, 0x2000u, VMA_R | VMA_W);
+
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x1000u, 0x1000u, 0), 1,
+              "range_ok: whole page readable");
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x1000u, 0x1000u, 1), 1,
+              "range_ok: whole page writable");
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x1500u, 0x100u, 0), 1,
+              "range_ok: sub-range inside VMA");
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x0500u, 0x100u, 0), 0,
+              "range_ok: range below any VMA rejected");
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x1F00u, 0x200u, 0), 0,
+              "range_ok: range running off the end rejected");
+}
+
+static void test_range_zero_len(void)
+{
+    vma_t vmas[PROC_VMA_MAX];
+    vma_init(vmas, PROC_VMA_MAX);
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x12345u, 0, 0), 1,
+              "range_ok: zero-length is always ok");
+}
+
+static void test_range_permissions(void)
+{
+    vma_t vmas[PROC_VMA_MAX];
+    vma_init(vmas, PROC_VMA_MAX);
+    vma_add(vmas, PROC_VMA_MAX, 0x4000u, 0x5000u, VMA_R | VMA_X);  /* no W */
+
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x4000u, 0x10u, 0), 1,
+              "range_ok: read of read-only region ok");
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x4000u, 0x10u, 1), 0,
+              "range_ok: write to read-only region rejected");
+}
+
+static void test_range_straddle(void)
+{
+    vma_t vmas[PROC_VMA_MAX];
+    vma_init(vmas, PROC_VMA_MAX);
+    vma_add(vmas, PROC_VMA_MAX, 0x1000u, 0x2000u, VMA_R | VMA_W);
+    vma_add(vmas, PROC_VMA_MAX, 0x2000u, 0x3000u, VMA_R | VMA_W);
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0x1FF0u, 0x20u, 1), 1,
+              "range_ok: buffer straddling two adjacent VMAs ok");
+
+    vma_t gap[PROC_VMA_MAX];
+    vma_init(gap, PROC_VMA_MAX);
+    vma_add(gap, PROC_VMA_MAX, 0x1000u, 0x2000u, VMA_R | VMA_W);
+    vma_add(gap, PROC_VMA_MAX, 0x3000u, 0x4000u, VMA_R | VMA_W);
+    ASSERT_EQ(vma_range_ok(gap, PROC_VMA_MAX, 0x1FF0u, 0x20u, 0), 0,
+              "range_ok: buffer crossing an unmapped page rejected");
+}
+
+static void test_range_overflow(void)
+{
+    vma_t vmas[PROC_VMA_MAX];
+    vma_init(vmas, PROC_VMA_MAX);
+    /* A range whose addr+len wraps past 2^32 must be rejected outright. */
+    ASSERT_EQ(vma_range_ok(vmas, PROC_VMA_MAX, 0xFFFFFFF0u, 0x20u, 0), 0,
+              "range_ok: range wrapping the address space rejected");
+}
+
 /* -- main ------------------------------------------------------------------- */
 
 int main(void)
@@ -330,6 +396,11 @@ int main(void)
     RUN_SUITE(test_remove_and_reuse);
     RUN_SUITE(test_heap_simulation);
     RUN_SUITE(test_stack_vma);
+    RUN_SUITE(test_range_basic);
+    RUN_SUITE(test_range_zero_len);
+    RUN_SUITE(test_range_permissions);
+    RUN_SUITE(test_range_straddle);
+    RUN_SUITE(test_range_overflow);
     TEST_SUMMARY();
     return (fw_failed > 0) ? 1 : 0;
 }

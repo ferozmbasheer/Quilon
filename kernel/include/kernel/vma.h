@@ -138,4 +138,28 @@ int vma_extend(vma_t *vmas, int count, uint32_t start, uint32_t new_end);
  */
 void vma_remove(vma_t *vmas, int count, uint32_t start);
 
+/*
+ * vma_range_ok -- check that every byte of [addr, addr + len) lies within
+ * VMAs that grant the required permission.
+ *
+ * This is the validation primitive behind the syscall copyin/copyout layer:
+ * before the kernel dereferences a pointer handed in by ring-3, it asks
+ * whether that whole range is backed by the process's address space.
+ *
+ *   need_write != 0  -- every covering VMA must have VMA_W (a write target).
+ *   need_write == 0  -- every covering VMA must have VMA_R (a read source).
+ *
+ * Coverage is checked at page granularity (VMA bounds are page-aligned), so a
+ * range that straddles two adjacent VMAs is accepted as long as each page it
+ * touches is mapped.  Returns:
+ *   1  -- the entire range is accessible with the requested permission.
+ *   0  -- some page is unmapped, lacks the permission, or addr+len overflows.
+ *
+ * A zero-length range is vacuously OK (returns 1).
+ *
+ * Pure C -- unit-testable on the host.
+ */
+int vma_range_ok(const vma_t *vmas, int count,
+                 uint32_t addr, uint32_t len, int need_write);
+
 #endif /* _KERNEL_VMA_H */

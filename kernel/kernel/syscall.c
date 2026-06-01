@@ -62,6 +62,18 @@
 /* Virtual address where the user heap starts (just above typical ELF range). */
 #define USER_HEAP_START  0x00800000u
 
+/* Upper bound for the heap break.  Kept well below the gfx mapping
+ * (0x60000000) and the user stack so a runaway sbrk cannot collide with them. */
+#define USER_HEAP_MAX    0x40000000u
+
+/* Fixed user-space VA where SYS_GFX_MAP maps the kernel shadow framebuffer. */
+#define GFX_MAP_UADDR    0x60000000u
+
+/* Upper bound on the length of a user-supplied string (e.g. a path) that the
+ * kernel will scan while validating it.  Keeps a bad pointer from making the
+ * validator walk forever. */
+#define UAP_STR_MAX      1024u
+
 /* -- Kernel-only initialisation ----------------------------------------------
  * int80_stub and IDT[] only exist in the kernel build (boot.S / interrupts.c).
  * Guard them so that syscall.c compiles cleanly on the host for unit tests.  */
@@ -91,6 +103,59 @@ void syscall_initialize(void)
 {
     idt_set_gate(0x80, (uint32_t)(uintptr_t)int80_stub,
                  IDT_SELECTOR_KERNEL_CODE, IDT_TYPE_USER_TRAP_GATE);
+}
+
+/* -- User-pointer validation (copyin/copyout layer) --------------------------
+ *
+ * Ring-3 hands the kernel raw pointers in syscall registers.  Before the kernel
+ * dereferences one it must confirm the whole range is backed by the calling
+ * process's address space with the right permission; otherwise a hostile or
+ * buggy program could fault the kernel (ring-0) or read/write kernel memory.
+ *
+ * These helpers consult the current process's VMA table via vma_range_ok().
+ * When there is no process context (current_process == NULL on the ring-0 boot
+ * / exec_setjmp path) there is no VMA table to consult, so the access is
+ * permitted -- this preserves the kernel-internal call paths that predate this
+ * layer.  There is no munmap in this kernel, so validate-then-use is free of
+ * time-of-check/time-of-use races: a range that validates stays mapped.
+ * ------------------------------------------------------------------------- */
+
+/* Is [uaddr, uaddr+len) accessible with the requested permission? */
+static int uap_ok(uint32_t uaddr, uint32_t len, int need_write)
+{
+    if (!current_process) return 1;
+    return vma_range_ok(current_process->vmas, PROC_VMA_MAX,
+                        uaddr, len, need_write);
+}
+
+/* Is the NUL-terminated user string at uaddr fully readable (within UAP_STR_MAX
+ * bytes)?  Validates each page before touching it, so it never dereferences an
+ * unmapped address while searching for the terminator. */
+static int uap_str_ok(uint32_t uaddr)
+{
+    if (!current_process) return 1;
+    if (uaddr == 0) return 0;
+
+    uint32_t scanned = 0;
+    while (scanned < UAP_STR_MAX) {
+        if (!vma_range_ok(current_process->vmas, PROC_VMA_MAX, uaddr, 1, 0))
+            return 0;
+        /* Scan within the validated page until NUL, page end, or the cap. */
+        do {
+            if (*(const char *)(uintptr_t)uaddr == '\0') return 1;
+            uaddr++;
+            scanned++;
+        } while ((uaddr & 0xFFFu) != 0 && scanned < UAP_STR_MAX);
+    }
+    return 0;   /* no terminator within the cap -- treat as invalid */
+}
+
+/* Copy len bytes from a kernel buffer into a validated user range. 0 / -1. */
+static int copyout(uint32_t udst, const void *ksrc, uint32_t len)
+{
+    if (!uap_ok(udst, len, 1)) return -1;
+    memcpy((void *)(uintptr_t)udst, ksrc, len);
+    return 0;
 }
 
 #endif /* __is_kernel */
@@ -125,6 +190,15 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_WRITE: {
         const char *buf = (const char *)(uintptr_t)regs->ecx;
         uint32_t    len = regs->edx;
+
+#ifdef __is_kernel
+        /* Reject a source buffer that is not entirely readable user memory. */
+        if (buf != NULL && len > 0 &&
+            !uap_ok((uint32_t)(uintptr_t)buf, len, 0)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+#endif
 
         if ((regs->ebx == FD_STDOUT || regs->ebx == FD_STDERR) &&
             buf != NULL) {
@@ -231,7 +305,8 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_OPEN: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        ret = (path != (void *)0) ? (uint32_t)vfs_open(path) : (uint32_t)-1;
+        if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_open(path);
 #else
         ret = (uint32_t)-1;   /* filesystem not available in host build */
 #endif
@@ -255,6 +330,8 @@ void syscall_handler(syscall_regs_t *regs)
         char    *buf = (char *)(uintptr_t)regs->ecx;
         uint32_t len = regs->edx;
         if (!buf || len == 0) { ret = (uint32_t)-1; break; }
+        /* Reject a destination buffer that is not writable user memory. */
+        if (!uap_ok((uint32_t)(uintptr_t)buf, len, 1)) { ret = (uint32_t)-1; break; }
         if ((int)regs->ebx == FD_STDIN) {
             if (current_process && current_process->stdin_fd >= 0) {
                 ret = (uint32_t)vfs_read(current_process->stdin_fd, buf, len);
@@ -302,13 +379,31 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         uint32_t   child_pid    = regs->ebx;
         int       *exit_code_p  = (int *)(uintptr_t)regs->ecx;
-        process_t *_child       = process_find(child_pid);
+
+        /* Reject an exit-code pointer that is not writable user memory. */
+        if (exit_code_p && !uap_ok(regs->ecx, sizeof(int), 1)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+
+        process_t *_child = process_find(child_pid);
         if (!_child) { ret = (uint32_t)-1; break; }
 
-        /* Block until the child transitions to PROC_ZOMBIE. */
+        /*
+         * Block until the child becomes a zombie.  Re-resolve the child by PID
+         * on every wake instead of trusting the cached pointer: another path
+         * could reap the slot (or recycle the PID) while we are blocked, which
+         * would otherwise leave us spinning on a stale or reused PCB.  If the
+         * child disappears without us reaping it, treat the wait as failed.
+         */
         current_process->state = PROC_BLOCKED;
-        while (_child->state != PROC_ZOMBIE)
+        for (;;) {
+            _child = process_find(child_pid);
+            if (!_child) { ret = (uint32_t)-1; break; }
+            if (_child->state == PROC_ZOMBIE) break;
             scheduler_yield();
+        }
+        if (!_child) { current_process->state = PROC_RUNNING; break; }
 
         if (exit_code_p) *exit_code_p = _child->exit_code;
         _child->state = PROC_UNUSED;   /* reap: free the slot */
@@ -331,7 +426,7 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_EXEC: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        if (!path) { ret = (uint32_t)-1; break; }
+        if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
 
         /* 1. Allocate a new page directory (kernel half shared). */
         uint32_t *child_pd = paging_create_address_space();
@@ -505,7 +600,20 @@ void syscall_handler(syscall_regs_t *regs)
         uint32_t old_brk = *break_ptr;
         if (sbrk_inc == 0) { ret = old_brk; break; }  /* query only */
 
-        uint32_t new_brk = old_brk + (uint32_t)sbrk_inc;
+        /*
+         * Compute the new break with bounds checking.  Doing the arithmetic in
+         * signed 64-bit space catches both a negative increment that would
+         * underflow the heap below USER_HEAP_START and a positive one that would
+         * overflow past USER_HEAP_MAX -- either of which would otherwise wrap a
+         * uint32_t and corrupt the heap VMA (whose end could end up < start).
+         */
+        int64_t  new_brk64 = (int64_t)old_brk + (int64_t)sbrk_inc;
+        if (new_brk64 < (int64_t)USER_HEAP_START ||
+            new_brk64 > (int64_t)USER_HEAP_MAX) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        uint32_t new_brk = (uint32_t)new_brk64;
 
         if (current_process) {
             /*
@@ -588,9 +696,12 @@ void syscall_handler(syscall_regs_t *regs)
      * ------------------------------------------------------------------------ */
     case SYS_READDIR: {
 #ifdef __is_kernel
-        vfs_dirent_t *ent = (vfs_dirent_t *)(uintptr_t)regs->ecx;
-        if (!ent) { ret = (uint32_t)-1; break; }
-        ret = (uint32_t)vfs_readdir(regs->ebx, ent);
+        if (regs->ecx == 0) { ret = (uint32_t)-1; break; }
+        vfs_dirent_t kent;
+        int rdr = vfs_readdir(regs->ebx, &kent);
+        if (rdr == 0 && copyout(regs->ecx, &kent, sizeof kent) != 0)
+            rdr = -1;
+        ret = (uint32_t)rdr;
 #else
         ret = (uint32_t)-1;
 #endif
@@ -607,7 +718,8 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_CREATE: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        ret = (path != (void *)0) ? (uint32_t)vfs_create(path) : (uint32_t)-1;
+        if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_create(path);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -622,7 +734,8 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_REMOVE: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        ret = (path != (void *)0) ? (uint32_t)vfs_remove(path) : (uint32_t)-1;
+        if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_remove(path);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -668,7 +781,11 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_PIPE: {
 #ifdef __is_kernel
         int *fds = (int *)(uintptr_t)regs->ebx;
-        ret = (fds != (void *)0) ? (uint32_t)vfs_pipe(fds) : (uint32_t)-1;
+        if (!fds || !uap_ok(regs->ebx, sizeof(int) * 2, 1)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        ret = (uint32_t)vfs_pipe(fds);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -710,7 +827,10 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         const void *buf = (const void *)(uintptr_t)regs->ebx;
         uint16_t    len = (uint16_t)(regs->ecx & 0xFFFFu);
-        if (!buf || len == 0) { ret = (uint32_t)-1; break; }
+        if (!buf || len == 0 || !uap_ok(regs->ebx, len, 0)) {
+            ret = (uint32_t)-1;
+            break;
+        }
         ret = (uint32_t)rtl8139_send(buf, len);
 #else
         ret = (uint32_t)-1;
@@ -733,7 +853,10 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         void    *buf    = (void *)(uintptr_t)regs->ebx;
         uint16_t maxlen = (uint16_t)(regs->ecx & 0xFFFFu);
-        if (!buf || maxlen == 0) { ret = (uint32_t)-1; break; }
+        if (!buf || maxlen == 0 || !uap_ok(regs->ebx, maxlen, 1)) {
+            ret = (uint32_t)-1;
+            break;
+        }
         ret = (uint32_t)rtl8139_recv(buf, maxlen);
 #else
         ret = (uint32_t)-1;
@@ -754,6 +877,7 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_NET_STATUS: {
 #ifdef __is_kernel
         uint8_t *mac_out = (uint8_t *)(uintptr_t)regs->ebx;
+        if (mac_out && !uap_ok(regs->ebx, 6, 1)) { ret = (uint32_t)-1; break; }
         if (rtl8139_is_ready()) {
             if (mac_out)
                 rtl8139_get_mac(mac_out);
@@ -824,6 +948,10 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_VBE_INFO: {
 #ifdef __is_kernel
         uint32_t *out = (uint32_t *)(uintptr_t)regs->ebx;
+        if (out && !uap_ok(regs->ebx, sizeof(uint32_t) * 3, 1)) {
+            ret = (uint32_t)-1;
+            break;
+        }
         if (vbe_active() && out) {
             const vbe_info_t *info = vbe_get_info();
             out[0] = info->width;
@@ -849,9 +977,12 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_STAT: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        vfs_stat_t *st   = (vfs_stat_t *)(uintptr_t)regs->ecx;
-        if (!path || !st) { ret = (uint32_t)-1; break; }
-        ret = (uint32_t)vfs_stat(path, st);
+        if (!uap_str_ok(regs->ebx) || regs->ecx == 0) { ret = (uint32_t)-1; break; }
+        vfs_stat_t kst;
+        int sr = vfs_stat(path, &kst);
+        if (sr == 0 && copyout(regs->ecx, &kst, sizeof kst) != 0)
+            sr = -1;
+        ret = (uint32_t)sr;
 #else
         ret = (uint32_t)-1;
 #endif
@@ -866,7 +997,8 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_MKDIR: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        ret = (path) ? (uint32_t)vfs_mkdir(path) : (uint32_t)-1;
+        if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_mkdir(path);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -881,7 +1013,8 @@ void syscall_handler(syscall_regs_t *regs)
     case SYS_CHDIR: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
-        ret = (path) ? (uint32_t)vfs_chdir(path) : (uint32_t)-1;
+        if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_chdir(path);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -898,7 +1031,11 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         char    *buf = (char *)(uintptr_t)regs->ebx;
         uint32_t len = regs->ecx;
-        ret = (buf && len > 0) ? (uint32_t)vfs_getcwd(buf, len) : (uint32_t)-1;
+        if (!buf || len == 0 || !uap_ok(regs->ebx, len, 1)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        ret = (uint32_t)vfs_getcwd(buf, len);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -933,9 +1070,11 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         const char *oldpath = (const char *)(uintptr_t)regs->ebx;
         const char *newpath = (const char *)(uintptr_t)regs->ecx;
-        ret = (oldpath && newpath)
-              ? (uint32_t)vfs_rename(oldpath, newpath)
-              : (uint32_t)-1;
+        if (!uap_str_ok(regs->ebx) || !uap_str_ok(regs->ecx)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        ret = (uint32_t)vfs_rename(oldpath, newpath);
 #else
         ret = (uint32_t)-1;
 #endif
@@ -971,6 +1110,15 @@ void syscall_handler(syscall_regs_t *regs)
         uint32_t clone_flags = regs->edx;
 
         if (!clone_fn || !clone_stack) { ret = (uint32_t)-1; break; }
+
+        /* Validate the entry point is readable and the top of the new thread's
+         * user stack is writable in the caller's address space (CLONE_VM shares
+         * it).  A bogus stack here would otherwise fault ring-0 on first switch.
+         * An underflowed clone_stack makes uap_ok's range wrap and be rejected. */
+        if (!uap_ok(clone_fn, 1, 0) || !uap_ok(clone_stack - 16u, 16, 1)) {
+            ret = (uint32_t)-1;
+            break;
+        }
 
         uint32_t thread_cr3;
         int      owns_cr3 = 0;   /* 1 if we must free cr3 on failure */
@@ -1063,11 +1211,11 @@ void syscall_handler(syscall_regs_t *regs)
      * Returns -1 if the pointer is NULL.
      * ------------------------------------------------------------------------ */
     case SYS_MOUSE_READ: {
-        mouse_event_t *out = (mouse_event_t *)(uintptr_t)regs->ebx;
-        if (!out) { ret = (uint32_t)-1; break; }
-        out->x       = mouse_get_x();
-        out->y       = mouse_get_y();
-        out->buttons = mouse_get_buttons();
+        mouse_event_t ev;
+        ev.x       = mouse_get_x();
+        ev.y       = mouse_get_y();
+        ev.buttons = mouse_get_buttons();
+        if (copyout(regs->ebx, &ev, sizeof ev) != 0) { ret = (uint32_t)-1; break; }
         ret = 1;
         break;
     }
@@ -1107,13 +1255,14 @@ void syscall_handler(syscall_regs_t *regs)
      * ------------------------------------------------------------------------ */
     case SYS_GFX_INFO: {
 #ifdef __is_kernel
-        gfx_info_t *out = (gfx_info_t *)(uintptr_t)regs->ebx;
-        if (!out || !vbe_active()) { ret = (uint32_t)-1; break; }
+        if (!vbe_active()) { ret = (uint32_t)-1; break; }
         const vbe_info_t *info = vbe_get_info();
-        out->width  = info->width;
-        out->height = info->height;
-        out->pitch  = info->pitch;
-        out->bpp    = info->bpp;
+        gfx_info_t kinfo;
+        kinfo.width  = info->width;
+        kinfo.height = info->height;
+        kinfo.pitch  = info->pitch;
+        kinfo.bpp    = info->bpp;
+        if (copyout(regs->ebx, &kinfo, sizeof kinfo) != 0) { ret = (uint32_t)-1; break; }
         ret = 0;
 #else
         ret = (uint32_t)-1;
@@ -1133,7 +1282,6 @@ void syscall_handler(syscall_regs_t *regs)
      * ------------------------------------------------------------------------ */
     case SYS_GFX_MAP: {
 #ifdef __is_kernel
-#define GFX_MAP_UADDR 0x60000000u
         if (!vbe_active() || !current_process) { ret = (uint32_t)-1; break; }
 
         uint32_t npages = vbe_shadow_page_count();
@@ -1152,6 +1300,15 @@ void syscall_handler(syscall_regs_t *regs)
         }
         /* Full TLB flush to make the new user mappings visible immediately. */
         paging_switch(current_process->cr3);
+
+        /* Record the mapping as a VMA so the copyin/copyout validator accepts
+         * pointers into the gfx buffer.  Best-effort: if the table is full the
+         * mapping still works, the range just won't pass uap_ok. */
+        if (!vma_find_start(current_process->vmas, PROC_VMA_MAX, GFX_MAP_UADDR))
+            vma_add(current_process->vmas, PROC_VMA_MAX, GFX_MAP_UADDR,
+                    GFX_MAP_UADDR + npages * PAGE_SIZE,
+                    VMA_R | VMA_W | VMA_ANON);
+
         ret = GFX_MAP_UADDR;
 #else
         ret = (uint32_t)-1;

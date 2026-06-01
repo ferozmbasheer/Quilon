@@ -68,3 +68,44 @@ void vma_remove(vma_t *vmas, int count, uint32_t start)
         }
     }
 }
+
+/* Page size used for coverage checks.  VMA bounds are always page-aligned, so
+ * a page is fully covered by a VMA iff its base address falls inside it. */
+#define VMA_PAGE_SIZE 0x1000u
+
+int vma_range_ok(const vma_t *vmas, int count,
+                 uint32_t addr, uint32_t len, int need_write)
+{
+    if (len == 0)
+        return 1;                       /* nothing to access */
+
+    /* Reject ranges that wrap around the 32-bit address space. */
+    if (addr + len < addr)
+        return 0;
+
+    uint32_t need  = need_write ? VMA_W : VMA_R;
+    uint32_t last  = addr + len - 1;
+    uint32_t first = addr & ~(VMA_PAGE_SIZE - 1u);
+    uint32_t lastp = last & ~(VMA_PAGE_SIZE - 1u);
+
+    /* Number of pages the range touches.  Counting iterations (rather than
+     * comparing page <= lastp) avoids an infinite loop when the range reaches
+     * the top page and page += PAGE_SIZE would wrap to 0. */
+    uint32_t npages = (lastp - first) / VMA_PAGE_SIZE + 1u;
+    uint32_t page   = first;
+
+    for (uint32_t n = 0; n < npages; n++, page += VMA_PAGE_SIZE) {
+        int covered = 0;
+        for (int i = 0; i < count; i++) {
+            if (vmas[i].used &&
+                vmas[i].start <= page && page < vmas[i].end &&
+                (vmas[i].flags & need)) {
+                covered = 1;
+                break;
+            }
+        }
+        if (!covered)
+            return 0;
+    }
+    return 1;
+}
