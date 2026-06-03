@@ -4,6 +4,7 @@
 #include <kernel/paging.h>
 #include <kernel/pmm.h>
 #include <kernel/vma.h>
+#include <kernel/spinlock.h>
 
 /* Page directory and first page table: statically allocated and 4 KiB-
  * aligned so the CPU will accept them as PD/PT base addresses.
@@ -75,6 +76,84 @@ void paging_initialize(void)
         : "r"(pd_phys)
         : "eax"
     );
+}
+
+/* -- kmap: temporary kernel access to an arbitrary physical page ------------
+ *
+ * The kernel can only dereference a physical address directly while it falls in
+ * the first 4 MiB identity map.  Data pages (heap, ELF segments, stack, CoW
+ * copies) are allocated above 4 MiB (pmm_alloc_page_above_4mib) to keep the
+ * scarce identity-mapped low memory for paging structures, so the kernel needs
+ * a window to reach them.  kmap() installs a transient mapping of a physical
+ * page at a fixed kernel VA, returns a pointer, and kunmap() tears it down.
+ *
+ * The window lives in second_page_table (PD[769], 0xC0400000-0xC04FFFFF), which
+ * is copied into every process address space by paging_create_address_space().
+ * That matters because the page-fault handler runs under the FAULTING process's
+ * CR3 -- the window must resolve there too, not just under the kernel PD.
+ *
+ * KMAP_SLOTS independent slots allow a few concurrent/nested maps (e.g. CoW does
+ * two at once).  A spinlock guards slot allocation.  Slot i maps to
+ * KMAP_BASE + i*PAGE_SIZE.  The window sits below the VBE shadow (0xC0500000),
+ * which uses higher offsets of the same page table.
+ */
+#define KMAP_BASE   0xC0400000u
+#define KMAP_SLOTS  8u
+/* PTE index within second_page_table for KMAP_BASE: (0xC0400000 >> 12) & 0x3FF. */
+#define KMAP_PTE0   (((KMAP_BASE) >> 12) & 0x3FFu)
+
+static spinlock_t kmap_lock = SPINLOCK_INIT;
+static uint8_t    kmap_used[KMAP_SLOTS];
+
+void *kmap(uint32_t phys)
+{
+    /* IRQ-safe: kmap is used by the page-fault handler (IF=0). */
+    uint32_t f = spinlock_acquire_irqsave(&kmap_lock);
+    int slot = -1;
+    for (uint32_t i = 0; i < KMAP_SLOTS; i++) {
+        if (!kmap_used[i]) { kmap_used[i] = 1; slot = (int)i; break; }
+    }
+    spinlock_release_irqrestore(&kmap_lock, f);
+    if (slot < 0) return NULL;   /* all slots busy -- caller must serialise */
+
+    uint32_t va = KMAP_BASE + (uint32_t)slot * PAGE_SIZE;
+    second_page_table[KMAP_PTE0 + (uint32_t)slot] =
+        paging_make_entry(phys & ~(uint32_t)0xFFF, PAGE_PRESENT | PAGE_WRITABLE);
+    asm volatile("invlpg (%0)" :: "r"(va) : "memory");
+    return (void *)(uintptr_t)(va + (phys & 0xFFFu));
+}
+
+void kunmap(void *ptr)
+{
+    uint32_t va   = (uint32_t)(uintptr_t)ptr & ~(uint32_t)0xFFF;
+    if (va < KMAP_BASE || va >= KMAP_BASE + KMAP_SLOTS * PAGE_SIZE) return;
+    uint32_t slot = (va - KMAP_BASE) / PAGE_SIZE;
+
+    second_page_table[KMAP_PTE0 + slot] = 0;   /* not present */
+    asm volatile("invlpg (%0)" :: "r"(va) : "memory");
+
+    uint32_t f = spinlock_acquire_irqsave(&kmap_lock);
+    kmap_used[slot] = 0;
+    spinlock_release_irqrestore(&kmap_lock, f);
+}
+
+/* Allocate a zeroed data page above the identity map, accessible via kmap.
+ * Returns the physical address (NULL on OOM).  Used for heap/ELF/stack/CoW
+ * pages -- everything the kernel only needs transient access to. */
+void *pmm_alloc_data_page(void)
+{
+    void *phys = pmm_alloc_page_above_4mib();
+    if (!phys) phys = pmm_alloc_page();   /* fall back to low memory if high is full */
+    if (!phys) return NULL;
+    void *v = kmap((uint32_t)(uintptr_t)phys);
+    if (v) { memset(v, 0, PAGE_SIZE); kunmap(v); }
+    else {
+        /* No kmap slot: if the page happens to be identity-mapped, zero it
+         * directly; otherwise leave it (caller will kmap to use it anyway). */
+        if ((uint32_t)(uintptr_t)phys < 0x400000u)
+            memset(phys, 0, PAGE_SIZE);
+    }
+    return phys;
 }
 
 void paging_set_user_access(uint32_t virt_start, uint32_t virt_end)
@@ -213,11 +292,15 @@ void paging_switch(uint32_t pd_phys)
  */
 int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd)
 {
-    /* Entry 0 is the shared kernel page table -- already in child_pd[0].
-     * Entry KERNEL_PD_IDX (768) is the shared kernel-high page table -- skip.
-     * Walk entries 1-1023 for user pages.                                 */
-    for (int i = 1; i < 1024; i++) {
-        if (i == (int)KERNEL_PD_IDX) continue;
+    /* Entry 0 is the shared kernel identity page table -- already copied into
+     * child_pd[0] by paging_create_address_space().  ALL kernel-high entries
+     * (KERNEL_PD_IDX..1023) are likewise shared, not per-process: PD[768] is
+     * the kernel-high map and PD[769] is the kmap/VBE window whose page table
+     * (second_page_table) the kernel mutates live.  Deep-copying any of them
+     * would give the child a stale snapshot -- e.g. it would never see kmap()'s
+     * PTE writes, faulting not-present on a valid kmap VA.  So fork only the
+     * user range [1, KERNEL_PD_IDX).                                          */
+    for (int i = 1; i < (int)KERNEL_PD_IDX; i++) {
         if (!(parent_pd[i] & PAGE_PRESENT))
             continue;
 
@@ -278,10 +361,26 @@ int paging_cow_handle(uint32_t *pd, uint32_t fault_addr)
         uint32_t new_flags = (flags & ~(uint32_t)PAGE_COW) | PAGE_WRITABLE;
         pt[pt_idx] = paging_make_entry(phys, new_flags);
     } else {
-        /* Shared: copy the page, drop our reference to the original. */
-        void *new_phys = pmm_alloc_page();
+        /* Shared: copy the page, drop our reference to the original.
+         * Both the source (an existing data page) and the destination may live
+         * above the identity map, so reach each through a transient kmap rather
+         * than dereferencing the physical address directly. */
+        void *new_phys = pmm_alloc_page_above_4mib();
+        if (!new_phys) new_phys = pmm_alloc_page();
         if (!new_phys) return -1;
-        memcpy(new_phys, (const void *)(uintptr_t)phys, PAGE_SIZE);
+
+        void *dst = kmap((uint32_t)(uintptr_t)new_phys);
+        void *src = kmap(phys);
+        if (!dst || !src) {
+            if (dst) kunmap(dst);
+            if (src) kunmap(src);
+            pmm_free_page(new_phys);
+            return -1;
+        }
+        memcpy(dst, src, PAGE_SIZE);
+        kunmap(src);
+        kunmap(dst);
+
         pmm_free_page((void *)(uintptr_t)phys);  /* decrement shared refcount */
         uint32_t new_flags = (flags & ~(uint32_t)PAGE_COW) | PAGE_WRITABLE;
         pt[pt_idx] = paging_make_entry((uint32_t)(uintptr_t)new_phys, new_flags);

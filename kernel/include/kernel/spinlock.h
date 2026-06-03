@@ -37,11 +37,54 @@ static inline void spinlock_acquire(spinlock_t *lk)
     while (!__sync_bool_compare_and_swap(&lk->locked, 0u, 1u))
         asm volatile("pause");
 }
+
+/* -- IRQ-safe spinlock --------------------------------------------------------
+ *
+ * A lock that is taken in BOTH thread context and interrupt/exception context
+ * MUST disable interrupts while held.  Otherwise: a thread acquires the lock,
+ * the timer (or a page fault) preempts it on the same CPU, the handler tries to
+ * acquire the same lock, and -- because the handler runs through an interrupt
+ * gate (IF=0) and can never yield back to the preempted holder -- it spins
+ * forever.  The whole CPU wedges with no panic.
+ *
+ * spinlock_acquire_irqsave() saves EFLAGS, clears IF, then spins; the returned
+ * value is passed back to spinlock_release_irqrestore() to restore the prior
+ * interrupt state (so nesting is safe -- an inner release does not prematurely
+ * re-enable interrupts).
+ *
+ * Use these for pmm_lock, kmap_lock, tty_lock and any other lock reachable from
+ * an IRQ or exception handler.  Plain spinlock_acquire() remains fine for locks
+ * only ever taken in thread context.
+ */
+static inline uint32_t spinlock_acquire_irqsave(spinlock_t *lk)
+{
+    uint32_t flags;
+    asm volatile("pushf\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
+    while (!__sync_bool_compare_and_swap(&lk->locked, 0u, 1u))
+        asm volatile("pause");
+    return flags;
+}
+
+static inline void spinlock_release_irqrestore(spinlock_t *lk, uint32_t flags)
+{
+    __sync_bool_compare_and_swap(&lk->locked, 1u, 0u);
+    asm volatile("push %0\n\tpopf" :: "r"(flags) : "memory", "cc");
+}
 #else
 /* Host-side stub: single attempt (tests run single-threaded). */
 static inline void spinlock_acquire(spinlock_t *lk)
 {
     spinlock_trylock(lk);
+}
+static inline uint32_t spinlock_acquire_irqsave(spinlock_t *lk)
+{
+    spinlock_trylock(lk);
+    return 0;
+}
+static inline void spinlock_release_irqrestore(spinlock_t *lk, uint32_t flags)
+{
+    (void)flags;
+    spinlock_release(lk);
 }
 #endif /* __is_kernel */
 

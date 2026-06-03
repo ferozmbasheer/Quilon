@@ -120,11 +120,32 @@ void syscall_initialize(void)
  * time-of-check/time-of-use races: a range that validates stays mapped.
  * ------------------------------------------------------------------------- */
 
-/* Is [uaddr, uaddr+len) accessible with the requested permission? */
+/* -- Interrupt-disable critical section --------------------------------------
+ * fork/clone publish a new PCB (process_create marks it PROC_READY) and only
+ * then rebuild its kernel_esp with the real iret frame.  int $0x80 is a trap
+ * gate, so IRQ0 stays enabled and the scheduler could preempt mid-build and run
+ * the half-initialised thread.  These wrap that build in a cli/sti window.
+ * irq_save preserves the prior IF so nesting is harmless.                    */
+static inline uint32_t irq_save(void)
+{
+    uint32_t flags;
+    asm volatile("pushf\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
+    return flags;
+}
+static inline void irq_restore(uint32_t flags)
+{
+    asm volatile("push %0\n\tpopf" :: "r"(flags) : "memory", "cc");
+}
+
+/* Is [uaddr, uaddr+len) accessible with the requested permission?
+ * Validates against the address-space owner's VMA table -- for a CLONE_VM
+ * thread that is the group leader, whose table reflects later heap growth
+ * (a thread's own copy is a stale snapshot from clone time). */
 static int uap_ok(uint32_t uaddr, uint32_t len, int need_write)
 {
     if (!current_process) return 1;
-    return vma_range_ok(current_process->vmas, PROC_VMA_MAX,
+    process_t *owner = process_group_leader(current_process);
+    return vma_range_ok(owner->vmas, PROC_VMA_MAX,
                         uaddr, len, need_write);
 }
 
@@ -138,7 +159,7 @@ static int uap_str_ok(uint32_t uaddr)
 
     uint32_t scanned = 0;
     while (scanned < UAP_STR_MAX) {
-        if (!vma_range_ok(current_process->vmas, PROC_VMA_MAX, uaddr, 1, 0))
+        if (!uap_ok(uaddr, 1, 0))   /* routes through the group leader's VMAs */
             return 0;
         /* Scan within the validated page until NUL, page end, or the cap. */
         do {
@@ -277,6 +298,21 @@ void syscall_handler(syscall_regs_t *regs)
             __builtin_unreachable();
         }
         if (current_process) {
+            /* Close pipe fds this process still holds so their global fd-table
+             * slots (and the pipe's reader/writer refcount) are released on
+             * exit.  Without this, every exec'd shell that inherited stdin/
+             * stdout pipe ends leaks 2 fd slots for good -- which is what
+             * exhausted the table when launching a second terminal.  Only
+             * close real pipe fds (>= VFS_FD_BASE); -1 means "no override".
+             * close_fds_on_exit() is a no-op for fds < VFS_FD_BASE.        */
+            if (current_process->stdin_fd >= VFS_FD_BASE)
+                vfs_close(current_process->stdin_fd);
+            if (current_process->stdout_fd >= VFS_FD_BASE &&
+                current_process->stdout_fd != current_process->stdin_fd)
+                vfs_close(current_process->stdout_fd);
+            current_process->stdin_fd  = -1;
+            current_process->stdout_fd = -1;
+
             current_process->exit_code = (int)regs->ebx;
             current_process->state     = PROC_ZOMBIE;
             /* Wake the parent if it is sleeping in SYS_WAIT. */
@@ -511,10 +547,14 @@ void syscall_handler(syscall_regs_t *regs)
          * TLB entries so the parent will take CoW faults on next write. */
         paging_switch(current_process->cr3);
 
-        /* 3. Allocate PCB.  entry=0 because kernel_esp is set manually. */
+        /* 3. Allocate PCB.  entry=0 because kernel_esp is set manually.
+         * Disable interrupts across PCB publish + frame build so the scheduler
+         * cannot run this child before its kernel_esp is valid. */
+        uint32_t fork_irq = irq_save();
         process_t *fork_child = process_create(
             current_process->name, 0, (uint32_t)(uintptr_t)fork_pd);
         if (!fork_child) {
+            irq_restore(fork_irq);
             pmm_free_page(fork_pd);
             ret = (uint32_t)-1;
             break;
@@ -562,6 +602,7 @@ void syscall_handler(syscall_regs_t *regs)
         *(--fork_sp) = 0u;   /* esi */
         *(--fork_sp) = 0u;   /* edi -- kernel_esp points here */
         fork_child->kernel_esp = (uint32_t)(uintptr_t)fork_sp;
+        irq_restore(fork_irq);
 
         ret = fork_child->pid;
 #else
@@ -589,16 +630,29 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         int32_t  sbrk_inc = (int32_t)regs->ebx;
 
-        /* Resolve the current break pointer. */
+        /*
+         * Resolve the break pointer.  CLONE_VM threads share one address space
+         * and one user-space malloc free-list, so they must also share ONE
+         * program break -- the thread-group leader's heap_end.  (Each PCB has
+         * its own heap_end field; using a thread's private copy would hand out
+         * overlapping heap regions to sibling threads and corrupt the shared
+         * free-list -- the classic "hang on the second app" failure.)  The same
+         * leader owns the heap VMA, so heap growth is recorded in one place.
+         */
         static uint32_t anon_break = 0;   /* fallback when no PCB */
+        process_t *heap_owner = current_process
+                              ? process_group_leader(current_process) : NULL;
         uint32_t *break_ptr =
-            current_process ? &current_process->heap_end : &anon_break;
+            heap_owner ? &heap_owner->heap_end : &anon_break;
+
+        /* Serialise against sibling threads mutating the same shared break. */
+        uint32_t sbrk_irq = irq_save();
 
         if (*break_ptr == 0)
             *break_ptr = USER_HEAP_START;
 
         uint32_t old_brk = *break_ptr;
-        if (sbrk_inc == 0) { ret = old_brk; break; }  /* query only */
+        if (sbrk_inc == 0) { irq_restore(sbrk_irq); ret = old_brk; break; }
 
         /*
          * Compute the new break with bounds checking.  Doing the arithmetic in
@@ -610,12 +664,13 @@ void syscall_handler(syscall_regs_t *regs)
         int64_t  new_brk64 = (int64_t)old_brk + (int64_t)sbrk_inc;
         if (new_brk64 < (int64_t)USER_HEAP_START ||
             new_brk64 > (int64_t)USER_HEAP_MAX) {
+            irq_restore(sbrk_irq);
             ret = (uint32_t)-1;
             break;
         }
         uint32_t new_brk = (uint32_t)new_brk64;
 
-        if (current_process) {
+        if (heap_owner) {
             /*
              * Demand-paged heap (section 9.2):
              *
@@ -627,16 +682,18 @@ void syscall_handler(syscall_regs_t *regs)
              * (USER_HEAP_START) and updates its end.  On the very first sbrk
              * call the VMA does not exist yet, so vma_add creates it.
              */
-            if (vma_extend(current_process->vmas, PROC_VMA_MAX,
+            if (vma_extend(heap_owner->vmas, PROC_VMA_MAX,
                            USER_HEAP_START, new_brk) != 0) {
-                if (vma_add(current_process->vmas, PROC_VMA_MAX,
+                if (vma_add(heap_owner->vmas, PROC_VMA_MAX,
                             USER_HEAP_START, new_brk,
                             VMA_R | VMA_W | VMA_ANON) != 0) {
+                    irq_restore(sbrk_irq);
                     ret = (uint32_t)-1;
                     break;
                 }
             }
             *break_ptr = new_brk;
+            irq_restore(sbrk_irq);
             ret = old_brk;
         } else {
             /*
@@ -650,7 +707,9 @@ void syscall_handler(syscall_regs_t *regs)
             uint32_t page_addr = old_brk & ~(PAGE_SIZE - 1u);
             int sbrk_ok = 1;
             while (page_addr < new_brk && sbrk_ok) {
-                void *phys = pmm_alloc_page();
+                /* Data page above the identity map; the user writes it via the
+                 * active VA mapping, so we never touch phys directly here. */
+                void *phys = pmm_alloc_data_page();
                 if (!phys) { sbrk_ok = 0; break; }
                 if (paging_map_page_alloc_into(active_pd, page_addr,
                         (uint32_t)(uintptr_t)phys,
@@ -663,6 +722,7 @@ void syscall_handler(syscall_regs_t *regs)
             }
             if (sbrk_ok) { *break_ptr = new_brk; ret = old_brk; }
             else            ret = (uint32_t)-1;
+            irq_restore(sbrk_irq);
         }
 #else
         ret = (uint32_t)-1;
@@ -1134,9 +1194,13 @@ void syscall_handler(syscall_regs_t *regs)
             owns_cr3 = 1;
         }
 
-        /* Allocate PCB.  entry=0: kernel_esp is set manually below. */
+        /* Allocate PCB.  entry=0: kernel_esp is set manually below.
+         * Disable interrupts across PCB publish + frame build so the scheduler
+         * cannot run this thread before its kernel_esp is valid. */
+        uint32_t clone_irq = irq_save();
         process_t *thread = process_create(current_process->name, 0, thread_cr3);
         if (!thread) {
+            irq_restore(clone_irq);
             if (owns_cr3) pmm_free_page((void *)(uintptr_t)thread_cr3);
             ret = (uint32_t)-1;
             break;
@@ -1193,6 +1257,7 @@ void syscall_handler(syscall_regs_t *regs)
         *(--cs_sp) = 0u;  /* esi */
         *(--cs_sp) = 0u;  /* edi  ← kernel_esp points here */
         thread->kernel_esp = (uint32_t)(uintptr_t)cs_sp;
+        irq_restore(clone_irq);
 
         ret = thread->pid;
 #else

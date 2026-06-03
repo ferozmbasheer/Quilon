@@ -135,7 +135,9 @@ void pmm_initialize(void *multiboot_info)
 
 void *pmm_alloc_page(void)
 {
-    spinlock_acquire(&pmm_lock);
+    /* IRQ-safe: pmm_lock is also taken by the page-fault handler (IF=0), so a
+     * thread-context holder must not be preemptible while holding it. */
+    uint32_t flags = spinlock_acquire_irqsave(&pmm_lock);
     void *result = NULL;
     for (uint32_t i = 0; i < BITMAP_WORDS; i++) {
         if (bitmap[i] == 0xFFFFFFFFu)
@@ -153,7 +155,7 @@ void *pmm_alloc_page(void)
         }
     }
 done:
-    spinlock_release(&pmm_lock);
+    spinlock_release_irqrestore(&pmm_lock, flags);
     return result;   /* NULL = out of memory */
 }
 
@@ -173,7 +175,7 @@ void *pmm_alloc_page_above_4mib(void)
     /* First word whose pages all start at or above 0x400000 (page 1024). */
     static const uint32_t LOW_WORDS = (0x400000u / PAGE_SIZE) / 32u;  /* = 32 */
 
-    spinlock_acquire(&pmm_lock);
+    uint32_t flags = spinlock_acquire_irqsave(&pmm_lock);
     void *result = NULL;
     for (uint32_t i = LOW_WORDS; i < BITMAP_WORDS; i++) {
         if (bitmap[i] == 0xFFFFFFFFu) continue;
@@ -189,13 +191,13 @@ void *pmm_alloc_page_above_4mib(void)
         }
     }
 done:
-    spinlock_release(&pmm_lock);
+    spinlock_release_irqrestore(&pmm_lock, flags);
     return result;
 }
 
 void pmm_free_page(void *addr)
 {
-    spinlock_acquire(&pmm_lock);
+    uint32_t flags = spinlock_acquire_irqsave(&pmm_lock);
     uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
     if (!page_test(page)) goto done;   /* page not allocated -- no-op */
     if (refcount[page] > 1) {
@@ -207,7 +209,7 @@ void pmm_free_page(void *addr)
     page_clear(page);
     free_pages++;
 done:
-    spinlock_release(&pmm_lock);
+    spinlock_release_irqrestore(&pmm_lock, flags);
 }
 
 void pmm_ref_page(void *addr)

@@ -19,7 +19,9 @@
 
 /* -- Constants -------------------------------------------------------------- */
 
-#define PIPE_MAX       8     /* maximum simultaneously open pipes      */
+#define PIPE_MAX      16     /* maximum simultaneously open pipes.
+                              * Each terminal uses 2 (stdin + stdout); raised
+                              * from 8 so several terminals can coexist. */
 #define PIPE_BUF_SIZE  4096  /* ring-buffer capacity in bytes          */
 
 /* -- pipe_t ----------------------------------------------------------------

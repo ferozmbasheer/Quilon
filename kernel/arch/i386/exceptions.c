@@ -94,6 +94,13 @@ void exception_handler(registers_t *regs)
         uint32_t fault_addr;
         asm volatile("mov %%cr2, %0" : "=r"(fault_addr));
 
+        /* The address-space owner holds the authoritative VMA table.  For a
+         * CLONE_VM thread that is the thread-group leader: the thread's own VMA
+         * copy is a stale snapshot from clone time and will miss heap regions
+         * the leader grew afterwards.  Page mapping still uses the faulting
+         * process's cr3, which is shared within the group. */
+        process_t *vma_owner = process_group_leader(current_process);
+
         /* Only handle user-mode faults here. */
         if ((regs->cs & 3) == 3) {
 
@@ -103,7 +110,7 @@ void exception_handler(registers_t *regs)
                  * Conditions: write fault (bit 1) + VMA says writable +
                  * PTE has PAGE_COW set.                                   */
                 if (regs->err_code & 2u) {
-                    vma_t *cow_vma = vma_find(current_process->vmas,
+                    vma_t *cow_vma = vma_find(vma_owner->vmas,
                                               PROC_VMA_MAX, fault_addr);
                     if (cow_vma && (cow_vma->flags & VMA_W)) {
                         uint32_t *proc_pd =
@@ -124,7 +131,7 @@ void exception_handler(registers_t *regs)
             }
 
             /* Not-present fault -- check VMAs. */
-            vma_t *vma = vma_find(current_process->vmas, PROC_VMA_MAX, fault_addr);
+            vma_t *vma = vma_find(vma_owner->vmas, PROC_VMA_MAX, fault_addr);
             if (!vma) {
                 printf("\r\n[pf] pid %d: no VMA at 0x%x "
                        "(EIP=0x%x) -> SIGSEGV\r\n",
@@ -135,8 +142,10 @@ void exception_handler(registers_t *regs)
                 __builtin_unreachable();
             }
 
-            /* Demand-page: allocate a zero physical page and map it. */
-            void *phys = pmm_alloc_page();
+            /* Demand-page: allocate a zeroed data page (above the identity map)
+             * and map it.  pmm_alloc_data_page zeroes it via a transient kmap,
+             * so we must NOT touch `phys` directly here -- it may be >4 MiB. */
+            void *phys = pmm_alloc_data_page();
             if (!phys) {
                 printf("\r\n[pf] pid %d: OOM at 0x%x -> SIGSEGV\r\n",
                        (int)current_process->pid, (unsigned)fault_addr);
@@ -144,7 +153,6 @@ void exception_handler(registers_t *regs)
                 signal_dispatch();
                 __builtin_unreachable();
             }
-            memset(phys, 0, PAGE_SIZE);
 
             uint32_t page_flags = PAGE_PRESENT | PAGE_USER;
             if (vma->flags & VMA_W) page_flags |= PAGE_WRITABLE;
@@ -181,6 +189,12 @@ void exception_handler(registers_t *regs)
         printf("Exception: unknown (vector %d)\r\n", (int)regs->int_no);
 
     printf("err_code=0x%x\r\n", (int)regs->err_code);
+#ifdef __is_kernel
+    if (regs->int_no == 14) {
+        uint32_t cr2; asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        printf("CR2=0x%x\r\n", (unsigned)cr2);
+    }
+#endif
     printf("EIP=0x%x  CS=0x%x  EFLAGS=0x%x\r\n",
            (int)regs->eip, (int)regs->cs, (int)regs->eflags);
     printf("EAX=0x%x  EBX=0x%x  ECX=0x%x  EDX=0x%x\r\n",

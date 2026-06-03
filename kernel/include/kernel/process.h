@@ -191,6 +191,15 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3);
 process_t *process_find(uint32_t pid);
 
 /*
+ * process_group_leader -- return the address-space owner for p.
+ *
+ * For a normal process this is p itself.  For a CLONE_VM thread (thread_group
+ * != 0) it is the thread-group leader, which owns the shared program break
+ * (heap_end) and VMA table.  Falls back to p if the leader has been reaped.
+ */
+process_t *process_group_leader(process_t *p);
+
+/*
  * process_pick_next -- round-robin scheduler helper.
  *
  * Scans the process table for the next PROC_READY slot after

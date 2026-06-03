@@ -17,7 +17,12 @@
  * search; free() marks a block free.  Adjacent free blocks are coalesced
  * on the next malloc pass.
  *
- * Thread safety: not applicable -- Quilon is single-threaded per process.
+ * Thread safety: malloc/free are guarded by a spinlock.  CLONE_VM threads
+ * (e.g. the window manager and its apps) share one heap and are preemptively
+ * scheduled -- and may run on different CPUs under SMP -- so unsynchronised
+ * access would corrupt the free list (a classic symptom is a hang in the
+ * coalescing walk).  The lock serialises every heap mutation, including the
+ * sbrk() that extends it.
  */
 
 #include <stdlib.h>
@@ -35,6 +40,23 @@ typedef struct block {
 #define BLOCK_HDR_SZ  sizeof(block_t)   /* 12 bytes on i386 */
 
 static block_t *heap_head = (block_t *)0;  /* NULL -- not yet initialised  */
+
+/* -- Heap lock ----------------------------------------------------------- *
+ * A minimal test-and-set spinlock.  xchg is atomic on x86 (it asserts LOCK
+ * implicitly), so this is correct across both preemption and multiple CPUs.
+ * The critical sections are short (free-list walks), so spinning is fine. */
+static volatile int heap_lock = 0;
+
+static void heap_lock_acquire(void)
+{
+    while (__sync_lock_test_and_set(&heap_lock, 1))
+        /* spin until the previous holder releases */;
+}
+
+static void heap_lock_release(void)
+{
+    __sync_lock_release(&heap_lock);
+}
 
 /* -- Helpers ------------------------------------------------------------ */
 
@@ -58,12 +80,9 @@ static block_t *heap_extend(unsigned int size)
 
 /* -- Public API --------------------------------------------------------- */
 
-void *malloc(size_t sz)
+/* Heap allocation core -- caller must hold heap_lock. */
+static void *malloc_locked(unsigned int size)
 {
-    if (sz == 0) return (void *)0;
-
-    unsigned int size = align4((unsigned int)sz);
-
     /* First call: initialise the heap. */
     if (!heap_head) {
         heap_head = heap_extend(size);
@@ -106,12 +125,27 @@ void *malloc(size_t sz)
     return (void *)(new_block + 1);
 }
 
+void *malloc(size_t sz)
+{
+    if (sz == 0) return (void *)0;
+
+    unsigned int size = align4((unsigned int)sz);
+
+    heap_lock_acquire();
+    void *p = malloc_locked(size);
+    heap_lock_release();
+    return p;
+}
+
 void free(void *ptr)
 {
     if (!ptr) return;
+    /* The store to b->free races with malloc's free-list walk if unlocked. */
+    heap_lock_acquire();
     block_t *b = (block_t *)ptr - 1;
     b->free = 1;
     /* Coalescing deferred to the next malloc() pass. */
+    heap_lock_release();
 }
 
 int atoi(const char *s)

@@ -7,7 +7,10 @@
 
 #define VFS_NAME_MAX   12   /* 8.3 name: 8 chars + '.' + 3 chars + NUL */
 #define VFS_PATH_MAX  128   /* maximum path length including NUL        */
-#define VFS_MAX_FDS     8   /* maximum simultaneously open files        */
+#define VFS_MAX_FDS    32   /* maximum simultaneously open files (global table).
+                             * Each graphical terminal holds 4 (two pipes) for
+                             * its shell's lifetime, so 8 ran out at the second
+                             * terminal -- raised to allow several at once. */
 #define VFS_FD_BASE     3   /* first fd returned by vfs_open;
                                0-2 are reserved for stdin/stdout/stderr */
 

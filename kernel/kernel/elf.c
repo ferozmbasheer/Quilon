@@ -215,20 +215,17 @@ uint32_t elf_load(const char *path)
                (int)i, (unsigned)ph->p_vaddr,
                (int)ph->p_filesz, (int)ph->p_memsz, (unsigned)ph->p_flags);
 
-        /* Allocate and map one physical page per virtual page in the range */
+        /* Allocate and map one physical page per virtual page in the range.
+         * Data pages come from above the identity map; pmm_alloc_data_page
+         * zeroes them (covering BSS) through a transient kmap.            */
         for (uint32_t virt = virt_start; virt < virt_end; virt += PAGE_SIZE) {
-            void *phys = pmm_alloc_page();
+            void *phys = pmm_alloc_data_page();
             if (!phys) {
                 printf("[elf] PMM out of pages at virt=0x%x\r\n",
                        (unsigned)virt);
                 kfree(buf);
                 return 0;
             }
-
-            /* Zero the physical page.  This handles BSS automatically:
-             * the extra (p_memsz − p_filesz) bytes are never written by
-             * the memcpy below, so they stay zero.                        */
-            memset(phys, 0, PAGE_SIZE);
 
             /* Map: present, writable (for BSS init), user-accessible.
              * paging_map_page_alloc() allocates a page table if this is the
@@ -245,9 +242,9 @@ uint32_t elf_load(const char *path)
 
         /* Copy the file image into virtual memory.
          *
-         * After paging_map_page_alloc() returns, writing to p_vaddr goes
-         * through the MMU and lands in the freshly allocated physical pages.
-         * The BSS region (if any) is already zero from memset above.       */
+         * This loader maps into the ACTIVE page directory, so writing to
+         * p_vaddr goes through the MMU into the freshly allocated pages.
+         * The BSS region (if any) is already zero from the alloc above.    */
         if (ph->p_filesz > 0)
             memcpy((void *)(uintptr_t)ph->p_vaddr,
                    buf + ph->p_offset,
@@ -376,14 +373,14 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
             if (virt >= file_page_end && ph->p_filesz < ph->p_memsz)
                 continue;
 
-            uint8_t *phys_page = (uint8_t *)pmm_alloc_page();
+            uint8_t *phys_page = (uint8_t *)pmm_alloc_data_page();
             if (!phys_page) {
                 printf("[elf] PMM out of pages at virt=0x%x\r\n",
                        (unsigned)virt);
                 kfree(buf);
                 return 0;
             }
-            memset(phys_page, 0, PAGE_SIZE);
+            /* pmm_alloc_data_page already zeroed the page (BSS handling). */
 
             if (paging_map_page_alloc_into(
                     target_pd, virt,
@@ -395,7 +392,10 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
                 return 0;
             }
 
-            /* Copy the file-data portion that falls within this page. */
+            /* Copy the file-data portion that falls within this page.
+             * target_pd is not the active address space, so reach the page
+             * through a transient kmap rather than its (possibly >4 MiB)
+             * physical address or the not-yet-active ELF virtual address. */
             if (ph->p_filesz > 0) {
                 uint32_t copy_start =
                     (ph->p_vaddr > virt) ? ph->p_vaddr : virt;
@@ -404,10 +404,17 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
                     ? ph->p_vaddr + ph->p_filesz : virt + PAGE_SIZE;
 
                 if (copy_start < copy_end) {
-                    uint8_t       *dst = phys_page + (copy_start - virt);
+                    uint8_t *kp = (uint8_t *)kmap((uint32_t)(uintptr_t)phys_page);
+                    if (!kp) {
+                        printf("[elf] kmap failed at virt=0x%x\r\n", (unsigned)virt);
+                        kfree(buf);
+                        return 0;
+                    }
+                    uint8_t       *dst = kp + (copy_start - virt);
                     const uint8_t *src = buf + ph->p_offset
                                          + (copy_start - ph->p_vaddr);
                     memcpy(dst, src, copy_end - copy_start);
+                    kunmap(kp);
                 }
             }
         }
@@ -433,13 +440,13 @@ uint32_t elf_load_into(const char *path, uint32_t *target_pd, vma_t *vmas)
      * is satisfied by the demand-paging fault handler, giving the process up
      * to STACK_VMA_PAGES * 4 KiB of auto-growing stack.
      */
-    uint8_t *stack_phys = (uint8_t *)pmm_alloc_page();
+    uint8_t *stack_phys = (uint8_t *)pmm_alloc_data_page();
     if (!stack_phys) {
         printf("[elf] PMM out of pages for stack of '%s'\r\n", path);
         kfree(buf);
         return 0;
     }
-    memset(stack_phys, 0, PAGE_SIZE);
+    /* pmm_alloc_data_page already zeroed it via a transient kmap. */
 
     if (paging_map_page_alloc_into(
             target_pd,

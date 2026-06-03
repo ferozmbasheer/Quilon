@@ -123,6 +123,25 @@ int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags);
  * Used by apic_initialize() to map the Local APIC at 0xFEE00000. */
 void paging_map_mmio(uint32_t virt, uint32_t phys);
 
+/* -- kmap: transient kernel access to an arbitrary physical page ----------- *
+ *
+ * The kernel can dereference a physical address directly only within the first
+ * 4 MiB identity map.  Data pages (heap, ELF segments, stack, CoW copies) are
+ * allocated above 4 MiB, so the kernel uses kmap() to obtain a temporary VA for
+ * one such page and kunmap() to release it.  The mapping window is shared into
+ * every address space, so kmap works under any CR3 (including the page-fault
+ * handler running under a user process).  Returns NULL if all slots are busy.
+ */
+void *kmap(uint32_t phys);
+void  kunmap(void *ptr);
+
+/* Allocate a zeroed data page above the identity map (falls back to low memory
+ * if high memory is exhausted).  Returns the physical address, or NULL on OOM.
+ * Use for pages the kernel only needs transient access to (heap/ELF/stack/CoW);
+ * page tables and page directories must still use pmm_alloc_page() so they stay
+ * reachable through the identity map. */
+void *pmm_alloc_data_page(void);
+
 /* -- Per-process address space (section 5.1) ------------------------------ */
 
 /*

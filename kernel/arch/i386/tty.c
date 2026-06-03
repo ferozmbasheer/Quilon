@@ -304,6 +304,14 @@ static void ansi_execute(const ansi_event_t *ev)
  * All terminal output -- putchar and write -- is serialized through tty_lock.
  * Without this, concurrent printf() calls from the BSP and APs interleave
  * individual characters, producing garbled output like "spPinlock: PMM p]rotected".
+ *
+ * tty_lock is acquired IRQ-SAFE: printf() runs in thread context (WM/app
+ * threads, IF=1, preemptible) AND in interrupt/exception context (the page-fault
+ * handler prints "[pf] ..." etc.).  With a plain spinlock, a thread preempted
+ * while holding tty_lock would wedge any later printf from an IRQ handler -- or,
+ * under -smp 2, the other CPU spins forever on a lock whose holder was
+ * descheduled.  That is exactly the freeze observed when many apps printf while
+ * keyboard/mouse IRQs fire.  Disabling interrupts while held closes the window.
  */
 static spinlock_t tty_lock = SPINLOCK_INIT;
 

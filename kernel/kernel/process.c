@@ -133,6 +133,18 @@ process_t *process_find(uint32_t pid)
     return &process_table[pid];
 }
 
+process_t *process_group_leader(process_t *p)
+{
+    if (!p) return NULL;
+    /* thread_group == 0 means p is itself the leader (a normal process).
+     * Otherwise it holds the leader's PID; all CLONE_VM threads in one address
+     * space share the leader's heap break and VMA table. */
+    if (p->thread_group == 0)
+        return p;
+    process_t *leader = process_find(p->thread_group);
+    return leader ? leader : p;   /* fall back to self if leader already reaped */
+}
+
 /* -- Round-robin scheduling helper ----------------------------------------- */
 
 /*
