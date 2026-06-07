@@ -388,6 +388,44 @@ void syscall_handler(syscall_regs_t *regs)
     }
 
     /* ------------------------------------------------------------------------
+     * SYS_READ_NB (35) -- non-blocking read.
+     *   EBX = fd, ECX = buf, EDX = len.
+     *   Returns: bytes read (0 if nothing was ready), or -1 on error.
+     *
+     * Never blocks: used by the single-threaded WM event loop, which must not
+     * stall waiting on the keyboard or a shell pipe.  FD_STDIN reads only
+     * already-buffered keystrokes; other fds read only what vfs_readable()
+     * reports as available.
+     * ------------------------------------------------------------------------ */
+    case SYS_READ_NB: {
+#ifdef __is_kernel
+        char    *buf = (char *)(uintptr_t)regs->ecx;
+        uint32_t len = regs->edx;
+        if (!buf || len == 0) { ret = (uint32_t)-1; break; }
+        if (!uap_ok((uint32_t)(uintptr_t)buf, len, 1)) { ret = (uint32_t)-1; break; }
+
+        if ((int)regs->ebx == FD_STDIN && !(current_process &&
+                                            current_process->stdin_fd >= 0)) {
+            /* Raw keyboard: drain only what is already buffered. */
+            uint32_t n = 0;
+            while (n < len && keyboard_available())
+                buf[n++] = keyboard_getchar();
+            ret = n;
+        } else {
+            int fd = ((int)regs->ebx == FD_STDIN)
+                     ? current_process->stdin_fd : (int)regs->ebx;
+            int avail = vfs_readable(fd);
+            if (avail <= 0) { ret = 0; break; }   /* nothing ready */
+            if (len > (uint32_t)avail) len = (uint32_t)avail;
+            ret = (uint32_t)vfs_read(fd, buf, len);
+        }
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
      * SYS_CLOSE (6)
      *   EBX = fd.
      *   Returns: 0 on success, -1 on error.
@@ -459,10 +497,20 @@ void syscall_handler(syscall_regs_t *regs)
      * PROC_READY entry to the process table.  The child runs when the
      * scheduler picks it.  The caller can use SYS_WAIT to synchronise.
      * ------------------------------------------------------------------------ */
-    case SYS_EXEC: {
+    case SYS_EXEC:
+    case SYS_EXEC_REDIR: {
 #ifdef __is_kernel
         const char *path = (const char *)(uintptr_t)regs->ebx;
         if (!uap_str_ok(regs->ebx)) { ret = (uint32_t)-1; break; }
+
+        /* SYS_EXEC_REDIR: caller passes explicit stdin/stdout fds for the child
+         * (ECX=in_fd, EDX=out_fd) instead of inheriting the caller's overrides.
+         * This lets the WM spawn a shell wired to pipes WITHOUT redirecting its
+         * own stdin/stdout (the single-threaded loop keeps reading the real
+         * keyboard).  -1 means "inherit / none". */
+        int redir = (regs->eax == SYS_EXEC_REDIR);
+        int in_fd  = redir ? (int)regs->ecx : -2;   /* -2 = inherit */
+        int out_fd = redir ? (int)regs->edx : -2;
 
         /* 1. Allocate a new page directory (kernel half shared). */
         uint32_t *child_pd = paging_create_address_space();
@@ -494,8 +542,12 @@ void syscall_handler(syscall_regs_t *regs)
         for (int _v = 0; _v < PROC_VMA_MAX; _v++)
             _child->vmas[_v] = child_vmas[_v];
 
-        /* Inherit stdin/stdout pipe overrides from the spawning process. */
-        if (current_process) {
+        /* 5. Wire up the child's stdin/stdout. */
+        if (redir) {
+            _child->stdin_fd  = in_fd;
+            _child->stdout_fd = out_fd;
+        } else if (current_process) {
+            /* Plain exec inherits the spawning process's pipe overrides. */
             _child->stdin_fd  = current_process->stdin_fd;
             _child->stdout_fd = current_process->stdout_fd;
         }

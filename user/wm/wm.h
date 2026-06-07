@@ -1,5 +1,5 @@
 /*
- * Quilon OS -- Window Manager & Compositor (section 14.2)
+ * Quilon OS -- Window Manager & Compositor (section 14.2, single-threaded)
  *
  * This header defines all WM types and pure-logic helpers.  The static inline
  * functions (geometry, hit-testing, z-order, state management) have no
@@ -8,20 +8,33 @@
  * The compositor (wm_composite, wm_draw_cursor) is defined in wm/main.c
  * because it calls libgfx functions.  This header only declares them.
  *
+ * Concurrency model (single-threaded event loop)
+ * ──────────────────────────────────────────────
+ * The WM is ONE thread running ONE event loop.  Apps are NOT threads -- they
+ * are cooperative, non-blocking handlers invoked by the loop:
+ *
+ *   on_event(win, ev) -- called when a key / close event is delivered.
+ *   on_tick(win)      -- called every loop iteration for periodic work
+ *                        (clock updates, draining a terminal's shell pipe).
+ *
+ * Because only the loop ever touches wm_state_t and the framebuffer, there is
+ * no shared-state race: no locks, no SPSC queue, no pthread_join reaping.  An
+ * app must never block (no blocking read()); it returns quickly from each
+ * callback and is ticked again next iteration.  Per-window app state lives in
+ * win->app_state (heap-allocated by the launcher, freed on destroy).
+ *
  * Z-order model
  * ─────────────
  * windows[] slots are permanently assigned for the window's lifetime; the
  * slot index never changes.  z_order[0..num_windows-1] holds the active slot
  * indices in back-to-front order (z_order[num_windows-1] = frontmost).
  * wm_raise() rotates only z_order[] — slot indices never move.
- * This keeps app-thread window_t* pointers stable across raise operations.
  */
 
 #ifndef _USER_WM_WM_H
 #define _USER_WM_WM_H
 
 #include <stdint.h>
-#include <pthread.h>
 
 /* gfx.h is pulled in for canvas_t / rect_t / color_t.
  * When compiling on the host for tests, link gfx.c alongside; on the target,
@@ -79,45 +92,33 @@ typedef struct {
     char         ascii;
 } wm_event_t;
 
-/* ── Event queue (SPSC ring buffer — WM writes, app thread reads) ──────── */
-
-#define WM_EVQUEUE_DEPTH  64
-
-typedef struct {
-    volatile int head;                   /* WM increments after writing  */
-    volatile int tail;                   /* app increments after reading */
-    wm_event_t   buf[WM_EVQUEUE_DEPTH];
-} wm_evqueue_t;
-
-static inline void wm_evqueue_push(wm_evqueue_t *q, wm_event_t ev)
-{
-    int next = (q->head + 1) % WM_EVQUEUE_DEPTH;
-    if (next == q->tail) return;         /* full — drop the event         */
-    q->buf[q->head] = ev;
-    q->head = next;
-}
-
-static inline int wm_evqueue_poll(wm_evqueue_t *q, wm_event_t *out)
-{
-    if (q->tail == q->head) return 0;
-    *out = q->buf[q->tail];
-    q->tail = (q->tail + 1) % WM_EVQUEUE_DEPTH;
-    return 1;
-}
-
 /* ── Window descriptor ─────────────────────────────────────────────────── */
+
+struct wm_window_;
+
+/* App callbacks (single-threaded model).  Both run on the WM loop thread and
+ * MUST return promptly without blocking.
+ *   on_event -- a key or close event was delivered to this window.
+ *   on_tick  -- periodic work; called every loop iteration.
+ *   on_destroy -- the window is being destroyed; free app_state here.
+ * Any of them may be NULL. */
+typedef void (*wm_on_event_fn)(struct wm_window_ *w, const wm_event_t *ev);
+typedef void (*wm_on_tick_fn)(struct wm_window_ *w);
+typedef void (*wm_on_destroy_fn)(struct wm_window_ *w);
 
 typedef struct wm_window_ {
     int            id;               /* unique ID (≥ 1); 0 = slot unused   */
     rect_t         bounds;           /* content area: (x, y, w, h)         */
     char           title[WM_TITLE_LEN];
-    canvas_t      *backbuf;         /* app draws here; NULL until assigned */
+    canvas_t      *backbuf;          /* app draws here; NULL until assigned */
     int            focused;          /* 1 = has keyboard focus              */
     int            active;           /* 1 = slot occupied                   */
     int            dirty;            /* 1 = backbuf has new pixels          */
-    pthread_t      tid;              /* app thread ID for pthread_join      */
-    wm_evqueue_t   events;           /* WM → app keyboard / mouse events    */
-    void         (*app_fn)(struct wm_window_ *); /* launch fn, or NULL     */
+    int            want_close;       /* set by on_event to request destroy  */
+    void          *app_state;        /* per-window app data (heap), or NULL  */
+    wm_on_event_fn   on_event;       /* key/close handler, or NULL          */
+    wm_on_tick_fn    on_tick;        /* periodic handler, or NULL           */
+    wm_on_destroy_fn on_destroy;     /* cleanup handler, or NULL            */
 } window_t;
 
 /* ── WM state ──────────────────────────────────────────────────────────── */
@@ -211,11 +212,12 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
         s->windows[i].active      = 0;
         s->windows[i].dirty       = 0;
         s->windows[i].focused     = 0;
+        s->windows[i].want_close  = 0;
         s->windows[i].backbuf     = (canvas_t *)0;
-        s->windows[i].tid         = 0;
-        s->windows[i].app_fn      = (void (*)(struct wm_window_ *))0;
-        s->windows[i].events.head = 0;
-        s->windows[i].events.tail = 0;
+        s->windows[i].app_state   = (void *)0;
+        s->windows[i].on_event    = (wm_on_event_fn)0;
+        s->windows[i].on_tick     = (wm_on_tick_fn)0;
+        s->windows[i].on_destroy  = (wm_on_destroy_fn)0;
         s->z_order[i]             = i;
     }
     s->num_windows   = 0;
@@ -258,11 +260,12 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
     win->focused      = 0;
     win->active       = 1;
     win->dirty        = 1;
+    win->want_close   = 0;
     win->backbuf      = (canvas_t *)0;
-    win->tid          = 0;
-    win->app_fn       = (void (*)(struct wm_window_ *))0;
-    win->events.head  = 0;
-    win->events.tail  = 0;
+    win->app_state    = (void *)0;
+    win->on_event     = (wm_on_event_fn)0;
+    win->on_tick      = (wm_on_tick_fn)0;
+    win->on_destroy   = (wm_on_destroy_fn)0;
 
     /* Copy title — avoid string.h dependency. */
     for (i = 0; i < WM_TITLE_LEN - 1 && title && title[i]; i++)
@@ -305,7 +308,12 @@ static inline void wm_destroy_window(wm_state_t *s, int id)
     int slot = wm_find_idx(s, id);
     if (slot < 0) return;
 
-    int had_focus = s->windows[slot].focused;
+    window_t *w = &s->windows[slot];
+    int had_focus = w->focused;
+
+    /* Let the app free its per-window state (app_state, and its own canvas if
+     * it owns one).  Runs on the WM loop thread, synchronously. */
+    if (w->on_destroy) w->on_destroy(w);
 
     /* Remove slot from z_order, shifting later entries left. */
     int i, z_pos = -1;
@@ -318,10 +326,14 @@ static inline void wm_destroy_window(wm_state_t *s, int id)
     }
 
     /* Clear the slot — id=0 marks it free for reuse. */
-    s->windows[slot].id      = 0;
-    s->windows[slot].active  = 0;
-    s->windows[slot].focused = 0;
-    s->windows[slot].tid     = 0;
+    w->id         = 0;
+    w->active     = 0;
+    w->focused    = 0;
+    w->want_close = 0;
+    w->app_state  = (void *)0;
+    w->on_event   = (wm_on_event_fn)0;
+    w->on_tick    = (wm_on_tick_fn)0;
+    w->on_destroy = (wm_on_destroy_fn)0;
 
     s->num_windows--;
 

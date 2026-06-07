@@ -1,8 +1,9 @@
 /*
- * Quilon OS -- Text Viewer app (section 14.4)
+ * Quilon OS -- Text Viewer app (section 14.4, single-threaded WM)
  *
- * Reads a file path from win->title and displays its contents.
- * d/u scroll down/up one line.  Runs as a WM app thread.
+ * Reads a file path from win->title and displays its contents.  d/u scroll.
+ * Implemented as non-blocking WM callbacks (on_event); per-window state
+ * (the loaded lines + scroll position) lives in win->app_state.
  */
 
 #include <unistd.h>
@@ -13,6 +14,13 @@
 
 #define MAX_LINE_LEN  128
 #define MAX_LINES     512
+
+typedef struct {
+    char (*lines)[MAX_LINE_LEN];   /* heap: MAX_LINES * MAX_LINE_LEN */
+    int    nlines;
+    int    scroll;
+    int    rows;
+} tv_state_t;
 
 static int tv_read_file(const char *path, char lines[][MAX_LINE_LEN], int max)
 {
@@ -40,41 +48,54 @@ static int tv_read_file(const char *path, char lines[][MAX_LINE_LEN], int max)
     return n;
 }
 
-static void tv_render(canvas_t *c, char lines[][MAX_LINE_LEN],
-                      int nlines, int scroll, int rows)
+static void tv_render(window_t *win)
 {
+    tv_state_t *st = (tv_state_t *)win->app_state;
+    canvas_t   *c  = win->backbuf;
     int r;
     gfx_fill(c, GFX_RGB(15, 15, 15));
-    for (r = 0; r < rows && scroll + r < nlines; r++)
-        gfx_draw_text(c, 0, r * GFX_CHAR_H, lines[scroll + r],
+    for (r = 0; r < st->rows && st->scroll + r < st->nlines; r++)
+        gfx_draw_text(c, 0, r * GFX_CHAR_H, st->lines[st->scroll + r],
                       GFX_RGB(200, 200, 200), GFX_RGB(15, 15, 15));
+    win->dirty = 1;
 }
 
-void textview_app(window_t *win)
+static void tv_event(window_t *win, const wm_event_t *ev)
 {
-    /* The path to open is stored in win->title by the launcher. */
-    char (*lines)[MAX_LINE_LEN] =
-        (char (*)[MAX_LINE_LEN])malloc(MAX_LINES * MAX_LINE_LEN);
-    if (!lines) { win->active = 0; return; }
+    tv_state_t *st = (tv_state_t *)win->app_state;
+    if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
+    if (ev->type != WM_EV_KEY) return;
 
-    int nlines = tv_read_file(win->title, lines, MAX_LINES);
-    int rows   = win->backbuf->h / GFX_CHAR_H;
-    int scroll = 0;
+    if (ev->ascii == 'd' && st->scroll + st->rows < st->nlines) st->scroll++;
+    if (ev->ascii == 'u' && st->scroll > 0)                     st->scroll--;
+    tv_render(win);
+}
 
-    tv_render(win->backbuf, lines, nlines, scroll, rows);
-    win->dirty = 1;
-
-    wm_event_t ev;
-    while (win->active) {
-        if (!wm_evqueue_poll(&win->events, &ev)) continue;
-        if (ev.type == WM_EV_CLOSE) break;
-        if (ev.type == WM_EV_KEY) {
-            if (ev.ascii == 'd' && scroll + rows < nlines) scroll++;
-            if (ev.ascii == 'u' && scroll > 0)             scroll--;
-            tv_render(win->backbuf, lines, nlines, scroll, rows);
-            win->dirty = 1;
-        }
+static void tv_destroy(window_t *win)
+{
+    tv_state_t *st = (tv_state_t *)win->app_state;
+    if (st) {
+        if (st->lines) free(st->lines);
+        free(st);
+        win->app_state = (void *)0;
     }
+    if (win->backbuf) { canvas_free(win->backbuf); win->backbuf = (canvas_t *)0; }
+}
 
-    free(lines);
+void textview_open(window_t *win)
+{
+    tv_state_t *st = (tv_state_t *)malloc(sizeof(tv_state_t));
+    if (!st) { win->want_close = 1; return; }
+    st->lines = (char (*)[MAX_LINE_LEN])malloc(MAX_LINES * MAX_LINE_LEN);
+    if (!st->lines) { free(st); win->want_close = 1; return; }
+
+    st->nlines = tv_read_file(win->title, st->lines, MAX_LINES);
+    st->rows   = win->backbuf->h / GFX_CHAR_H;
+    st->scroll = 0;
+
+    win->app_state  = st;
+    win->on_event   = tv_event;
+    win->on_destroy = tv_destroy;
+
+    tv_render(win);
 }

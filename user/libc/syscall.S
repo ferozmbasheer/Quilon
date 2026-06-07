@@ -50,6 +50,19 @@ read:
     popl  %ebx
     ret
 
+/* -- read_nonblock(int fd, void *buf, int len) -> int ---------------------- */
+/* SYS_READ_NB (35): non-blocking; returns bytes read, 0 if none ready, -1 err */
+.global read_nonblock
+read_nonblock:
+    pushl %ebx
+    movl  $35,      %eax    /* SYS_READ_NB */
+    movl  8(%esp),  %ebx    /* fd */
+    movl  12(%esp), %ecx    /* buf */
+    movl  16(%esp), %edx    /* len */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- open(const char *path) -> int fd ---------------------------------- */
 .global open
 open:
@@ -104,6 +117,20 @@ exec:
     pushl %ebx
     movl  $8,      %eax     /* SYS_EXEC */
     movl  8(%esp), %ebx     /* path */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- exec_redir(const char *path, int in_fd, int out_fd) -> int ------------ */
+/* SYS_EXEC_REDIR (36): exec with the child's stdin/stdout set to in_fd/out_fd, */
+/* without touching the caller's own stdin/stdout. */
+.global exec_redir
+exec_redir:
+    pushl %ebx
+    movl  $36,      %eax    /* SYS_EXEC_REDIR */
+    movl  8(%esp),  %ebx    /* path */
+    movl  12(%esp), %ecx    /* in_fd */
+    movl  16(%esp), %edx    /* out_fd */
     int   $0x80
     popl  %ebx
     ret

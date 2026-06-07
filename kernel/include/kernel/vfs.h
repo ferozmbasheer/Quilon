@@ -139,6 +139,15 @@ int  vfs_open(const char *path);
  */
 int  vfs_read(int fd, void *buf, uint32_t len);
 
+/*
+ * vfs_readable -- bytes immediately readable from fd without blocking.
+ *
+ * For a pipe fd this is the number of queued bytes (0 if empty); for a regular
+ * file it is the bytes remaining to EOF.  Returns -1 for an invalid fd.
+ * Used by SYS_READ_NB to implement non-blocking reads for the WM event loop.
+ */
+int  vfs_readable(int fd);
+
 /* vfs_close -- release a file descriptor.  Returns 0 or -1. */
 int  vfs_close(int fd);
 

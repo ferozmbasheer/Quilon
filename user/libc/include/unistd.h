@@ -68,6 +68,9 @@
 /* -- File I/O ----------------------------------------------------------- */
 int  write(int fd, const void *buf, int len);
 int  read(int fd, void *buf, int len);
+/* read_nonblock -- like read() but never blocks; returns bytes read (0 if none
+ * ready), or -1 on error.  Used by the single-threaded WM event loop. */
+int  read_nonblock(int fd, void *buf, int len);
 int  open(const char *path);
 int  close(int fd);
 int  dup2(int oldfd, int newfd);  /* SYS_DUP2 -- redirect fd 0/1/2 to pipe */
@@ -76,6 +79,10 @@ int  dup2(int oldfd, int newfd);  /* SYS_DUP2 -- redirect fd 0/1/2 to pipe */
 int  getpid(void);
 void exit(int code) __attribute__((noreturn));
 int  exec(const char *path);
+/* exec_redir -- exec `path` with the child's stdin/stdout set to in_fd/out_fd
+ * (pipe fds), without redirecting the caller's own stdin/stdout.  Returns the
+ * child PID or -1.  Used by the WM terminal so the WM keeps its own keyboard. */
+int  exec_redir(const char *path, int in_fd, int out_fd);
 int  fork(void);
 int  wait(int pid, int *exit_code);
 /* clone(fn, stack, flags) -- create a kernel thread (SYS_CLONE).

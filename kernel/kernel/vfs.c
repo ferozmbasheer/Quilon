@@ -87,6 +87,23 @@ int vfs_open(const char *path)
     return idx + VFS_FD_BASE;
 }
 
+/* Bytes immediately readable from fd without blocking.
+ * Pipe fd: queued bytes (0 if empty).  Regular file: bytes to EOF.
+ * Returns -1 for an invalid fd. */
+int vfs_readable(int fd)
+{
+    int idx = fd_to_idx(fd);
+    if (idx < 0) return -1;
+    vfs_node_t *node = &fd_table[idx];
+#ifdef __is_kernel
+    if (node->is_pipe)
+        return (int)pipe_bytes_available((int)node->pipe_idx);
+#endif
+    if (!vfs_mounted()) return 0;
+    if (node->offset >= node->size) return 0;
+    return (int)(node->size - node->offset);
+}
+
 int vfs_read(int fd, void *buf, uint32_t len)
 {
     int idx = fd_to_idx(fd);
