@@ -28,6 +28,8 @@
 #define DHCP_POLL_LIMIT 10000000      /* iterations to wait for DHCP reply   */
 #define TCP_CONNECT_POLL_LIMIT 5000000 /* iterations to wait for SYN-ACK     */
 #define TCP_RECV_POLL_LIMIT    5000000 /* iterations to wait for inbound data */
+#define DNS_POLL_LIMIT         5000000 /* iterations to wait for a DNS reply  */
+#define DNS_FALLBACK_SERVER  0x08080808u /* 8.8.8.8 if DHCP offers no DNS     */
 
 static const uint8_t g_broadcast_mac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static const uint8_t g_zero_mac[6]      = {0,0,0,0,0,0};
@@ -37,6 +39,7 @@ static const uint8_t g_zero_mac[6]      = {0,0,0,0,0,0};
 static uint8_t  g_mac[6];
 static uint32_t g_ip      = 0;   /* our IPv4 address (host byte order) */
 static uint32_t g_gateway = 0;   /* gateway IP */
+static uint32_t g_dns      = 0;  /* DNS server from DHCP option 6 (host order) */
 static int      g_ready   = 0;   /* 1 after net_init() succeeds */
 
 /* ARP cache */
@@ -199,7 +202,8 @@ static void send_tcp_segment(uint8_t flags, const void *data, uint16_t data_len)
 static void parse_dhcp_options(const uint8_t *opts, int opts_len,
                                 uint8_t *msg_type,
                                 uint32_t *router,
-                                uint32_t *server_id)
+                                uint32_t *server_id,
+                                uint32_t *dns)
 {
     const uint8_t *p   = opts;
     const uint8_t *end = opts + opts_len;
@@ -221,6 +225,9 @@ static void parse_dhcp_options(const uint8_t *opts, int opts_len,
             break;
         case 54:
             if (olen >= 4 && server_id) *server_id = net_ip_read(p);
+            break;
+        case 6:   /* domain name server -- take the first address only */
+            if (olen >= 4 && dns) *dns = net_ip_read(p);
             break;
         default:
             break;
@@ -248,12 +255,14 @@ static void handle_dhcp_reply(const uint8_t *data, int len)
     uint8_t  msg_type  = 0;
     uint32_t router    = 0;
     uint32_t server_id = 0;
+    uint32_t dns       = 0;
     parse_dhcp_options(msg->options + 4,
                        (int)sizeof(msg->options) - 4,
-                       &msg_type, &router, &server_id);
+                       &msg_type, &router, &server_id, &dns);
 
     uint32_t yiaddr = net_ip_read(msg->yiaddr);
     if (router) g_gateway = router;
+    if (dns)    g_dns     = dns;
 
     if (msg_type == DHCP_MSG_OFFER && g_dhcp.phase == 0) {
         g_dhcp.offered_ip = yiaddr;
@@ -903,6 +912,53 @@ int net_dhcp(void)
 
     net_set_ip(g_dhcp.acked_ip, g_gateway);
     return 0;
+}
+
+uint32_t net_dns_server(void)
+{
+    return g_dns;
+}
+
+int net_dns_lookup(const char *hostname, uint32_t dns_server_ip,
+                   uint32_t *out_ip)
+{
+    if (!g_ready || g_ip == 0 || hostname == NULL) return -1;
+
+    /* Pick a server: explicit arg, then the DHCP-offered one, then a public
+     * fallback (SLIRP NATs it to the host's resolver / the real internet). */
+    uint32_t server = dns_server_ip;
+    if (server == 0) server = g_dns;
+    if (server == 0) server = DNS_FALLBACK_SERVER;
+
+    static uint16_t dns_xid     = 0x1234u;
+    static uint16_t dns_srcport = 50000u;
+    uint16_t id   = dns_xid++;
+    uint16_t sport = dns_srcport++;
+    if (dns_srcport == 0) dns_srcport = 50000u;
+
+    uint8_t query[DNS_MAX_QUERY];
+    int qlen = dns_build_query(query, (int)sizeof(query), id, hostname);
+    if (qlen < 0) return -1;
+
+    /* Clear any stale datagram so handle_udp will buffer our reply. */
+    g_udp_rx.ready = 0;
+
+    if (net_udp_send(server, sport, PORT_DNS, query, (uint16_t)qlen) != 0)
+        return -1;
+
+    /* Busy-poll for the reply (networking is polled, not IRQ-driven). */
+    for (int iter = 0; iter < DNS_POLL_LIMIT; iter++) {
+        net_poll();
+        if (g_udp_rx.ready &&
+            g_udp_rx.dst_port == sport &&
+            g_udp_rx.src_port == PORT_DNS) {
+            int r = dns_parse_response(g_udp_rx.data, (int)g_udp_rx.len,
+                                       id, out_ip);
+            g_udp_rx.ready = 0;
+            return r;
+        }
+    }
+    return -1;
 }
 
 #endif /* __is_kernel */

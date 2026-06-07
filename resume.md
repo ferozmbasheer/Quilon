@@ -26,7 +26,9 @@ reintroduce the threaded model.
 
 ## Next milestone
 
-**Section 15 — BSD Socket API for user space** (ROADMAP3 §15).
+**Section 15 — BSD Socket API for user space (DONE: 15.1 sockets, 15.2 DNS,
+15.3 wget).** Next up is **ROADMAP3 §16 — more device drivers.** The 15.x
+details below are kept as a record of the networking work.
 
 ### 15.1 sockets — DONE (2026-06)
 The BSD socket syscalls are implemented and wired through the VFS fd table:
@@ -70,9 +72,35 @@ segment buffered at a time, PSH required to buffer data) — fine for the demo.
 (Headless `ping`/ICMP to public IPs is rate-limited and may time out; TCP works
 regardless.)
 
-### 15.2 / 15.3 — TODO
-Next: DNS resolver (`net_dns_lookup`, UDP/53) and flesh the `http` demo into a
-`wget` that takes a hostname. Reuse `uap_ok`/`copyout` for user-pointer args.
+### 15.2 DNS resolver — DONE (2026-06)
+Stub resolver over UDP/53, all wire logic in pure-C host-testable helpers in
+`net.h` (`dns_encode_qname`, `dns_build_query`, `dns_skip_name`,
+`dns_parse_response` — handles name compression + CNAME-before-A).
+- **net.c**: `net_dns_lookup(host, server, *out_ip)` (busy-polls like the TCP
+  paths — networking is polled, not IRQ-driven) and `net_dns_server()`. The
+  DNS server is captured from **DHCP option 6** (new `case 6` in
+  `parse_dhcp_options`, stored in `g_dns`); `net_dns_lookup` falls back to that,
+  then to `8.8.8.8`. Reuses the existing `g_udp_rx` slot + `net_udp_send`.
+- **syscall**: `SYS_DNS_RESOLVE 51` (`dns_resolve(host, uint32_t *out_ip)`),
+  validated with `uap_str_ok` + `copyout`. libc: `dns_resolve()` stub in
+  `syscall.S`, declared in `sys/socket.h`.
+- **tests**: `tests/test_dns.c` (32 assertions, wired into `tests/Makefile`).
+- **Demo**: `nslookup <host>` in BOTH shells; `http`/`http`-builtin now accept a
+  **hostname** (DNS fallback when `inet_aton`/`parse_ipv4` fails).
+
+### 15.3 wget — DONE (2026-06)
+`user/wget/main.c` → `WGET.ELF`. **Quilon has no argv** (crt0 pushes none, exec
+takes only a path), so wget reads the target **interactively from stdin**
+(`host:` / `path:` prompts with a tiny echoing readline) rather than argv. A
+`wget` command in BOTH shells execs `/wget.elf`.
+
+Verified live (headless QEMU over the HMP monitor, SLIRP NAT): `dhcp` →
+`nslookup example.com` returned `104.20.23.154`, and `wget` (host
+`example.com`, path `/`) resolved via DNS, connected, and printed a live
+`HTTP/1.1 200 OK` + the real Example Domain HTML from Cloudflare. Driver:
+`/tmp/dns_live_test.py` (sendkey + serial capture; transient, not committed).
+
+**Section 15 is complete.** Next is ROADMAP3 §16 (more device drivers).
 
 ## Build & test (and the #1 gotcha)
 

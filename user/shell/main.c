@@ -99,7 +99,9 @@ static void cmd_help(void)
     printf("  dhcp                   - obtain IP address via DHCP\r\n");
     printf("  ip                     - show current IPv4 address\r\n");
     printf("  ping <a.b.c.d>         - ICMP echo request\r\n");
-    printf("  http <a.b.c.d> [port] [path] - HTTP/1.0 GET over BSD sockets (section 15)\r\n");
+    printf("  http <host> [port] [path] - HTTP/1.0 GET over BSD sockets (section 15)\r\n");
+    printf("  nslookup <host>          - resolve a hostname via DNS (section 15.2)\r\n");
+    printf("  wget                     - interactive HTTP/1.0 fetch (section 15.3)\r\n");
     printf("  vga                    - show VBE framebuffer info (section 10.4)\r\n");
     printf("  smp                    - show CPU/SMP info via CPUID (section 10.5)\r\n");
     printf("  ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
@@ -758,7 +760,7 @@ static void cmd_ping(const char *arg)
 static void cmd_http(const char *arg)
 {
     if (!arg || arg[0] == '\0') {
-        printf("Usage: http <a.b.c.d> [port] [path]\r\n");
+        printf("Usage: http <host> [port] [path]\r\n");
         return;
     }
 
@@ -788,15 +790,21 @@ static void cmd_http(const char *arg)
         while (arg[i] && arg[i] != ' ') i++;
     }
 
-    unsigned int ip;
-    if (!inet_aton(host, &ip)) {
-        printf("http: invalid address '%s'\r\n", host);
-        return;
-    }
-
     if (net_getip() == 0) {
         printf("http: no IP address -- run 'dhcp' first\r\n");
         return;
+    }
+
+    /* Accept a dotted-quad literal directly, else resolve via DNS. */
+    unsigned int ip;
+    if (!inet_aton(host, &ip)) {
+        if (dns_resolve(host, &ip) != 0) {
+            printf("http: cannot resolve '%s'\r\n", host);
+            return;
+        }
+        printf("resolved %s -> %u.%u.%u.%u\r\n", host,
+               (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
+               (ip >> 8) & 0xFF, ip & 0xFF);
     }
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -844,6 +852,37 @@ static void cmd_http(const char *arg)
     }
     printf("\r\n[http: %d bytes received]\r\n", total);
     close(fd);
+}
+
+/* nslookup <host> -- resolve a hostname to an IPv4 address via the kernel DNS
+ * resolver (section 15.2). */
+static void cmd_nslookup(const char *arg)
+{
+    if (!arg || arg[0] == '\0') {
+        printf("Usage: nslookup <host>\r\n");
+        return;
+    }
+
+    char host[64];
+    int i = 0;
+    while (arg[i] && arg[i] != ' ' && i < (int)sizeof(host) - 1) {
+        host[i] = arg[i];
+        i++;
+    }
+    host[i] = '\0';
+
+    if (net_getip() == 0) {
+        printf("nslookup: no IP address -- run 'dhcp' first\r\n");
+        return;
+    }
+
+    unsigned int ip;
+    if (dns_resolve(host, &ip) != 0) {
+        printf("nslookup: cannot resolve '%s'\r\n", host);
+        return;
+    }
+    printf("%s has address %u.%u.%u.%u\r\n", host,
+           (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
 }
 
 static void cmd_vga(void)
@@ -1287,6 +1326,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "ip")     == 0) cmd_ip();
     else if (strcmp(cmd, "ping")   == 0) cmd_ping(arg);
     else if (strcmp(cmd, "http")   == 0) cmd_http(arg);
+    else if (strcmp(cmd, "nslookup") == 0) cmd_nslookup(arg);
     else if (strcmp(cmd, "vga")      == 0) cmd_vga();
     else if (strcmp(cmd, "smp")      == 0) cmd_smp();
     else if (strcmp(cmd, "ansitest") == 0) cmd_ansitest();
@@ -1301,6 +1341,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "gfx")     == 0) cmd_gfx();
     else if (strcmp(cmd, "wm-demo") == 0) cmd_wm_demo();
     else if (strcmp(cmd, "startx") == 0) cmd_exec("/wm.elf");
+    else if (strcmp(cmd, "wget")   == 0) cmd_exec("/wget.elf");
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

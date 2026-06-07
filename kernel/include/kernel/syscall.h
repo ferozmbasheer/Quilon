@@ -63,6 +63,7 @@
 #define SYS_RECV       48 /* recv(fd, buf, len) -> bytes received, 0=none, -1=err      */
 #define SYS_LISTEN     49 /* listen(fd) -> 0 or -1                                     */
 #define SYS_ACCEPT     50 /* accept(fd) -> connected fd or -1 (single-conn: same fd)   */
+#define SYS_DNS_RESOLVE 51 /* dns_resolve(host, uint32_t *out_ip) -> 0 or -1 (sec 15.2) */
 
 /* mouse_event_t -- filled by SYS_MOUSE_READ; matches user/libc/include/mouse.h */
 typedef struct {

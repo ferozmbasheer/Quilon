@@ -47,4 +47,9 @@ int accept(int fd);
  * Returns 1 on success, 0 on malformed input. */
 int inet_aton(const char *s, unsigned int *out_ip);
 
+/* dns_resolve -- resolve a hostname to a host-byte-order IPv4 address via the
+ * kernel DNS resolver (section 15.2).  Returns 0 on success (*out_ip set),
+ * -1 on failure. */
+int dns_resolve(const char *host, unsigned int *out_ip);
+
 #endif /* _SYS_SOCKET_H */

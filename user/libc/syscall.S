@@ -506,6 +506,19 @@ accept:
     popl  %ebx
     ret
 
+/* -- dns_resolve(host, out_ip) -> int --------------------------------------- */
+/* SYS_DNS_RESOLVE (51).  Resolves host to an IPv4 address (host byte order)   */
+/* stored at *out_ip.  Returns 0 on success, -1 on failure.                    */
+.global dns_resolve
+dns_resolve:
+    pushl %ebx
+    movl  $51,      %eax    /* SYS_DNS_RESOLVE */
+    movl  8(%esp),  %ebx    /* host (const char *) */
+    movl  12(%esp), %ecx    /* out_ip (unsigned int *) */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

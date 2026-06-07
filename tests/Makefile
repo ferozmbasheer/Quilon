@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm
 
 .PHONY: all build run clean help
 
@@ -284,6 +284,13 @@ $(BINDIR)/test_rtl8139: test_rtl8139.c framework.h $(RTL8139_SRC)
 # so the checksum, byte-order, and frame-building functions are fully testable.
 $(BINDIR)/test_net: test_net.c framework.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_net.c
+
+# DNS resolver tests (section 15.2)
+# net.h's DNS helpers (dns_encode_qname, dns_build_query, dns_skip_name,
+# dns_parse_response) are pure static-inline -- no .c file is linked.  The
+# wire encode/decode is exercised entirely on the host.
+$(BINDIR)/test_dns: test_dns.c framework.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_dns.c
 
 # VBE framebuffer tests (section 10.4)
 # vbe.h contains the bitmap font and static-inline helpers (vbe_pixel_offset,

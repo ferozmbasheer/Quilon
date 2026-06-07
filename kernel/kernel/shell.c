@@ -546,7 +546,7 @@ static void shell_cmd_ping(const char *arg)
 static void shell_cmd_http(const char *arg)
 {
     if (arg[0] == '\0') {
-        printf("Usage: http <a.b.c.d> [path]\r\n");
+        printf("Usage: http <host> [port] [path]\r\n");
         return;
     }
 
@@ -576,11 +576,6 @@ static void shell_cmd_http(const char *arg)
         while (arg[i] && arg[i] != ' ') i++;
     }
 
-    uint32_t dst = parse_ipv4(host);
-    if (dst == 0) {
-        printf("http: invalid address '%s'\r\n", host);
-        return;
-    }
     if (net_init() != 0) {
         printf("http: NIC not ready\r\n");
         return;
@@ -589,6 +584,18 @@ static void shell_cmd_http(const char *arg)
     if (!net_get_ip(&myip)) {
         printf("http: no IP address -- run 'dhcp' first\r\n");
         return;
+    }
+
+    /* Accept a dotted-quad literal directly, else resolve via DNS. */
+    uint32_t dst = parse_ipv4(host);
+    if (dst == 0) {
+        if (net_dns_lookup(host, net_dns_server(), &dst) != 0) {
+            printf("http: cannot resolve '%s'\r\n", host);
+            return;
+        }
+        printf("resolved %s -> %d.%d.%d.%d\r\n", host,
+               (int)((dst >> 24) & 0xFF), (int)((dst >> 16) & 0xFF),
+               (int)((dst >> 8)  & 0xFF), (int)(dst & 0xFF));
     }
 
     printf("connecting to %d.%d.%d.%d:%d ...\r\n",
@@ -631,6 +638,48 @@ static void shell_cmd_http(const char *arg)
     }
     printf("\r\n[http: %d bytes received]\r\n", total);
     net_tcp_close();
+}
+
+/* nslookup <host> [a.b.c.d] -- resolve a hostname via DNS (section 15.2).
+ * An optional second token overrides the DNS server (default: the DHCP-
+ * provided one, then a public fallback). */
+static void shell_cmd_nslookup(const char *arg)
+{
+    if (arg[0] == '\0') {
+        printf("Usage: nslookup <host> [dns-server]\r\n");
+        return;
+    }
+
+    char host[64];
+    int i = 0;
+    while (arg[i] && arg[i] != ' ' && i < (int)sizeof(host) - 1) {
+        host[i] = arg[i];
+        i++;
+    }
+    host[i] = '\0';
+    while (arg[i] == ' ') i++;
+
+    uint32_t server = net_dns_server();
+    if (arg[i]) {
+        uint32_t s = parse_ipv4(&arg[i]);
+        if (s != 0) server = s;
+    }
+
+    if (net_init() != 0) { printf("nslookup: NIC not ready\r\n"); return; }
+    uint32_t myip = 0;
+    if (!net_get_ip(&myip)) {
+        printf("nslookup: no IP address -- run 'dhcp' first\r\n");
+        return;
+    }
+
+    uint32_t ip = 0;
+    if (net_dns_lookup(host, server, &ip) != 0) {
+        printf("nslookup: cannot resolve '%s'\r\n", host);
+        return;
+    }
+    printf("%s has address %d.%d.%d.%d\r\n", host,
+           (int)((ip >> 24) & 0xFF), (int)((ip >> 16) & 0xFF),
+           (int)((ip >> 8)  & 0xFF), (int)(ip & 0xFF));
 }
 
 static void shell_cmd_dhcp(void)
@@ -1246,7 +1295,8 @@ static void shell_execute(const char *cmd) {
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
         printf("          rm <file|dir>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
-        printf("          dhcp, ping <ip>, http <ip> [port] [path], arp, tcpip, vga\r\n");
+        printf("          dhcp, ping <ip>, http <host> [port] [path], arp, tcpip, vga\r\n");
+        printf("          nslookup <host> [dns]  - resolve a hostname (section 15.2)\r\n");
         printf("          smp                    - SMP CPU status (section 10.5)\r\n");
         printf("          ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
         printf("          psf                    - PSF2 font loader demo  (section 11.2)\r\n");
@@ -1261,6 +1311,7 @@ static void shell_execute(const char *cmd) {
         printf("          gfx                    - 2D graphics lib demo    (section 14.1)\r\n");
         printf("          wm-demo                - WM compositor demo      (section 14.2)\r\n");
         printf("          startx                 - launch graphical desktop (section 14.3)\r\n");
+        printf("          wget                   - interactive HTTP/1.0 fetch (section 15.3)\r\n");
     } else if (strcmp(cmd, "clear") == 0) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
@@ -1330,6 +1381,10 @@ static void shell_execute(const char *cmd) {
         shell_cmd_http(cmd + 5);
     } else if (strcmp(cmd, "http") == 0) {
         shell_cmd_http("");
+    } else if (strncmp(cmd, "nslookup ", 9) == 0) {
+        shell_cmd_nslookup(cmd + 9);
+    } else if (strcmp(cmd, "nslookup") == 0) {
+        shell_cmd_nslookup("");
     } else if (strcmp(cmd, "ping") == 0) {
         shell_cmd_ping("");
     } else if (strcmp(cmd, "arp") == 0) {
@@ -1366,6 +1421,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_wm_demo();
     } else if (strcmp(cmd, "startx") == 0) {
         shell_cmd_exec("/wm.elf");
+    } else if (strcmp(cmd, "wget") == 0) {
+        shell_cmd_exec("/wget.elf");
     } else if (cmd[0] != '\0') {
         printf("Unknown command: %s\r\n", cmd);
     }

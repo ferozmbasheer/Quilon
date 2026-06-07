@@ -55,6 +55,17 @@
 #define PORT_DHCP_CLIENT  68u
 #define PORT_HTTP         80u
 #define PORT_ECHO          7u   /* UDP/TCP echo server (RFC 862) */
+#define PORT_DNS          53u   /* DNS over UDP (section 15.2)    */
+
+/* -- DNS constants (section 15.2) -------------------------------------- */
+#define DNS_HDR_SIZE      12u    /* fixed DNS message header (RFC 1035) */
+#define DNS_TYPE_A         1u    /* host address (IPv4) record          */
+#define DNS_CLASS_IN       1u    /* Internet class                      */
+#define DNS_FLAG_RD   0x0100u    /* recursion-desired bit (query flags) */
+#define DNS_FLAG_QR   0x8000u    /* query/response bit (set in replies) */
+#define DNS_RCODE_MASK 0x000Fu   /* low nibble of flags = response code */
+#define DNS_NAME_PTR    0xC0u    /* top two bits set => compression ptr  */
+#define DNS_MAX_QUERY    280u    /* generous bound for a single A query  */
 
 /* -- On-wire header sizes (bytes) -------------------------------------- */
 #define ETH_HDR_SIZE      14u
@@ -164,6 +175,18 @@ typedef struct {
     uint8_t  file[128];
     uint8_t  options[64]; /* magic cookie + TLVs */
 } __attribute__((packed)) dhcp_msg_t;
+
+/* DNS message header (RFC 1035, 12 bytes).  The question and answer
+ * sections follow it on the wire (variable length, parsed by the helpers
+ * below). */
+typedef struct {
+    uint16_t id;        /* transaction ID (echoed in the reply)        */
+    uint16_t flags;     /* QR/opcode/RD/RA/rcode -- DNS_FLAG_* bits     */
+    uint16_t qdcount;   /* number of questions                         */
+    uint16_t ancount;   /* number of answer records                    */
+    uint16_t nscount;   /* number of authority records                 */
+    uint16_t arcount;   /* number of additional records                */
+} __attribute__((packed)) dns_hdr_t;
 
 /* =======================================================================
  * Pure-C helpers -- testable on host (no x86 I/O)
@@ -401,6 +424,144 @@ static inline void tcp_fill(uint8_t *buf,
     h->urgent     = 0;
 }
 
+/* -- DNS helpers (section 15.2) ----------------------------------------
+ *
+ * DNS is a binary protocol over UDP/53.  A query is a 12-byte header, the
+ * QNAME-encoded hostname, and a 4-byte type/class trailer.  The reply
+ * repeats the question and appends answer records; A records hold a 4-byte
+ * IPv4 address.  These helpers are pure-C so the host tests can exercise
+ * the wire encoding/decoding without a NIC.
+ */
+
+/* Read a big-endian 16-bit value from msg[off..off+1] (no alignment req). */
+static inline uint16_t dns_rd16(const uint8_t *msg, int off)
+{
+    return (uint16_t)(((uint16_t)msg[off] << 8) | (uint16_t)msg[off + 1]);
+}
+
+/*
+ * dns_encode_qname -- encode "api.example.com" as the wire QNAME
+ * "\x03api\x07example\x03com\x00".  Writes into out (capacity outcap).
+ * Returns the number of bytes written (including the trailing 0), or -1 on
+ * a malformed name or insufficient capacity.
+ */
+static inline int dns_encode_qname(uint8_t *out, int outcap, const char *host)
+{
+    int oi = 0;
+    const char *p = host;
+    if (!host || !*host) return -1;
+
+    while (*p) {
+        const char *label = p;
+        int len = 0;
+        while (*p && *p != '.') { p++; len++; }
+        if (len == 0 || len > 63) return -1;        /* empty / over-long label */
+        if (oi + 1 + len >= outcap) return -1;       /* +1 leaves room for 0    */
+        out[oi++] = (uint8_t)len;
+        for (int i = 0; i < len; i++) out[oi++] = (uint8_t)label[i];
+        if (*p == '.') {
+            p++;
+            if (*p == '\0') return -1;               /* trailing dot */
+        }
+    }
+    if (oi + 1 > outcap) return -1;
+    out[oi++] = 0;                                    /* root label terminator */
+    return oi;
+}
+
+/*
+ * dns_build_query -- assemble a standard recursive A-record query for host
+ * into buf (capacity cap).  id is the transaction ID to echo.  Returns the
+ * total query length, or -1 if it would not fit / the name is malformed.
+ */
+static inline int dns_build_query(uint8_t *buf, int cap, uint16_t id,
+                                  const char *host)
+{
+    if (cap < (int)DNS_HDR_SIZE) return -1;
+
+    buf[0] = (uint8_t)(id >> 8);   buf[1] = (uint8_t)id;
+    buf[2] = (uint8_t)(DNS_FLAG_RD >> 8); buf[3] = (uint8_t)DNS_FLAG_RD;
+    buf[4] = 0; buf[5] = 1;        /* qdcount = 1 */
+    buf[6] = 0; buf[7] = 0;        /* ancount = 0 */
+    buf[8] = 0; buf[9] = 0;        /* nscount = 0 */
+    buf[10] = 0; buf[11] = 0;      /* arcount = 0 */
+
+    int n = dns_encode_qname(buf + DNS_HDR_SIZE, cap - (int)DNS_HDR_SIZE, host);
+    if (n < 0) return -1;
+    int off = (int)DNS_HDR_SIZE + n;
+    if (off + 4 > cap) return -1;
+    buf[off++] = 0; buf[off++] = DNS_TYPE_A;    /* QTYPE  = A  */
+    buf[off++] = 0; buf[off++] = DNS_CLASS_IN;  /* QCLASS = IN */
+    return off;
+}
+
+/*
+ * dns_skip_name -- advance past a (possibly compressed) name starting at
+ * off.  Compression pointers (top two bits set) are two bytes and are not
+ * followed -- we only need to step over the name to reach the fixed fields
+ * after it.  Returns the offset just past the name, or -1 on malformed
+ * input.
+ */
+static inline int dns_skip_name(const uint8_t *msg, int msglen, int off)
+{
+    int guard = 0;
+    while (off < msglen) {
+        if (++guard > 128) return -1;                /* runaway label chain */
+        uint8_t len = msg[off];
+        if ((len & DNS_NAME_PTR) == DNS_NAME_PTR) {
+            return (off + 2 <= msglen) ? off + 2 : -1; /* compression pointer */
+        }
+        if (len == 0) return off + 1;                 /* root terminator */
+        off += 1 + (int)len;
+    }
+    return -1;
+}
+
+/*
+ * dns_parse_response -- find the first A record in a DNS reply and store its
+ * IPv4 address (host byte order) in *out_ip.  Verifies the transaction id,
+ * the response bit, and a zero response code.  Returns 0 on success, -1 if
+ * the reply is malformed, an error, or carries no A record.
+ */
+static inline int dns_parse_response(const uint8_t *msg, int msglen,
+                                     uint16_t id, uint32_t *out_ip)
+{
+    if (msglen < (int)DNS_HDR_SIZE) return -1;
+    if (dns_rd16(msg, 0) != id) return -1;             /* not our query */
+
+    uint16_t flags = dns_rd16(msg, 2);
+    if (!(flags & DNS_FLAG_QR)) return -1;             /* not a response */
+    if (flags & DNS_RCODE_MASK) return -1;             /* server error    */
+
+    int qd = (int)dns_rd16(msg, 4);
+    int an = (int)dns_rd16(msg, 6);
+    int off = (int)DNS_HDR_SIZE;
+
+    /* Skip the echoed question section: name + QTYPE(2) + QCLASS(2). */
+    for (int q = 0; q < qd; q++) {
+        off = dns_skip_name(msg, msglen, off);
+        if (off < 0 || off + 4 > msglen) return -1;
+        off += 4;
+    }
+
+    /* Scan the answer section for the first A/IN record. */
+    for (int a = 0; a < an; a++) {
+        off = dns_skip_name(msg, msglen, off);
+        if (off < 0 || off + 10 > msglen) return -1;   /* type+class+ttl+rdlen */
+        uint16_t type   = dns_rd16(msg, off);
+        uint16_t cls    = dns_rd16(msg, off + 2);
+        uint16_t rdlen  = dns_rd16(msg, off + 8);
+        int rdata = off + 10;
+        if (rdata + (int)rdlen > msglen) return -1;
+        if (type == DNS_TYPE_A && cls == DNS_CLASS_IN && rdlen == 4) {
+            if (out_ip) *out_ip = net_ip_read(msg + rdata);
+            return 0;
+        }
+        off = rdata + (int)rdlen;                       /* CNAME etc. -- skip */
+    }
+    return -1;
+}
+
 /* -- ARP cache entry (used by the kernel API) --------------------------- */
 typedef struct {
     uint32_t ip;
@@ -471,5 +632,20 @@ tcp_state_t net_tcp_state(void);
 /* DHCP -- discover -> offer -> request -> ack; calls net_set_ip on success.
  * Returns 0 if IP obtained, -1 on timeout. */
 int         net_dhcp(void);
+
+/* DNS (section 15.2) */
+
+/* net_dns_server -- DNS server learned from DHCP option 6 (host byte order),
+ *                   or 0 if none was offered. */
+uint32_t    net_dns_server(void);
+
+/* net_dns_lookup -- resolve hostname to an IPv4 address (host byte order) by
+ *                   sending a UDP/53 A query to dns_server_ip and polling for
+ *                   the reply.  If dns_server_ip is 0 the DHCP-provided server
+ *                   (then a public fallback) is used.  Returns 0 on success
+ *                   (*out_ip set), -1 on failure (no NIC/IP, timeout, NXDOMAIN,
+ *                   or no A record). */
+int         net_dns_lookup(const char *hostname, uint32_t dns_server_ip,
+                           uint32_t *out_ip);
 
 #endif /* _KERNEL_NET_H */

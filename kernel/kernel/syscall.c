@@ -1677,6 +1677,27 @@ void syscall_handler(syscall_regs_t *regs)
     }
 
     /* ------------------------------------------------------------------------
+     * SYS_DNS_RESOLVE (51) -- resolve a hostname to an IPv4 address.
+     *   EBX = hostname (user C string), ECX = uint32_t* out_ip (host order).
+     *   Returns 0 on success (*out_ip written), -1 on failure.
+     * ------------------------------------------------------------------------ */
+    case SYS_DNS_RESOLVE: {
+#ifdef __is_kernel
+        if (!uap_str_ok(regs->ebx) ||
+            !uap_ok(regs->ecx, sizeof(uint32_t), 1)) { ret = (uint32_t)-1; break; }
+        uint32_t ip = 0;
+        if (net_dns_lookup((const char *)(uintptr_t)regs->ebx,
+                           net_dns_server(), &ip) != 0) {
+            ret = (uint32_t)-1; break;
+        }
+        ret = (copyout(regs->ecx, &ip, sizeof ip) == 0) ? 0 : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
      * Unknown syscall
      * ------------------------------------------------------------------------ */
     default:
