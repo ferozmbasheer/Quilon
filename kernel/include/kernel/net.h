@@ -45,6 +45,11 @@
 #define TCP_ACK  0x10u
 #define TCP_URG  0x20u
 
+/* -- BSD socket API constants (section 15.1) --------------------------- */
+#define AF_INET       2u   /* IPv4 address family            */
+#define SOCK_STREAM   1u   /* reliable byte stream (TCP)     */
+#define SOCK_DGRAM    2u   /* datagram (UDP)                 */
+
 /* -- Well-known ports -------------------------------------------------- */
 #define PORT_DHCP_SERVER  67u
 #define PORT_DHCP_CLIENT  68u
@@ -407,10 +412,11 @@ typedef struct {
 typedef enum {
     TCP_STATE_CLOSED      = 0,
     TCP_STATE_LISTEN      = 1,
-    TCP_STATE_SYN_RCVD    = 2,
-    TCP_STATE_ESTABLISHED = 3,
-    TCP_STATE_FIN_WAIT    = 4,
-    TCP_STATE_CLOSE_WAIT  = 5,
+    TCP_STATE_SYN_SENT    = 2,   /* active open: SYN sent, awaiting SYN-ACK */
+    TCP_STATE_SYN_RCVD    = 3,
+    TCP_STATE_ESTABLISHED = 4,
+    TCP_STATE_FIN_WAIT    = 5,
+    TCP_STATE_CLOSE_WAIT  = 6,
 } tcp_state_t;
 
 /* -- Public kernel API ------------------------------------------------- */
@@ -450,8 +456,15 @@ int         net_udp_recv(uint16_t port, void *buf, uint16_t maxlen);
 
 /* TCP (single connection) */
 int         net_tcp_listen(uint16_t port);
+/* net_tcp_connect -- active open to dst_ip:dst_port (host byte order).
+ * Resolves the next hop via ARP, performs the SYN / SYN-ACK / ACK handshake,
+ * and blocks (polling) until ESTABLISHED or timeout.  Returns 0 on success,
+ * -1 on failure (no NIC/IP, ARP failure, or handshake timeout). */
+int         net_tcp_connect(uint32_t dst_ip, uint16_t dst_port);
 int         net_tcp_send(const void *data, uint16_t len);
 int         net_tcp_recv(void *buf, uint16_t maxlen);
+/* net_tcp_readable -- bytes immediately available without blocking (0 if none). */
+int         net_tcp_readable(void);
 void        net_tcp_close(void);
 tcp_state_t net_tcp_state(void);
 

@@ -55,6 +55,13 @@
 #define SYS_GFX_MAP    41  /* gfx_map() -> user VA of shadow buffer, or -1   */
 #define SYS_GFX_FLUSH  42  /* gfx_flush() -> 0; shadow buf -> hw framebuffer */
 #define SYS_PS         43  /* proc_list(proc_info_t *buf, int max) -> count   */
+#define SYS_SOCKET     44  /* socket(domain, type, proto) -> fd or -1         */
+#define SYS_BIND       45  /* bind(fd, port) -> 0 or -1                       */
+#define SYS_CONNECT    46  /* connect(fd, ip, port) -> 0 or -1               */
+#define SYS_SEND       47  /* send(fd, buf, len) -> bytes or -1              */
+#define SYS_RECV       48  /* recv(fd, buf, len) -> bytes, 0=none, -1=err    */
+#define SYS_LISTEN     49  /* listen(fd) -> 0 or -1                          */
+#define SYS_ACCEPT     50  /* accept(fd) -> connected fd or -1              */
 
 /* clone() flag bits */
 #define CLONE_VM    0x0100  /* share address space (thread, not process)      */

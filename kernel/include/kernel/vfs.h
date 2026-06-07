@@ -61,6 +61,12 @@ typedef struct {
     uint8_t   is_pipe;        /* 1 = pipe fd, 0 = regular file fd                */
     uint8_t   pipe_write_end; /* 1 = write end, 0 = read end (when is_pipe = 1)  */
     uint8_t   pipe_idx;       /* index into pipe_pool[] (when is_pipe = 1)       */
+    /* Socket support (section 15.1) */
+    uint8_t   is_socket;      /* 1 = socket fd, 0 = not a socket                 */
+    uint8_t   sock_type;      /* SOCK_STREAM / SOCK_DGRAM (when is_socket = 1)   */
+    uint16_t  sock_lport;     /* local port (set by bind/connect)               */
+    uint16_t  sock_rport;     /* remote port (set by connect)                   */
+    uint32_t  sock_rip;       /* remote IPv4, host byte order (set by connect)  */
 } vfs_node_t;
 
 /*
@@ -111,6 +117,25 @@ typedef struct {
 } vfs_ops_t;
 
 /* -- Public API ----------------------------------------------------------- */
+
+/*
+ * vfs_socket -- allocate a socket fd in the global fd table.
+ *
+ * `type` is SOCK_STREAM or SOCK_DGRAM.  Returns an fd (>= VFS_FD_BASE) on
+ * success, -1 if the fd table is full.  The fd participates in the normal
+ * read/write/close path: read/write are routed to the kernel TCP/UDP stack.
+ * Kernel build only (returns -1 on the host).
+ */
+int  vfs_socket(int type);
+
+/*
+ * vfs_node_for_fd -- return the fd_table entry for `fd`, or NULL if invalid.
+ *
+ * Used by the socket syscalls to read/update per-socket fields (ports, peer).
+ * Kernel build only.
+ */
+vfs_node_t *vfs_node_for_fd(int fd);
+
 
 /*
  * vfs_mount -- register a filesystem driver.

@@ -22,6 +22,7 @@
 #include <kernel/vfs.h>
 #ifdef __is_kernel
 #include <kernel/pipe.h>
+#include <kernel/net.h>
 #endif
 
 /* -- Mounted filesystem --------------------------------------------------- */
@@ -98,6 +99,8 @@ int vfs_readable(int fd)
 #ifdef __is_kernel
     if (node->is_pipe)
         return (int)pipe_bytes_available((int)node->pipe_idx);
+    if (node->is_socket)
+        return (node->sock_type == SOCK_STREAM) ? net_tcp_readable() : 0;
 #endif
     if (!vfs_mounted()) return 0;
     if (node->offset >= node->size) return 0;
@@ -114,6 +117,12 @@ int vfs_read(int fd, void *buf, uint32_t len)
 #ifdef __is_kernel
     if (node->is_pipe)
         return pipe_read((int)node->pipe_idx, (uint8_t *)buf, len);
+    if (node->is_socket) {
+        if (len > 0xFFFFu) len = 0xFFFFu;
+        if (node->sock_type == SOCK_STREAM)
+            return net_tcp_recv(buf, (uint16_t)len);
+        return net_udp_recv(node->sock_lport, buf, (uint16_t)len);
+    }
 #endif
 
     if (!vfs_mounted()) return -1;
@@ -147,6 +156,12 @@ int vfs_close(int fd)
         node->in_use = 0;
         return 0;
     }
+    if (node->is_socket) {
+        if (node->sock_type == SOCK_STREAM)
+            net_tcp_close();
+        node->in_use = 0;
+        return 0;
+    }
 #endif
 
     if (vfs_mounted())
@@ -165,6 +180,15 @@ int vfs_write(int fd, const void *buf, uint32_t len)
 #ifdef __is_kernel
     if (node->is_pipe)
         return pipe_write((int)node->pipe_idx, (const uint8_t *)buf, len);
+    if (node->is_socket) {
+        if (!buf || len == 0) return 0;
+        if (len > 0xFFFFu) len = 0xFFFFu;
+        if (node->sock_type == SOCK_STREAM)
+            return (net_tcp_send(buf, (uint16_t)len) == 0) ? (int)len : -1;
+        return (net_udp_send(node->sock_rip, node->sock_lport,
+                             node->sock_rport, buf, (uint16_t)len) == 0)
+               ? (int)len : -1;
+    }
 #endif
 
     if (!vfs_mounted()) return -1;
@@ -341,6 +365,36 @@ int vfs_pipe(int fds[2])
     return 0;
 #else
     (void)fds;
+    return -1;
+#endif
+}
+
+vfs_node_t *vfs_node_for_fd(int fd)
+{
+    int idx = fd_to_idx(fd);
+    if (idx < 0) return (vfs_node_t *)0;
+    return &fd_table[idx];
+}
+
+int vfs_socket(int type)
+{
+#ifdef __is_kernel
+    if (type != SOCK_STREAM && type != SOCK_DGRAM) return -1;
+
+    int idx = -1;
+    for (int i = 0; i < VFS_MAX_FDS; i++) {
+        if (!fd_table[i].in_use) { idx = i; break; }
+    }
+    if (idx < 0) return -1;   /* fd table full */
+
+    vfs_node_t node = {0};
+    node.in_use    = 1;
+    node.is_socket = 1;
+    node.sock_type = (uint8_t)type;
+    fd_table[idx]  = node;
+    return idx + VFS_FD_BASE;
+#else
+    (void)type;
     return -1;
 #endif
 }

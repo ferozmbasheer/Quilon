@@ -420,6 +420,92 @@ proc_list:
     popl  %ebx
     ret
 
+/* -- socket(domain, type, proto) -> int ------------------------------------ */
+/* SYS_SOCKET (44).  Returns an fd or -1.                                     */
+.global socket
+socket:
+    pushl %ebx
+    movl  $44,      %eax    /* SYS_SOCKET */
+    movl  8(%esp),  %ebx    /* domain */
+    movl  12(%esp), %ecx    /* type   */
+    movl  16(%esp), %edx    /* proto  */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- bind(fd, port) -> int -------------------------------------------------- */
+/* SYS_BIND (45).  Returns 0 or -1.                                           */
+.global bind
+bind:
+    pushl %ebx
+    movl  $45,      %eax    /* SYS_BIND */
+    movl  8(%esp),  %ebx    /* fd   */
+    movl  12(%esp), %ecx    /* port */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- connect(fd, ip, port) -> int ------------------------------------------- */
+/* SYS_CONNECT (46).  Returns 0 or -1.                                        */
+.global connect
+connect:
+    pushl %ebx
+    movl  $46,      %eax    /* SYS_CONNECT */
+    movl  8(%esp),  %ebx    /* fd   */
+    movl  12(%esp), %ecx    /* ip   */
+    movl  16(%esp), %edx    /* port */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- send(fd, buf, len) -> int ---------------------------------------------- */
+/* SYS_SEND (47).  Returns bytes sent or -1.                                  */
+.global send
+send:
+    pushl %ebx
+    movl  $47,      %eax    /* SYS_SEND */
+    movl  8(%esp),  %ebx    /* fd  */
+    movl  12(%esp), %ecx    /* buf */
+    movl  16(%esp), %edx    /* len */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- recv(fd, buf, len) -> int ---------------------------------------------- */
+/* SYS_RECV (48).  Returns bytes received (0 if none) or -1.                  */
+.global recv
+recv:
+    pushl %ebx
+    movl  $48,      %eax    /* SYS_RECV */
+    movl  8(%esp),  %ebx    /* fd  */
+    movl  12(%esp), %ecx    /* buf */
+    movl  16(%esp), %edx    /* len */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- listen(fd) -> int ------------------------------------------------------ */
+/* SYS_LISTEN (49).  Returns 0 or -1.                                         */
+.global listen
+listen:
+    pushl %ebx
+    movl  $49,      %eax    /* SYS_LISTEN */
+    movl  8(%esp),  %ebx    /* fd */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- accept(fd) -> int ------------------------------------------------------ */
+/* SYS_ACCEPT (50).  Blocks; returns a connected fd or -1.                    */
+.global accept
+accept:
+    pushl %ebx
+    movl  $50,      %eax    /* SYS_ACCEPT */
+    movl  8(%esp),  %ebx    /* fd */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

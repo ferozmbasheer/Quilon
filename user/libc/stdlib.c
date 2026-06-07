@@ -159,3 +159,26 @@ int atoi(const char *s)
         n = n * 10 + (*s++ - '0');
     return sign * n;
 }
+
+/* Parse "a.b.c.d" into a host-byte-order IPv4 address (a in the high octet).
+ * Returns 1 on success, 0 on malformed input. */
+int inet_aton(const char *s, unsigned int *out_ip)
+{
+    unsigned int ip = 0;
+    for (int octet = 0; octet < 4; octet++) {
+        if (*s < '0' || *s > '9') return 0;   /* need at least one digit */
+        unsigned int v = 0;
+        while (*s >= '0' && *s <= '9') {
+            v = v * 10u + (unsigned int)(*s++ - '0');
+            if (v > 255u) return 0;
+        }
+        ip = (ip << 8) | v;
+        if (octet < 3) {
+            if (*s != '.') return 0;
+            s++;
+        }
+    }
+    if (*s != '\0') return 0;   /* trailing garbage */
+    if (out_ip) *out_ip = ip;
+    return 1;
+}

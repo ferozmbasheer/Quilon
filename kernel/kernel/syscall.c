@@ -1544,6 +1544,139 @@ void syscall_handler(syscall_regs_t *regs)
     }
 
     /* ------------------------------------------------------------------------
+     * SYS_SOCKET (44) -- create a socket fd.
+     *   EBX = domain (AF_INET), ECX = type (SOCK_STREAM/SOCK_DGRAM), EDX = proto.
+     *   Returns: fd (>= 3) or -1.
+     * ------------------------------------------------------------------------ */
+    case SYS_SOCKET: {
+#ifdef __is_kernel
+        if (regs->ebx != AF_INET) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_socket((int)regs->ecx);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_BIND (45) -- assign a local port to a socket.
+     *   EBX = fd, ECX = port (host byte order).  Returns 0 or -1.
+     * ------------------------------------------------------------------------ */
+    case SYS_BIND: {
+#ifdef __is_kernel
+        vfs_node_t *n = vfs_node_for_fd((int)regs->ebx);
+        if (!n || !n->is_socket) { ret = (uint32_t)-1; break; }
+        n->sock_lport = (uint16_t)regs->ecx;
+        ret = 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_CONNECT (46) -- connect a socket to a remote peer.
+     *   EBX = fd, ECX = ip (host byte order), EDX = port.  Returns 0 or -1.
+     *   For SOCK_STREAM this performs the TCP handshake (blocks); for
+     *   SOCK_DGRAM it just records the peer for subsequent send().
+     * ------------------------------------------------------------------------ */
+    case SYS_CONNECT: {
+#ifdef __is_kernel
+        vfs_node_t *n = vfs_node_for_fd((int)regs->ebx);
+        if (!n || !n->is_socket) { ret = (uint32_t)-1; break; }
+        n->sock_rip   = regs->ecx;
+        n->sock_rport = (uint16_t)regs->edx;
+        if (n->sock_type == SOCK_STREAM) {
+            ret = (uint32_t)net_tcp_connect(regs->ecx, (uint16_t)regs->edx);
+        } else {
+            if (n->sock_lport == 0) n->sock_lport = 49152;  /* default src port */
+            ret = 0;
+        }
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_SEND (47) -- send on a socket.  EBX = fd, ECX = buf, EDX = len.
+     *   Returns bytes sent or -1.  Equivalent to write() on a socket fd.
+     * ------------------------------------------------------------------------ */
+    case SYS_SEND: {
+#ifdef __is_kernel
+        uint32_t len = regs->edx;
+        if (len == 0 || !uap_ok(regs->ecx, len, 0)) { ret = (uint32_t)-1; break; }
+        vfs_node_t *n = vfs_node_for_fd((int)regs->ebx);
+        if (!n || !n->is_socket) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_write((int)regs->ebx,
+                                  (const void *)(uintptr_t)regs->ecx, len);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_RECV (48) -- receive on a socket.  EBX = fd, ECX = buf, EDX = len.
+     *   Returns bytes received (0 = none), or -1.  Like read() on a socket fd.
+     * ------------------------------------------------------------------------ */
+    case SYS_RECV: {
+#ifdef __is_kernel
+        uint32_t len = regs->edx;
+        if (len == 0 || !uap_ok(regs->ecx, len, 1)) { ret = (uint32_t)-1; break; }
+        vfs_node_t *n = vfs_node_for_fd((int)regs->ebx);
+        if (!n || !n->is_socket) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)vfs_read((int)regs->ebx,
+                                 (void *)(uintptr_t)regs->ecx, len);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_LISTEN (49) -- put a stream socket into the passive-open state.
+     *   EBX = fd.  Returns 0 or -1.  Uses the port set by bind().
+     * ------------------------------------------------------------------------ */
+    case SYS_LISTEN: {
+#ifdef __is_kernel
+        vfs_node_t *n = vfs_node_for_fd((int)regs->ebx);
+        if (!n || !n->is_socket || n->sock_type != SOCK_STREAM ||
+            n->sock_lport == 0) { ret = (uint32_t)-1; break; }
+        ret = (uint32_t)net_tcp_listen(n->sock_lport);
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_ACCEPT (50) -- block until an inbound connection is established.
+     *   EBX = fd.  Returns a connected fd or -1.  The single-connection stack
+     *   reuses the listening fd as the connected fd.
+     * ------------------------------------------------------------------------ */
+    case SYS_ACCEPT: {
+#ifdef __is_kernel
+        vfs_node_t *n = vfs_node_for_fd((int)regs->ebx);
+        if (!n || !n->is_socket || n->sock_type != SOCK_STREAM) {
+            ret = (uint32_t)-1; break;
+        }
+        /* Poll until the handshake completes (or the listener is torn down). */
+        for (int iter = 0; iter < 50000000; iter++) {
+            net_poll();
+            tcp_state_t st = net_tcp_state();
+            if (st == TCP_STATE_ESTABLISHED) { ret = regs->ebx; goto accept_done; }
+            if (st == TCP_STATE_CLOSED)      break;
+        }
+        ret = (uint32_t)-1;
+    accept_done:;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
      * Unknown syscall
      * ------------------------------------------------------------------------ */
     default:

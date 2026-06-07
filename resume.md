@@ -26,11 +26,53 @@ reintroduce the threaded model.
 
 ## Next milestone
 
-**Section 15 — BSD Socket API for user space** (ROADMAP3 §15). The kernel TCP/IP
-stack (`kernel/kernel/net.c`, `arch/i386/rtl8139.c`) works but isn't exposed to
-ring 3. Plan: add `socket/bind/connect/listen/accept/send/recv/close` syscalls
-(ROADMAP3 suggests numbers 43+), libc wrappers, then a DNS resolver and an HTTP
-demo. Reuse `uap_ok`/`copyout` for all user-pointer args.
+**Section 15 — BSD Socket API for user space** (ROADMAP3 §15).
+
+### 15.1 sockets — DONE (2026-06)
+The BSD socket syscalls are implemented and wired through the VFS fd table:
+- **Syscalls 44–50** (`SYS_SOCKET/BIND/CONNECT/SEND/RECV/LISTEN/ACCEPT`) in
+  `syscall.c` (43 was already taken by `SYS_PS`). All user pointers go through
+  `uap_ok`.
+- **VFS** (`vfs.c`/`vfs.h`): `vfs_node_t` gained `is_socket`/`sock_type`/
+  `sock_lport`/`sock_rport`/`sock_rip`; `vfs_socket()` + `vfs_node_for_fd()`;
+  `read`/`write`/`close`/`readable` route socket fds to the net layer (so plain
+  `read()/write()/close()` work on a socket too).
+- **net.c**: added `net_tcp_connect()` (active open: ARP → SYN/SYN-ACK/ACK,
+  new `TCP_STATE_SYN_SENT`, RST→refused) and `net_tcp_readable()`. The TCP
+  stack is still **single-connection** (global `g_tcp`), so all socket fds alias
+  it — fine for the educational demo.
+- **libc**: `user/libc/include/sys/socket.h`, asm wrappers in `syscall.S`,
+  `inet_aton()` in `stdlib.c`.
+- **Demo**: `http <ip> [port] [path]` command in BOTH shells (dual-shell rule).
+  User shell uses the socket syscalls; kernel shell calls `net_tcp_*` directly.
+  Port is space-separated, NOT `host:port`, because **Quilon's keyboard driver
+  has no shift** (`keyboard.c` is a single unshifted map — no `:`/uppercase).
+
+Verified end-to-end (`make test` all suites, `make smoke`, plus a headless
+QEMU run driving the shell over the HMP monitor): the ring-3 shell did a full
+`http 1.1.1.1 80 /` to the **real internet** via SLIRP NAT — `socket → connect`
+(SYN/SYN-ACK/ACK) → `send` → `recv` → `close` — and printed a live
+`HTTP/1.1 301` from Cloudflare (381 bytes). Confirmed on the wire with a
+`filter-dump` pcap.
+
+That live test exposed **two real bugs** the listen-only/never-against-a-real-
+peer stack had hidden (both fixed):
+1. **TCP checksum was byte-swapped** — `send_tcp_segment` stored the host-order
+   `net_transport_checksum()` result without `net_htons()` (the IP/ICMP paths
+   wrap it). Real peers dropped every SYN. The host test only checked the
+   checksum *value*, not how the caller stored it.
+2. **`net_tcp_recv` slept with no waker** — it `waitq_sleep()`-ed between polls,
+   but networking is *polled, not IRQ-driven*, so the one-RTT-away response was
+   missed (0 bytes). Now busy-polls (bounded) like `net_tcp_connect`/`net_ping`.
+
+Pre-existing single-connection limits remain (one `g_tcp`, one 512-byte rx
+segment buffered at a time, PSH required to buffer data) — fine for the demo.
+(Headless `ping`/ICMP to public IPs is rate-limited and may time out; TCP works
+regardless.)
+
+### 15.2 / 15.3 — TODO
+Next: DNS resolver (`net_dns_lookup`, UDP/53) and flesh the `http` demo into a
+`wget` that takes a hostname. Reuse `uap_ok`/`copyout` for user-pointer args.
 
 ## Build & test (and the #1 gotcha)
 

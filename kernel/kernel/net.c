@@ -26,6 +26,8 @@
 #define ARP_POLL_LIMIT  2000000       /* iterations to wait for an ARP reply */
 #define PING_POLL_LIMIT 5000000       /* iterations to wait for ICMP reply   */
 #define DHCP_POLL_LIMIT 10000000      /* iterations to wait for DHCP reply   */
+#define TCP_CONNECT_POLL_LIMIT 5000000 /* iterations to wait for SYN-ACK     */
+#define TCP_RECV_POLL_LIMIT    5000000 /* iterations to wait for inbound data */
 
 static const uint8_t g_broadcast_mac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static const uint8_t g_zero_mac[6]      = {0,0,0,0,0,0};
@@ -64,6 +66,9 @@ static struct {
     int         rx_ready;
     waitq_t     rx_wq;     /* processes sleeping on net_tcp_recv      */
 } g_tcp;
+
+/* Next ephemeral local port handed out by net_tcp_connect (49152-65535). */
+static uint16_t g_tcp_next_port = 49152u;
 
 /* ICMP ping state */
 static struct {
@@ -179,10 +184,13 @@ static void send_tcp_segment(uint8_t flags, const void *data, uint16_t data_len)
         for (i = 0; i < (int)data_len; i++) dst[i] = src[i];
     }
 
-    /* TCP checksum (pseudo-header required). */
+    /* TCP checksum (pseudo-header required).  net_transport_checksum returns a
+     * host-order value, so store it big-endian like the IP/ICMP paths do --
+     * omitting net_htons() byte-swaps the checksum and real peers drop the
+     * segment (the SYN never gets a SYN-ACK). */
     ((tcp_hdr_t *)tcp_seg)->checksum =
-        net_transport_checksum(g_ip, g_tcp.remote_ip,
-                               IPPROTO_TCP, tcp_seg, tcp_len);
+        net_htons(net_transport_checksum(g_ip, g_tcp.remote_ip,
+                                         IPPROTO_TCP, tcp_seg, tcp_len));
 
     rtl8139_send(g_tx_buf, eth_tot);
 }
@@ -359,6 +367,22 @@ static void handle_tcp(const uint8_t *src_mac, uint32_t src_ip,
             send_tcp_segment(TCP_SYN | TCP_ACK, NULL, 0);
             g_tcp.seq++;   /* SYN consumes one sequence number */
             g_tcp.state = TCP_STATE_SYN_RCVD;
+        }
+        break;
+
+    case TCP_STATE_SYN_SENT:
+        /* Active open: expect SYN-ACK in response to our SYN. */
+        if ((flags & TCP_SYN) && (flags & TCP_ACK) &&
+            dst_port == g_tcp.local_port) {
+            int i;
+            for (i = 0; i < 6; i++) g_tcp.remote_mac[i] = src_mac[i];
+            g_tcp.remote_ip   = src_ip;
+            g_tcp.remote_port = src_port;
+            g_tcp.ack         = seq + 1u;        /* ack their ISN */
+            send_tcp_segment(TCP_ACK, NULL, 0);  /* seq already past our SYN */
+            g_tcp.state = TCP_STATE_ESTABLISHED;
+        } else if (flags & TCP_RST) {
+            g_tcp.state = TCP_STATE_CLOSED;      /* connection refused */
         }
         break;
 
@@ -745,6 +769,44 @@ int net_tcp_listen(uint16_t port)
     return 0;
 }
 
+int net_tcp_connect(uint32_t dst_ip, uint16_t dst_port)
+{
+    if (!g_ready || g_ip == 0) return -1;
+
+    /* Resolve the next hop (gateway if off our /24). */
+    uint8_t dst_mac[6];
+    uint32_t next_hop = dst_ip;
+    if ((dst_ip & 0xFFFFFF00u) != (g_ip & 0xFFFFFF00u) && g_gateway != 0)
+        next_hop = g_gateway;
+    if (net_arp_lookup(next_hop, dst_mac) != 0) return -1;
+
+    /* Set up the connection slot for an active open. */
+    int i;
+    for (i = 0; i < 6; i++) g_tcp.remote_mac[i] = dst_mac[i];
+    g_tcp.remote_ip   = dst_ip;
+    g_tcp.remote_port = dst_port;
+    g_tcp.local_port  = g_tcp_next_port++;
+    if (g_tcp_next_port == 0) g_tcp_next_port = 49152u;   /* keep in ephemeral range */
+    g_tcp.seq         = 0xC0DEB00Bu;   /* our ISN */
+    g_tcp.ack         = 0;
+    g_tcp.rx_ready    = 0;
+    g_tcp.rx_len      = 0;
+    g_tcp.rx_wq       = (waitq_t)WAITQ_INIT;
+    g_tcp.state       = TCP_STATE_SYN_SENT;
+
+    send_tcp_segment(TCP_SYN, NULL, 0);
+    g_tcp.seq++;   /* SYN consumes one sequence number */
+
+    /* Poll for the SYN-ACK -> ESTABLISHED transition (handled in handle_tcp). */
+    for (int iter = 0; iter < TCP_CONNECT_POLL_LIMIT; iter++) {
+        net_poll();
+        if (g_tcp.state == TCP_STATE_ESTABLISHED) return 0;
+        if (g_tcp.state == TCP_STATE_CLOSED)      return -1;  /* RST / refused */
+    }
+    g_tcp.state = TCP_STATE_CLOSED;
+    return -1;
+}
+
 int net_tcp_send(const void *data, uint16_t len)
 {
     if (g_tcp.state != TCP_STATE_ESTABLISHED) return -1;
@@ -757,14 +819,17 @@ int net_tcp_send(const void *data, uint16_t len)
 
 int net_tcp_recv(void *buf, uint16_t maxlen)
 {
-    /* Drain the NIC ring and sleep between polls instead of spinning.
-     * handle_tcp calls waitq_wake_all(&g_tcp.rx_wq) when data arrives,
-     * so if IRQ-driven networking is ever added we wake immediately.   */
+    /* Busy-poll the NIC ring until a segment with data is buffered, the peer
+     * closes, or we hit the poll limit.  Networking here is POLLED, not
+     * IRQ-driven: nothing other than this loop calls net_poll(), so we must
+     * not waitq_sleep() between polls -- there would be no waker, and the
+     * response (one round-trip away over the wire) would be missed.  This
+     * mirrors net_tcp_connect()/net_ping(), which also busy-poll.            */
 #ifdef __is_kernel
-    for (int iter = 0; iter < 100 && !g_tcp.rx_ready; iter++) {
+    for (int iter = 0; iter < TCP_RECV_POLL_LIMIT && !g_tcp.rx_ready; iter++) {
         net_poll();
-        if (!g_tcp.rx_ready)
-            waitq_sleep(&g_tcp.rx_wq);
+        if (!g_tcp.rx_ready && g_tcp.state == TCP_STATE_CLOSED)
+            break;   /* peer closed and nothing left buffered */
     }
 #else
     for (int poll = 0; poll < 100; poll++) net_poll();
@@ -778,6 +843,14 @@ int net_tcp_recv(void *buf, uint16_t maxlen)
     for (i = 0; i < (int)copy; i++) dst[i] = g_tcp.rx_data[i];
     g_tcp.rx_ready = 0;
     return (int)copy;
+}
+
+int net_tcp_readable(void)
+{
+#ifdef __is_kernel
+    net_poll();   /* surface any frame already sitting in the NIC ring */
+#endif
+    return g_tcp.rx_ready ? (int)g_tcp.rx_len : 0;
 }
 
 void net_tcp_close(void)

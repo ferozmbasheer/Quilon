@@ -540,6 +540,99 @@ static void shell_cmd_ping(const char *arg)
         printf("error (NIC not ready or no IP configured)\r\n");
 }
 
+/* http <a.b.c.d> [path] -- HTTP/1.0 GET via the TCP active-open path (sec 15).
+ * The ring-3 shell does the same thing through the BSD socket syscalls; here we
+ * call the kernel net_tcp_* API directly. */
+static void shell_cmd_http(const char *arg)
+{
+    if (arg[0] == '\0') {
+        printf("Usage: http <a.b.c.d> [path]\r\n");
+        return;
+    }
+
+    /* Parse "<ip> [port] [path]".  Tokens after the host are classified by
+     * content: numeric -> port, '/'-prefixed -> path (runs to end of line). */
+    char host[40];
+    const char *path = "/";
+    uint16_t port = 80;
+
+    int i = 0;
+    while (arg[i] && arg[i] != ' ' && i < (int)sizeof(host) - 1) {
+        host[i] = arg[i];
+        i++;
+    }
+    host[i] = '\0';
+
+    while (arg[i]) {
+        while (arg[i] == ' ') i++;
+        if (!arg[i]) break;
+        if (arg[i] == '/') { path = &arg[i]; break; }
+        if (arg[i] >= '0' && arg[i] <= '9') {
+            uint32_t v = 0;
+            for (int j = i; arg[j] >= '0' && arg[j] <= '9'; j++)
+                v = v * 10u + (uint32_t)(arg[j] - '0');
+            port = (uint16_t)v;
+        }
+        while (arg[i] && arg[i] != ' ') i++;
+    }
+
+    uint32_t dst = parse_ipv4(host);
+    if (dst == 0) {
+        printf("http: invalid address '%s'\r\n", host);
+        return;
+    }
+    if (net_init() != 0) {
+        printf("http: NIC not ready\r\n");
+        return;
+    }
+    uint32_t myip = 0;
+    if (!net_get_ip(&myip)) {
+        printf("http: no IP address -- run 'dhcp' first\r\n");
+        return;
+    }
+
+    printf("connecting to %d.%d.%d.%d:%d ...\r\n",
+           (int)((dst >> 24) & 0xFF), (int)((dst >> 16) & 0xFF),
+           (int)((dst >> 8)  & 0xFF), (int)(dst & 0xFF), (int)port);
+    if (net_tcp_connect(dst, port) != 0) {
+        printf("http: connect failed (no route / refused / timeout)\r\n");
+        return;
+    }
+
+    /* Build the request line by line. */
+    char req[256];
+    int n = 0;
+    const char *p;
+    for (p = "GET ";                          *p; p++) req[n++] = *p;
+    for (p = path;                            *p; p++) req[n++] = *p;
+    for (p = " HTTP/1.0\r\nHost: ";           *p; p++) req[n++] = *p;
+    for (p = host;                            *p; p++) req[n++] = *p;
+    for (p = "\r\nConnection: close\r\n\r\n"; *p; p++) req[n++] = *p;
+
+    if (net_tcp_send(req, (uint16_t)n) != 0) {
+        printf("http: send failed\r\n");
+        net_tcp_close();
+        return;
+    }
+
+    char buf[513];
+    int total = 0, empties = 0;
+    for (int tries = 0; tries < 64; tries++) {
+        int got = net_tcp_recv(buf, (uint16_t)(sizeof(buf) - 1));
+        if (got > 0) {
+            buf[got] = '\0';
+            printf("%s", buf);
+            total += got;
+            empties = 0;
+        } else if (++empties >= 3) {
+            break;
+        }
+        if (net_tcp_state() == TCP_STATE_CLOSED && got == 0) break;
+    }
+    printf("\r\n[http: %d bytes received]\r\n", total);
+    net_tcp_close();
+}
+
 static void shell_cmd_dhcp(void)
 {
     printf("=== DHCP (section 10.3) ===\r\n");
@@ -1153,7 +1246,7 @@ static void shell_execute(const char *cmd) {
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
         printf("          rm <file|dir>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
-        printf("          dhcp, ping <ip>, arp, tcpip, vga\r\n");
+        printf("          dhcp, ping <ip>, http <ip> [port] [path], arp, tcpip, vga\r\n");
         printf("          smp                    - SMP CPU status (section 10.5)\r\n");
         printf("          ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
         printf("          psf                    - PSF2 font loader demo  (section 11.2)\r\n");
@@ -1233,6 +1326,10 @@ static void shell_execute(const char *cmd) {
         shell_cmd_dhcp();
     } else if (strncmp(cmd, "ping ", 5) == 0) {
         shell_cmd_ping(cmd + 5);
+    } else if (strncmp(cmd, "http ", 5) == 0) {
+        shell_cmd_http(cmd + 5);
+    } else if (strcmp(cmd, "http") == 0) {
+        shell_cmd_http("");
     } else if (strcmp(cmd, "ping") == 0) {
         shell_cmd_ping("");
     } else if (strcmp(cmd, "arp") == 0) {

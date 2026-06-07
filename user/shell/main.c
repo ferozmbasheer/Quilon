@@ -30,6 +30,7 @@
 #include <dirent.h>
 #include <pthread.h>
 #include <gfx.h>
+#include <sys/socket.h>
 
 /* -- Terminal helpers --------------------------------------------------- */
 
@@ -98,6 +99,7 @@ static void cmd_help(void)
     printf("  dhcp                   - obtain IP address via DHCP\r\n");
     printf("  ip                     - show current IPv4 address\r\n");
     printf("  ping <a.b.c.d>         - ICMP echo request\r\n");
+    printf("  http <a.b.c.d> [port] [path] - HTTP/1.0 GET over BSD sockets (section 15)\r\n");
     printf("  vga                    - show VBE framebuffer info (section 10.4)\r\n");
     printf("  smp                    - show CPU/SMP info via CPUID (section 10.5)\r\n");
     printf("  ansitest               - ANSI colour/cursor demo (section 11.1)\r\n");
@@ -747,6 +749,103 @@ static void cmd_ping(const char *arg)
         printf("error (NIC not ready or no IP configured)\r\n");
 }
 
+/* http <a.b.c.d> [port] [path] -- fetch a URL over the new BSD socket API
+ * (sec 15).  Demonstrates socket/connect/send/recv against a numeric IPv4
+ * address.  Extra tokens are classified by content: a numeric one is the port
+ * (default 80), one starting with '/' is the path (and runs to end of line).
+ * (Quilon's keyboard has no shift, so a space-separated port is used instead
+ * of the usual "host:port".) */
+static void cmd_http(const char *arg)
+{
+    if (!arg || arg[0] == '\0') {
+        printf("Usage: http <a.b.c.d> [port] [path]\r\n");
+        return;
+    }
+
+    char host[40];
+    const char *path = "/";
+    unsigned short port = 80;
+
+    /* First token is the host. */
+    int i = 0;
+    while (arg[i] && arg[i] != ' ' && i < (int)sizeof(host) - 1) {
+        host[i] = arg[i];
+        i++;
+    }
+    host[i] = '\0';
+
+    /* Remaining tokens: '/'-prefixed -> path, digit -> port. */
+    while (arg[i]) {
+        while (arg[i] == ' ') i++;
+        if (!arg[i]) break;
+        if (arg[i] == '/') {
+            path = &arg[i];
+            break;                 /* path runs to end of line */
+        }
+        if (arg[i] >= '0' && arg[i] <= '9') {
+            port = (unsigned short)atoi(&arg[i]);
+        }
+        while (arg[i] && arg[i] != ' ') i++;
+    }
+
+    unsigned int ip;
+    if (!inet_aton(host, &ip)) {
+        printf("http: invalid address '%s'\r\n", host);
+        return;
+    }
+
+    if (net_getip() == 0) {
+        printf("http: no IP address -- run 'dhcp' first\r\n");
+        return;
+    }
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { printf("http: socket() failed\r\n"); return; }
+
+    printf("connecting to %u.%u.%u.%u:%u ...\r\n",
+           (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF,
+           (unsigned)port);
+    if (connect(fd, ip, port) != 0) {
+        printf("http: connect failed (no route / refused / timeout)\r\n");
+        close(fd);
+        return;
+    }
+
+    /* Build "GET <path> HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n". */
+    char req[256];
+    int n = 0;
+    const char *p;
+    for (p = "GET ";                       *p; p++) req[n++] = *p;
+    for (p = path;                         *p; p++) req[n++] = *p;
+    for (p = " HTTP/1.0\r\nHost: ";        *p; p++) req[n++] = *p;
+    for (p = host;                         *p; p++) req[n++] = *p;
+    for (p = "\r\nConnection: close\r\n\r\n"; *p; p++) req[n++] = *p;
+
+    if (send(fd, req, n) < 0) {
+        printf("http: send failed\r\n");
+        close(fd);
+        return;
+    }
+
+    /* Drain the response until the peer goes quiet.  Each recv() busy-polls a
+     * full round-trip, so a few consecutive empty reads means we are done. */
+    char buf[513];
+    int total = 0, empties = 0;
+    for (int tries = 0; tries < 64; tries++) {
+        int r = recv(fd, buf, (int)sizeof(buf) - 1);
+        if (r > 0) {
+            buf[r] = '\0';
+            printf("%s", buf);
+            total += r;
+            empties = 0;
+        } else if (++empties >= 3) {
+            break;
+        }
+    }
+    printf("\r\n[http: %d bytes received]\r\n", total);
+    close(fd);
+}
+
 static void cmd_vga(void)
 {
     unsigned int info[3];
@@ -1187,6 +1286,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "dhcp")   == 0) cmd_dhcp();
     else if (strcmp(cmd, "ip")     == 0) cmd_ip();
     else if (strcmp(cmd, "ping")   == 0) cmd_ping(arg);
+    else if (strcmp(cmd, "http")   == 0) cmd_http(arg);
     else if (strcmp(cmd, "vga")      == 0) cmd_vga();
     else if (strcmp(cmd, "smp")      == 0) cmd_smp();
     else if (strcmp(cmd, "ansitest") == 0) cmd_ansitest();

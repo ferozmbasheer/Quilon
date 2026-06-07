@@ -55,6 +55,14 @@
 #define SYS_GFX_MAP    41 /* gfx_map() -> user-space VA of shadow buffer, or -1        */
 #define SYS_GFX_FLUSH  42 /* gfx_flush() -> 0; copies shadow buffer to hw framebuffer  */
 #define SYS_PS         43 /* ps(proc_info_t *buf, int max) -> # procs written, -1 err  */
+/* BSD socket API (section 15.1).  Single-connection TCP/UDP stack underneath. */
+#define SYS_SOCKET     44 /* socket(domain, type, proto) -> fd or -1                   */
+#define SYS_BIND       45 /* bind(fd, port) -> 0 or -1                                 */
+#define SYS_CONNECT    46 /* connect(fd, ip, port) -> 0 or -1 (ip host byte order)     */
+#define SYS_SEND       47 /* send(fd, buf, len) -> bytes sent or -1                    */
+#define SYS_RECV       48 /* recv(fd, buf, len) -> bytes received, 0=none, -1=err      */
+#define SYS_LISTEN     49 /* listen(fd) -> 0 or -1                                     */
+#define SYS_ACCEPT     50 /* accept(fd) -> connected fd or -1 (single-conn: same fd)   */
 
 /* mouse_event_t -- filled by SYS_MOUSE_READ; matches user/libc/include/mouse.h */
 typedef struct {
