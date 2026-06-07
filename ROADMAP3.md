@@ -60,18 +60,28 @@ build) real programs inside Quilon.
 
 ## Where We Are Now
 
+*(Updated 2026-06: Sections 11–14 are complete. The graphical desktop is stable
+after a substantial round of concurrency hardening and a WM rearchitecture —
+see the note under 14.2. Next milestone is Section 15, the BSD socket API.)*
+
 | Component | File(s) | Status |
 |-----------|---------|--------|
 | Higher-half kernel | `linker.ld` (`0xC0100000`) | ✓ Complete |
 | Demand paging + VMAs | `exceptions.c`, `vma.c` | ✓ Complete |
 | CoW fork | `paging.c` (`paging_fork_address_space`) | ✓ Complete |
-| SMP + APIC | `smp.c`, `apic.c` | ✓ Complete |
-| 25 syscalls | `syscall.c` | ✓ Partial — POSIX coverage thin |
+| >4 MiB physical access | `paging.c` (`kmap`/`pmm_alloc_data_page`) | ✓ Complete — data pages above the 4 MiB identity map |
+| SMP + APIC | `smp.c`, `apic.c` | ✓ Complete — IRQ stubs load kernel segments |
+| IRQ-safe kernel locks | `spinlock.h`, `pmm.c`, `tty.c`, `ata.c`, `waitq.c` | ✓ Complete — see [thread-concurrency memory] |
+| ~28 syscalls | `syscall.c` | ✓ Partial — POSIX coverage thin; user-ptr validated |
 | Ring-3 shell | `user/shell/main.c` | ✓ Complete |
-| User libc | `user/libc/` | ✓ Partial — missing stat, threads |
-| FAT16 R/W, VFS, pipes | `fat16.c`, `vfs.c`, `pipe.c` | ✓ Complete |
-| TCP/IP stack | `net.c`, `rtl8139.c` | ✓ Partial — no user-space sockets |
-| VBE framebuffer | `vbe.c` | ✓ Complete — ANSI codes, PSF2 font, double-buffer |
+| User libc | `user/libc/` | ✓ Partial — missing stat wrapper, real threads |
+| FAT16 R/W, VFS, pipes | `fat16.c`, `vfs.c`, `pipe.c` | ✓ Complete; per-process std fds via `owns_std_fds` |
+| TCP/IP stack | `net.c`, `rtl8139.c` | ✓ Partial — **no user-space sockets (Section 15)** |
+| VBE framebuffer | `vbe.c` | ✓ Complete — ANSI codes, PSF2 font, double-buffer, graphics-mode gating |
+| Terminal emulator (11) | `gterm.h`, `tty.c` | ✓ Complete |
+| Extended POSIX (12) | `vfs.c`, `waitq.c`, `syscall.c` | ✓ Complete (stat/mkdir/chdir/getcwd, blocking I/O, clone) |
+| PS/2 mouse (13) | `mouse.c` | ✓ Complete |
+| Graphical desktop (14) | `user/wm/`, `user/{gterm,clock,filebr,textview}/` | ✓ Complete — **single-threaded event loop** (see 14.2 note) |
 
 ---
 
@@ -576,21 +586,69 @@ either via a syscall or by mapping the font glyph data read-only into user space
 
 ### 14.2 Window Manager & Compositor
 
+> **⚠ ARCHITECTURE UPDATE (2026-06): the WM is now SINGLE-THREADED.**
+>
+> The threaded design described in the rest of this section (every app a
+> `clone(CLONE_VM)` thread sharing `g_wm`) was **implemented, shipped, and then
+> replaced**. It was fundamentally race-prone: the WM main thread, app threads,
+> the keyboard thread, and the mouse IRQ all touched the same `wm_state_t` and
+> the same shadow framebuffer with no synchronization. This produced a long tail
+> of corruption/freeze bugs (g_wm overwritten on window close, framebuffer
+> glitches on redraw, the terminal close button doing nothing).
+>
+> **Current model — one thread, one event loop, apps as callbacks:**
+> Only the WM loop ever touches `wm_state_t` and the framebuffer, so the entire
+> class of shared-state races is gone (no locks, no SPSC event queue, no
+> `pthread_join` reaping). Each window registers non-blocking callbacks instead
+> of running a thread:
+> ```c
+> typedef struct wm_window_ {
+>     int id; rect_t bounds; char title[WM_TITLE_LEN];
+>     canvas_t *backbuf; int focused, active, dirty, want_close;
+>     void  *app_state;                       /* per-window heap state */
+>     wm_on_event_fn   on_event;              /* key / WM_EV_CLOSE      */
+>     wm_on_tick_fn    on_tick;               /* periodic, non-blocking */
+>     wm_on_destroy_fn on_destroy;            /* free app_state+backbuf */
+> } window_t;
+> ```
+> The loop each iteration: poll mouse (non-blocking) → poll keyboard
+> (`read_nonblock`) → tick every window → destroy windows that set `want_close`
+> → composite + taskbar + **cursor (drawn last, on top)** + flush.
+>
+> Anything that would block (the terminal reading its shell's stdout pipe) is
+> done with a non-blocking poll inside `on_tick`. Apps are launched via
+> `*_open(win)` entry points that install the callbacks. The terminal spawns its
+> shell with `exec_redir(path, in_fd, out_fd)` (a new syscall) so the WM keeps
+> reading the real keyboard instead of dup2-hijacking its own stdio.
+>
+> New supporting syscalls: `SYS_READ_NB` (35, non-blocking read) and
+> `SYS_EXEC_REDIR` (36, exec with explicit child stdin/stdout). The kernel
+> tracks the single graphics owner (`gfx_owner_pid`) to refuse a second WM and
+> to route the owner's console output to serial only (no text flash on the
+> composited desktop). See `user/wm/wm.h`, `user/wm/main.c`, and the
+> "WM architecture" project memory for the full design.
+>
+> The historical threaded description below is kept for context but no longer
+> reflects the code.
+
+---
+
 **Why it matters:** A window manager is the process that owns the screen. It
 decides which window is in front, draws decorations, routes events to the right
 app, and composites everything into the final frame before flushing. Getting the
 app↔WM relationship right is the foundation for everything in 14.3 and 14.4.
 
-**The IPC problem and its solution**
+**(SUPERSEDED) The IPC problem and its original solution**
 
 A naive design gives each app its own process (via `fork`) and uses pipes or
 shared memory to exchange pixels and events with the WM. That requires
 `SYS_MMAP` or a kernel shared-memory primitive that Quilon does not have.
 
-The simpler and correct solution for Quilon: **every graphical app runs as a
+The original solution for Quilon was: **every graphical app runs as a
 `clone(CLONE_VM)` thread of the WM**. Because `CLONE_VM` shares the entire
 virtual address space, any pointer allocated in the WM heap is directly readable
-and writable by the app thread — no IPC, no copies, no new syscalls.
+and writable by the app thread — no IPC, no copies, no new syscalls. *(This is
+the design that was later replaced — see the architecture-update note above.)*
 
 ```
 WM process (owns address space)
@@ -1165,6 +1223,12 @@ the FAT16 image) and eliminates exec-time linking.
 
 
 ## 15. BSD Socket API for User Space
+
+> **▶ THIS IS THE NEXT MILESTONE (as of 2026-06).** Sections 11–14 are done; the
+> desktop is stable. The kernel TCP/IP stack (`net.c`) exists but is not exposed
+> to user space — that is exactly what this section adds. Note the syscall
+> numbers below (43+) leave room for the recently-added 35 (`SYS_READ_NB`) and
+> 36 (`SYS_EXEC_REDIR`).
 
 ### 15.1 Socket System Calls
 

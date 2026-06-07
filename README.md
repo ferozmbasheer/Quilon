@@ -12,10 +12,14 @@ sources.
 
 ## Status
 
-Complete through **Section 14.4 — Simple GUI Apps** (window manager, compositor,
-graphical terminal, and several apps). Next milestone: **Section 15 — BSD Socket
-API for user space** (the TCP/IP stack already exists in the kernel; it just
-isn't exposed to user programs yet). See [ROADMAP3.md](ROADMAP3.md).
+Complete through **Section 14 — Graphical Shell & Desktop** (window manager,
+compositor, graphical terminal, clock/files/textview apps). The desktop is
+stable after a round of concurrency hardening and a WM rearchitecture to a
+**single-threaded event loop** (apps are non-blocking callbacks, not threads).
+
+Next milestone: **Section 15 — BSD Socket API for user space** (the TCP/IP stack
+already exists in the kernel; it just isn't exposed to user programs yet). See
+[ROADMAP3.md](ROADMAP3.md) and `resume.md` for where to pick up.
 
 ## Quick start
 

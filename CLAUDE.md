@@ -34,20 +34,34 @@ make clean
 
 - **Dual shell:** changes to shell commands must be made in BOTH
   `kernel/kernel/shell.c` and `user/shell/main.c`.
-- **Validate user pointers** in any new syscall (`kernel/kernel/syscall.c`).
-  There is no `copyin`/`copyout` layer yet; adding one is a planned task, and
-  several syscalls currently dereference raw user pointers — do not copy that
-  pattern for security-sensitive new code.
+- **Validate user pointers** in any new syscall: use the existing
+  `uap_ok` / `uap_str_ok` / `copyout` helpers in `kernel/kernel/syscall.c`
+  (they check the range against the process VMA table). Do not dereference raw
+  user pointers.
+- **IRQ-safe locks:** a lock or state shared between thread and interrupt/
+  exception context MUST disable interrupts while held
+  (`spinlock_acquire_irqsave`). This was the source of multiple hard freezes.
 - **Tests are host-compiled.** Add one for new kernel logic
   (`tools/new_test.sh <name>`, then wire into `tests/Makefile`). Guard
   hardware-only code with `#ifdef __is_kernel`.
 - **Don't commit build artifacts** — `.gitignore` already covers them.
 
+## Build gotcha (important)
+
+`make disk` rebuilds **only** the userspace disk image (`disk.img`); it does
+**not** rebuild the kernel ISO. To test a **kernel** change you must run
+`./iso.sh` (or top-level `make`/`make run`, which chain it). Booting after a
+bare `make disk` runs a stale kernel — this wasted real debugging time.
+
 ## Roadmap / progress
 
-Current status and plan: [ROADMAP3.md](ROADMAP3.md). Done through Section 14.4
-(GUI apps); next is Section 15 (BSD socket API — the kernel TCP/IP stack in
-`net.c` exists but isn't exposed to user space yet).
+Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 14
+(graphical desktop, stable);** next is Section 15 (BSD socket API — the kernel
+TCP/IP stack in `net.c` exists but isn't exposed to user space yet). The WM was
+reworked from CLONE_VM threads to a **single-threaded event loop** (apps =
+callbacks) — see `resume.md` and the "WM architecture" / "thread concurrency"
+project memories.
 
 A longer-form project memory lives under
-`.claude/projects/.../memory/` (indexed by `MEMORY.md`).
+`.claude/projects/.../memory/` (indexed by `MEMORY.md`). **`resume.md`** at the
+repo root is the handoff doc for continuing after a context reset.
