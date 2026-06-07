@@ -1508,6 +1508,42 @@ void syscall_handler(syscall_regs_t *regs)
     }
 
     /* ------------------------------------------------------------------------
+     * SYS_PS (43) -- enumerate live processes.
+     *   EBX = pointer to proc_info_t[max] buffer (user-space, writable).
+     *   ECX = max number of entries the buffer can hold.
+     *   Returns: number of live processes written, or -1 on error.
+     * ------------------------------------------------------------------------ */
+    case SYS_PS: {
+#ifdef __is_kernel
+        int max = (int)regs->ecx;
+        if (regs->ebx == 0 || max <= 0) { ret = (uint32_t)-1; break; }
+        if (!uap_ok(regs->ebx, sizeof(proc_info_t) * (uint32_t)max, 1)) {
+            ret = (uint32_t)-1; break;
+        }
+        int n = 0, err = 0;
+        for (int i = 0; i < PROCESS_MAX && n < max; i++) {
+            const process_t *p = &process_table[i];
+            if (p->state == PROC_UNUSED) continue;
+            proc_info_t info;
+            info.pid        = p->pid;
+            info.parent_pid = p->parent_pid;
+            info.state      = (uint32_t)p->state;
+            int j;
+            for (j = 0; j < (int)sizeof(info.name) - 1 && p->name[j]; j++)
+                info.name[j] = p->name[j];
+            info.name[j] = '\0';
+            if (copyout(regs->ebx + (uint32_t)n * sizeof(proc_info_t),
+                        &info, sizeof info) != 0) { err = 1; break; }
+            n++;
+        }
+        ret = err ? (uint32_t)-1 : (uint32_t)n;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
      * Unknown syscall
      * ------------------------------------------------------------------------ */
     default:

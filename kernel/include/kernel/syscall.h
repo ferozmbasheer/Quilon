@@ -54,6 +54,7 @@
 #define SYS_GFX_INFO   40 /* gfx_info(gfx_info_t *out) -> 0 on success, -1 if no VBE */
 #define SYS_GFX_MAP    41 /* gfx_map() -> user-space VA of shadow buffer, or -1        */
 #define SYS_GFX_FLUSH  42 /* gfx_flush() -> 0; copies shadow buffer to hw framebuffer  */
+#define SYS_PS         43 /* ps(proc_info_t *buf, int max) -> # procs written, -1 err  */
 
 /* mouse_event_t -- filled by SYS_MOUSE_READ; matches user/libc/include/mouse.h */
 typedef struct {
@@ -61,6 +62,15 @@ typedef struct {
     int     y;        /* absolute cursor y in pixels */
     uint8_t buttons;  /* bitmask: bit 0 = left, bit 1 = right, bit 2 = middle */
 } mouse_event_t;
+
+/* proc_info_t -- one entry filled by SYS_PS.  Mirrors user/libc/include/unistd.h;
+ * name[] matches PROCESS_NAME_LEN (16).  state holds a proc_state_t value. */
+typedef struct {
+    uint32_t pid;
+    uint32_t parent_pid;
+    uint32_t state;    /* 1=running 2=ready 3=blocked 4=zombie */
+    char     name[16];
+} proc_info_t;
 
 /* clone() flag bits (match Linux subset) */
 #define CLONE_VM    0x0100u  /* share address space (thread, not process)           */

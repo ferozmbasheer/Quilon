@@ -83,6 +83,7 @@ static void cmd_help(void)
     printf("  initrd                 - list initrd/RAM filesystem contents\r\n");
     printf("  exec <file.elf>        - run an ELF program\r\n");
     printf("  pid                    - print shell PID\r\n");
+    printf("  ps                     - list running processes\r\n");
     printf("  ticks                  - raw PIT tick count\r\n");
     printf("  seconds                - uptime in whole seconds\r\n");
     printf("  clear / cls            - scroll screen\r\n");
@@ -1121,6 +1122,27 @@ static void cmd_pid(void)
     printf("shell PID: %d\r\n", getpid());
 }
 
+static void cmd_ps(void)
+{
+    static const char *state_names[] = {
+        "unused ", "running", "ready  ", "blocked", "zombie "
+    };
+    proc_info_t procs[16];
+    int n = proc_list(procs, 16);
+    if (n < 0) {
+        printf("ps: failed\r\n");
+        return;
+    }
+    printf("  PID  PARENT  STATE    NAME\r\n");
+    for (int i = 0; i < n; i++) {
+        const char *sname = (procs[i].state < 5)
+                          ? state_names[procs[i].state] : "?      ";
+        printf("  %3d  %6d  %s  %s\r\n",
+               (int)procs[i].pid, (int)procs[i].parent_pid,
+               sname, procs[i].name);
+    }
+}
+
 /* -- Command dispatch --------------------------------------------------- */
 
 static void dispatch(char *line)
@@ -1150,6 +1172,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "ticks")   == 0) cmd_ticks();
     else if (strcmp(cmd, "seconds") == 0) cmd_seconds();
     else if (strcmp(cmd, "pid")    == 0) cmd_pid();
+    else if (strcmp(cmd, "ps")     == 0) cmd_ps();
     else if (strcmp(cmd, "clear")  == 0) cmd_clear();
     else if (strcmp(cmd, "cls")    == 0) cmd_clear();
     else if (strcmp(cmd, "sbrk")     == 0) cmd_sbrk();

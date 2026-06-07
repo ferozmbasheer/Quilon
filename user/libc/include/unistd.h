@@ -54,6 +54,7 @@
 #define SYS_GFX_INFO   40  /* gfx_info(gfx_info_t *out) -> 0 or -1           */
 #define SYS_GFX_MAP    41  /* gfx_map() -> user VA of shadow buffer, or -1   */
 #define SYS_GFX_FLUSH  42  /* gfx_flush() -> 0; shadow buf -> hw framebuffer */
+#define SYS_PS         43  /* proc_list(proc_info_t *buf, int max) -> count   */
 
 /* clone() flag bits */
 #define CLONE_VM    0x0100  /* share address space (thread, not process)      */
@@ -165,5 +166,20 @@ int mouse_read(mouse_event_t *out);
 #define MOUSE_BTN_LEFT   0x01
 #define MOUSE_BTN_RIGHT  0x02
 #define MOUSE_BTN_MIDDLE 0x04
+
+/* -- Process listing -------------------------------------------------------- */
+
+/* proc_info_t -- one entry filled by proc_list() (SYS_PS).
+ * Mirrors kernel/include/kernel/syscall.h; name[] matches PROCESS_NAME_LEN. */
+typedef struct {
+    unsigned int pid;
+    unsigned int parent_pid;
+    unsigned int state;     /* 1=running 2=ready 3=blocked 4=zombie */
+    char         name[16];
+} proc_info_t;
+
+/* Fill up to `max` entries describing the live processes.
+ * Returns the number of entries written, or -1 on error.  */
+int proc_list(proc_info_t *buf, int max);
 
 #endif /* _UNISTD_H */

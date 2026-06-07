@@ -407,6 +407,19 @@ mouse_read:
     popl  %ebx
     ret
 
+/* -- proc_list(proc_info_t *buf, int max) -> int ---------------------------- */
+/* SYS_PS (43): fill buf[0..max-1] with live-process info.                     */
+/* Returns the number of entries written, or -1 on error.                     */
+.global proc_list
+proc_list:
+    pushl %ebx
+    movl  $43,      %eax    /* SYS_PS */
+    movl  8(%esp),  %ebx    /* proc_info_t *buf */
+    movl  12(%esp), %ecx    /* max */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

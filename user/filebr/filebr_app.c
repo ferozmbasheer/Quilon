@@ -63,11 +63,60 @@ static void fb_render(canvas_t *c, fb_state_t *st)
     }
 }
 
+/* Open the selected entry: navigate into a directory, or open a file in a
+ * textview.  Shared by the Enter key and a click on the selected row. */
+static void fb_activate(fb_state_t *st)
+{
+    if (st->selected < 0 || st->selected >= st->n) return;
+
+    if (st->entries[st->selected].is_dir) {
+        chdir(st->entries[st->selected].name);
+        st->n = fb_read_dir(st->entries, MAX_ENTRIES);
+        st->scroll = st->selected = 0;
+    } else {
+        /* Build absolute path: cwd + "/" + filename. */
+        char path[320];
+        char cwd_buf[256];
+        int j = 0;
+        if (getcwd(cwd_buf, sizeof(cwd_buf))) {
+            int cl = (int)strlen(cwd_buf);
+            int k;
+            for (k = 0; k < cl && j < (int)sizeof(path) - 1; k++)
+                path[j++] = cwd_buf[k];
+            if (j > 0 && path[j - 1] != '/' && j < (int)sizeof(path) - 1)
+                path[j++] = '/';
+        }
+        int nl = (int)strlen(st->entries[st->selected].name);
+        int k;
+        for (k = 0; k < nl && j < (int)sizeof(path) - 1; k++)
+            path[j++] = st->entries[st->selected].name[k];
+        path[j] = '\0';
+        wm_open_textview(path);
+    }
+}
+
 static void fb_event(window_t *win, const wm_event_t *ev)
 {
     fb_state_t *st = (fb_state_t *)win->app_state;
 
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
+
+    /* Mouse click: select the clicked row; a click on the already-selected
+     * row activates it (navigate into a dir / open a file). */
+    if (ev->type == WM_EV_MOUSE_BTN) {
+        int row = st->scroll + ev->y / LIST_ITEM_H;
+        if (row >= 0 && row < st->n) {
+            if (row == st->selected) {
+                fb_activate(st);
+            } else {
+                st->selected = row;
+            }
+            fb_render(win->backbuf, st);
+            win->dirty = 1;
+        }
+        return;
+    }
+
     if (ev->type != WM_EV_KEY) return;
 
     char c = ev->ascii;
@@ -77,34 +126,8 @@ static void fb_event(window_t *win, const wm_event_t *ev)
     if (st->selected >= st->scroll + st->rows)
         st->scroll = st->selected - st->rows + 1;
 
-    if (c == '\r' || c == '\n') {
-        if (st->selected < st->n) {
-            if (st->entries[st->selected].is_dir) {
-                chdir(st->entries[st->selected].name);
-                st->n = fb_read_dir(st->entries, MAX_ENTRIES);
-                st->scroll = st->selected = 0;
-            } else {
-                /* Build absolute path: cwd + "/" + filename. */
-                char path[320];
-                char cwd_buf[256];
-                int j = 0;
-                if (getcwd(cwd_buf, sizeof(cwd_buf))) {
-                    int cl = (int)strlen(cwd_buf);
-                    int k;
-                    for (k = 0; k < cl && j < (int)sizeof(path) - 1; k++)
-                        path[j++] = cwd_buf[k];
-                    if (j > 0 && path[j - 1] != '/' && j < (int)sizeof(path) - 1)
-                        path[j++] = '/';
-                }
-                int nl = (int)strlen(st->entries[st->selected].name);
-                int k;
-                for (k = 0; k < nl && j < (int)sizeof(path) - 1; k++)
-                    path[j++] = st->entries[st->selected].name[k];
-                path[j] = '\0';
-                wm_open_textview(path);
-            }
-        }
-    }
+    if (c == '\r' || c == '\n')
+        fb_activate(st);
 
     fb_render(win->backbuf, st);
     win->dirty = 1;

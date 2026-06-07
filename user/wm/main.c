@@ -209,6 +209,18 @@ int main(void)
                         request_close(w);
                     } else {
                         wm_handle_mouse_down(&g_wm, me.x, me.y, me.buttons);
+                        /* Deliver in-content clicks to the app, with the
+                         * cursor expressed relative to the content origin.
+                         * (Titlebar clicks start a drag and aren't forwarded.) */
+                        if (wm_in_content(w, me.x, me.y) && w->on_event) {
+                            wm_event_t ev;
+                            ev.type    = WM_EV_MOUSE_BTN;
+                            ev.x       = me.x - w->bounds.x;
+                            ev.y       = me.y - w->bounds.y;
+                            ev.buttons = me.buttons;
+                            ev.ascii   = 0;
+                            w->on_event(w, &ev);
+                        }
                     }
                 }
             }
