@@ -74,6 +74,16 @@
  * validator walk forever. */
 #define UAP_STR_MAX      1024u
 
+#ifdef __is_kernel
+/* PID of the process that currently owns the graphics surface (the WM), or -1.
+ * Set by the first SYS_GFX_MAP; a second mapper is refused (prevents a second
+ * WM from fighting over the framebuffer).  While a process owns the surface,
+ * its stdout/stderr writes go to serial ONLY -- not the VBE text console --
+ * so app diagnostics never flash on top of the composited desktop.  Cleared
+ * when the owner exits (SYS_EXIT). */
+int gfx_owner_pid = -1;
+#endif
+
 /* -- Kernel-only initialisation ----------------------------------------------
  * int80_stub and IDT[] only exist in the kernel build (boot.S / interrupts.c).
  * Guard them so that syscall.c compiles cleanly on the host for unit tests.  */
@@ -226,6 +236,14 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
             if (current_process && current_process->stdout_fd >= 0) {
                 ret = (uint32_t)vfs_write(current_process->stdout_fd, buf, len);
+            } else if (current_process &&
+                       (int)current_process->pid == gfx_owner_pid) {
+                /* The graphics owner (WM) is compositing the shadow buffer that
+                 * the VBE text console also draws into.  Send its diagnostics to
+                 * serial ONLY so they don't flash on top of the desktop. */
+                for (uint32_t i = 0; i < len; i++)
+                    serial_putchar(buf[i]);
+                ret = len;
             } else {
                 terminal_write(buf, (size_t)len);
                 for (uint32_t i = 0; i < len; i++)
@@ -305,13 +323,27 @@ void syscall_handler(syscall_regs_t *regs)
              * exhausted the table when launching a second terminal.  Only
              * close real pipe fds (>= VFS_FD_BASE); -1 means "no override".
              * close_fds_on_exit() is a no-op for fds < VFS_FD_BASE.        */
-            if (current_process->stdin_fd >= VFS_FD_BASE)
-                vfs_close(current_process->stdin_fd);
-            if (current_process->stdout_fd >= VFS_FD_BASE &&
-                current_process->stdout_fd != current_process->stdin_fd)
-                vfs_close(current_process->stdout_fd);
-            current_process->stdin_fd  = -1;
-            current_process->stdout_fd = -1;
+            /* Only close the pipe ends this process OWNS (handed to it via
+             * exec_redir).  A plain-exec child that merely inherited them must
+             * not close them -- they belong to an ancestor still using them. */
+            if (current_process->owns_std_fds) {
+                if (current_process->stdin_fd >= VFS_FD_BASE)
+                    vfs_close(current_process->stdin_fd);
+                if (current_process->stdout_fd >= VFS_FD_BASE &&
+                    current_process->stdout_fd != current_process->stdin_fd)
+                    vfs_close(current_process->stdout_fd);
+            }
+            current_process->stdin_fd     = -1;
+            current_process->stdout_fd    = -1;
+            current_process->owns_std_fds = 0;
+
+            /* If the graphics owner (WM) is exiting, release the surface so a
+             * later startx can claim it again, and leave graphics mode so the
+             * kernel text console / cursor work again. */
+            if ((int)current_process->pid == gfx_owner_pid) {
+                gfx_owner_pid = -1;
+                vbe_set_graphics_mode(0);
+            }
 
             current_process->exit_code = (int)regs->ebx;
             current_process->state     = PROC_ZOMBIE;
@@ -544,12 +576,19 @@ void syscall_handler(syscall_regs_t *regs)
 
         /* 5. Wire up the child's stdin/stdout. */
         if (redir) {
-            _child->stdin_fd  = in_fd;
-            _child->stdout_fd = out_fd;
+            /* exec_redir explicitly hands these pipe fds to the child, which
+             * becomes their owner and closes them on exit. */
+            _child->stdin_fd     = in_fd;
+            _child->stdout_fd    = out_fd;
+            _child->owns_std_fds = 1;
         } else if (current_process) {
-            /* Plain exec inherits the spawning process's pipe overrides. */
-            _child->stdin_fd  = current_process->stdin_fd;
-            _child->stdout_fd = current_process->stdout_fd;
+            /* Plain exec INHERITS the spawner's pipe overrides but does NOT own
+             * them -- closing them on exit would break the ancestor that still
+             * uses them (e.g. a grandchild WM exiting must not close the gterm
+             * shell's pipes). */
+            _child->stdin_fd     = current_process->stdin_fd;
+            _child->stdout_fd    = current_process->stdout_fd;
+            _child->owns_std_fds = 0;
         }
 
         ret = _child->pid;
@@ -1401,6 +1440,14 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         if (!vbe_active() || !current_process) { ret = (uint32_t)-1; break; }
 
+        /* Single owner: refuse a second concurrent mapper so a second WM
+         * cannot launch and fight over the framebuffer.  (-1 = unowned.) */
+        if (gfx_owner_pid >= 0 &&
+            gfx_owner_pid != (int)current_process->pid) {
+            ret = (uint32_t)-1;
+            break;
+        }
+
         uint32_t npages = vbe_shadow_page_count();
         if (npages == 0) { ret = (uint32_t)-1; break; }
 
@@ -1426,6 +1473,11 @@ void syscall_handler(syscall_regs_t *regs)
                     GFX_MAP_UADDR + npages * PAGE_SIZE,
                     VMA_R | VMA_W | VMA_ANON);
 
+        /* This process now owns the graphics surface.  Enter graphics mode so
+         * the kernel stops drawing the text console / mouse cursor into the
+         * shadow buffer the WM is compositing. */
+        gfx_owner_pid = (int)current_process->pid;
+        vbe_set_graphics_mode(1);
         ret = GFX_MAP_UADDR;
 #else
         ret = (uint32_t)-1;

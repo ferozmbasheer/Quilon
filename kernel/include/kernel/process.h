@@ -107,6 +107,13 @@ typedef struct process {
 
     int          stdin_fd;            /* override for fd 0: pipe fd or -1     */
     int          stdout_fd;           /* override for fd 1/2: pipe fd or -1   */
+    int          owns_std_fds;        /* 1 = close stdin/stdout_fd on exit.
+                                       * Set only for a process the fds were
+                                       * explicitly handed to (exec_redir, e.g.
+                                       * the gterm shell).  A plain-exec child
+                                       * that merely INHERITED them must NOT
+                                       * close them -- they belong to an
+                                       * ancestor that is still using them.   */
 
     /*
      * Signal state (section 6.4).

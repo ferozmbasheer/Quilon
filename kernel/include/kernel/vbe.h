@@ -329,6 +329,12 @@ bool vbe_init(const vbe_info_t *info);
 /* Returns true after a successful vbe_init(). */
 bool vbe_active(void);
 
+/* Graphics mode: when on, the kernel suppresses its own drawing into the shadow
+ * buffer (VBE text console + mouse cursor) because a user process (the WM) owns
+ * and composites it.  Set by SYS_GFX_MAP, cleared when the owner exits. */
+void vbe_set_graphics_mode(int on);
+int  vbe_graphics_mode(void);
+
 /* Returns a pointer to the current framebuffer geometry (NULL if inactive). */
 const vbe_info_t *vbe_get_info(void);
 

@@ -48,6 +48,7 @@ void process_init(void)
         process_table[i].heap_end        = 0;
         process_table[i].stdin_fd        = -1;
         process_table[i].stdout_fd       = -1;
+        process_table[i].owns_std_fds    = 0;
         process_table[i].pending_signals = 0;
         process_table[i].name[0]         = '\0';
         for (int s = 0; s < NSIG; s++)
@@ -77,6 +78,7 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
         p->heap_end        = 0;
         p->stdin_fd        = -1;
         p->stdout_fd       = -1;
+        p->owns_std_fds    = 0;
         p->pending_signals = 0;
         for (int s = 0; s < NSIG; s++)
             p->signal_handlers[s] = SIG_DFL;

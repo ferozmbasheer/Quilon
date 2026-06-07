@@ -183,6 +183,18 @@ static void cursor_paint(int x, int y)
 static void cursor_move(int nx, int ny)
 {
     if (!vbe_active()) return;
+    /* In graphics mode the WM draws its own cursor while compositing; the kernel
+     * must not also draw one (two cursors would fight -- the kernel's cross-hair
+     * appearing between WM frames).  Still track mouse_x/y for SYS_MOUSE_READ;
+     * just skip painting.  If a stale kernel cursor is on screen, erase it once. */
+    if (vbe_graphics_mode()) {
+        if (cursor_drawn) {
+            cursor_restore(cursor_prev_x, cursor_prev_y);
+            vbe_dirty_rows((uint32_t)cursor_prev_y, MOUSE_CURSOR_H);
+            cursor_drawn = 0;
+        }
+        return;
+    }
 
     if (cursor_drawn) {
         /* Write saved background pixels back into shadow_buf at the old

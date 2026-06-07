@@ -29,6 +29,19 @@ static vbe_info_t vbe;           /* cached copy of the framebuffer geometry */
 static bool       vbe_ready = false;
 
 /*
+ * Graphics mode: set while a user process (the WM) owns the framebuffer via
+ * SYS_GFX_MAP and is compositing the shadow buffer itself.  While set, the
+ * kernel must NOT draw into the shadow buffer behind the WM's back -- neither
+ * the VBE text console (kernel printf) nor the kernel mouse cursor -- or that
+ * output flashes on top of the composited desktop.  Kernel diagnostics still
+ * go to the serial port (see tty.c).
+ */
+static bool vbe_gfx_mode = false;
+
+void vbe_set_graphics_mode(int on) { vbe_gfx_mode = on ? true : false; }
+int  vbe_graphics_mode(void)       { return vbe_gfx_mode ? 1 : 0; }
+
+/*
  * Double-buffer: render into shadow_buf (RAM), then flush to hardware in one
  * memcpy.  Allocated from PMM pages mapped at VBE_SHADOW_VBASE so it lives
  * outside the 4 MiB kernel heap window and is inherited by all process page
@@ -271,6 +284,10 @@ void vbe_terminal_setcolor(uint32_t fg, uint32_t bg)
 void vbe_terminal_putchar(char c)
 {
     if (!vbe_ready) return;
+    /* In graphics mode the WM owns the shadow buffer; don't draw console text
+     * into it (it would flash on top of the desktop).  Kernel printf still
+     * reaches the serial port via tty.c. */
+    if (vbe_gfx_mode) return;
 
     if (c == '\n') {
         term_col = 0;
