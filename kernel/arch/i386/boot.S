@@ -200,13 +200,29 @@ exception_common_stub:
     iret
 
 /* -- IRQ stubs (hardware interrupts, vectors 32-47) ---------------------- */
-/* Each stub saves all registers, calls the C handler, restores, and irets. */
+/* Each stub saves all registers, loads the kernel data segment, calls the C
+ * handler, restores the caller's segment + registers, and irets.
+ *
+ * Loading the kernel data segment (0x10) is essential: when an IRQ fires while
+ * the CPU is in ring 3, entry leaves the USER data selector (0x2b) in DS/ES.
+ * The C handler -- and, for IRQ0, the context_switch it performs -- must run
+ * with kernel segments, otherwise per-thread segment state leaks across the
+ * switch and a later clone can build an iret frame with a null SS, faulting
+ * (#GP) on return to ring 3.  This mirrors int80_stub / exception_common_stub. */
 
 .macro IRQ_STUB num
 .global irq\num
 irq\num:
     pusha
+    mov  %ds, %ax
+    push %eax            /* save caller's data segment */
+    mov  $0x10, %ax      /* kernel data segment */
+    mov  %ax, %ds
+    mov  %ax, %es
     call irq\num\()_handler
+    pop  %eax            /* restore caller's data segment */
+    mov  %ax, %ds
+    mov  %ax, %es
     popa
     iret
 .endm

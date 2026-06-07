@@ -368,16 +368,22 @@ static void terminal_putchar_impl(char c)
 }
 
 void terminal_putchar(char c) {
-    spinlock_acquire(&tty_lock);
+    uint32_t flags = spinlock_acquire_irqsave(&tty_lock);
     terminal_putchar_impl(c);
-    spinlock_release(&tty_lock);
+    spinlock_release_irqrestore(&tty_lock, flags);
 }
 
 void terminal_write(const char* data, size_t size) {
-    spinlock_acquire(&tty_lock);
+    /* IRQ-safe acquire: holding tty_lock with interrupts enabled let the timer
+     * preempt the holder mid-write, after which any printf from an IF=0 context
+     * (the page-fault handler's error path, e.g. a demand-paged thread stack)
+     * spins on tty_lock forever -- the holder can never be rescheduled to
+     * release it.  Disabling interrupts while held makes the critical section
+     * non-preemptible, so the lock is never held across a context switch. */
+    uint32_t flags = spinlock_acquire_irqsave(&tty_lock);
     for (size_t i = 0; i < size; i++)
         terminal_putchar_impl(data[i]);
-    spinlock_release(&tty_lock);
+    spinlock_release_irqrestore(&tty_lock, flags);
     /* vbe_flush() is called by pit_tick() at 100 Hz so we never hold
      * tty_lock across the slow hardware framebuffer copy.  Holding it
      * here would deadlock any concurrent terminal_write that fires while

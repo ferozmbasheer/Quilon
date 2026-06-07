@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <kernel/ata.h>
+#include <kernel/spinlock.h>
 
 /* -- Primary bus port addresses -------------------------------------------- */
 #define ATA_DATA         0x1F0
@@ -157,7 +158,22 @@ int ata_drive_present(int drive)
     return drive_present[drive];
 }
 
-int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf)
+/* The ATA PIO transaction (select drive, program LBA, poll status, transfer
+ * words) is a multi-step sequence over shared I/O ports with NO hardware
+ * arbitration.  CLONE_VM threads and the kernel all reach it concurrently
+ * (every exec loads an ELF, every file read hits FAT16 -> ata), so without
+ * serialisation two transfers interleave their port writes and corrupt each
+ * other -- the status poll then spins out its timeout repeatedly and the system
+ * stalls.
+ *
+ * PLAIN spinlock, NOT irqsave: ATA is only called from thread context (vfs ->
+ * fat16 -> ata), never an IRQ handler, and a PIO transfer is slow (polled).
+ * Disabling interrupts across it would starve the timer and freeze the system.
+ * A plain lock keeps the transfer preemptible -- a waiter spins with interrupts
+ * enabled, so the timer still fires and reschedules the holder. */
+static spinlock_t ata_lock = SPINLOCK_INIT;
+
+static int ata_read_sectors_locked(int drive, uint32_t lba, uint32_t count, void *buf)
 {
     if (drive < 0 || drive > 1 || !drive_present[drive])
         return -1;
@@ -196,7 +212,15 @@ int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf)
     return 0;
 }
 
-int ata_write_sectors(int drive, uint32_t lba, uint32_t count, const void *buf)
+int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf)
+{
+    spinlock_acquire(&ata_lock);
+    int r = ata_read_sectors_locked(drive, lba, count, buf);
+    spinlock_release(&ata_lock);
+    return r;
+}
+
+static int ata_write_sectors_locked(int drive, uint32_t lba, uint32_t count, const void *buf)
 {
     if (drive < 0 || drive > 1 || !drive_present[drive])
         return -1;
@@ -235,4 +259,12 @@ int ata_write_sectors(int drive, uint32_t lba, uint32_t count, const void *buf)
     ata_wait_not_busy();
 
     return 0;
+}
+
+int ata_write_sectors(int drive, uint32_t lba, uint32_t count, const void *buf)
+{
+    spinlock_acquire(&ata_lock);
+    int r = ata_write_sectors_locked(drive, lba, count, buf);
+    spinlock_release(&ata_lock);
+    return r;
 }
