@@ -176,10 +176,11 @@ int main(void)
     int i;
     for (i = 0; i < G_NOAPPS; i++) labels[i] = g_apps[i].label;
 
-    /* 4. Initial frame: desktop + taskbar. */
+    /* 4. Initial frame: desktop + taskbar + cursor (cursor last = on top). */
     wm_composite(&g_wm, g_screen);
     wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
                     labels, G_NOAPPS, TASKBAR_BTN_W);
+    wm_draw_cursor(g_screen, g_wm.mouse_x, g_wm.mouse_y);
     gfx_flush();
 
     /* 5. Event loop. */
@@ -250,6 +251,8 @@ int main(void)
             wm_composite(&g_wm, g_screen);
             wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
                             labels, G_NOAPPS, TASKBAR_BTN_W);
+            /* Cursor last so it stays on top of windows AND the taskbar. */
+            wm_draw_cursor(g_screen, g_wm.mouse_x, g_wm.mouse_y);
             gfx_flush();
         }
     }

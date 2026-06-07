@@ -175,8 +175,8 @@ void wm_composite(wm_state_t *s, canvas_t *screen)
         w->dirty = 0;
     }
 
-    /* 3. Cursor on top of everything. */
-    wm_draw_cursor(screen, s->mouse_x, s->mouse_y);
+    /* The cursor is drawn by the caller AFTER the taskbar, so it stays on top
+     * of everything (including the taskbar). */
 }
 
 /* ── Taskbar ─────────────────────────────────────────────────────────────── */
