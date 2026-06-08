@@ -16,6 +16,7 @@
 #include <kernel/usermode.h>
 #include <kernel/syscall.h>
 #include <kernel/ata.h>
+#include <kernel/ata_dma.h>
 #include <kernel/vfs.h>
 #include <kernel/fat16.h>
 #include <kernel/elf.h>
@@ -553,6 +554,17 @@ void kernel_main(void) {
 		printf("pci: use 'pci' at the shell prompt for interactive listing\r\n");
 	}
 	printf("=== Section 10.1 ready ===\r\n\r\n");
+
+	/* -- Section 16.1: ATA Bus Master DMA -----------------------------------
+	 * Now that PCI is enumerated, look for the IDE controller's Bus Master
+	 * registers (BAR4) and switch disk I/O from PIO to DMA.  ata_read_sectors/
+	 * ata_write_sectors use DMA transparently once this succeeds, and fall
+	 * back to PIO on any error.  Early-boot disk access (the FAT16 mount
+	 * above) already ran in PIO, which is fine.                             */
+	if (ata_dma_init() == 0)
+		printf("ata: Bus Master DMA enabled\r\n");
+	else
+		printf("ata: no DMA controller  - staying on PIO\r\n");
 
 	/* -- Section 10.2: RTL8139 Network Card Driver ---------------------------
 	 *

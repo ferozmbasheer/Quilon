@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <kernel/ata.h>
+#include <kernel/ata_dma.h>
 #include <kernel/spinlock.h>
 
 /* -- Primary bus port addresses -------------------------------------------- */
@@ -214,8 +215,17 @@ static int ata_read_sectors_locked(int drive, uint32_t lba, uint32_t count, void
 
 int ata_read_sectors(int drive, uint32_t lba, uint32_t count, void *buf)
 {
+    /* Prefer Bus Master DMA when the controller supports it; fall back to PIO
+     * on any DMA error.  Both paths share the same ATA I/O ports (and the DMA
+     * path the bounce buffer/PRDT), so the same plain spinlock serialises them.
+     * A plain lock is correct here: DMA busy-polls with interrupts enabled so
+     * IRQ14 can fire, exactly like the PIO poll loop. */
     spinlock_acquire(&ata_lock);
-    int r = ata_read_sectors_locked(drive, lba, count, buf);
+    int r = -1;
+    if (ata_dma_available())
+        r = ata_dma_read(drive, lba, count, buf);
+    if (r != 0)
+        r = ata_read_sectors_locked(drive, lba, count, buf);
     spinlock_release(&ata_lock);
     return r;
 }
@@ -264,7 +274,11 @@ static int ata_write_sectors_locked(int drive, uint32_t lba, uint32_t count, con
 int ata_write_sectors(int drive, uint32_t lba, uint32_t count, const void *buf)
 {
     spinlock_acquire(&ata_lock);
-    int r = ata_write_sectors_locked(drive, lba, count, buf);
+    int r = -1;
+    if (ata_dma_available())
+        r = ata_dma_write(drive, lba, count, buf);
+    if (r != 0)
+        r = ata_write_sectors_locked(drive, lba, count, buf);
     spinlock_release(&ata_lock);
     return r;
 }

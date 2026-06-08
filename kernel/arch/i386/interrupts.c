@@ -8,6 +8,7 @@
 #include <kernel/keyboard.h>
 #include <kernel/pit.h>
 #include <kernel/mouse.h>
+#include <kernel/ata_dma.h>
 
 extern void outb(unsigned short port, unsigned char data);
 extern char inb(unsigned short port);
@@ -162,6 +163,7 @@ void irq13_handler(void) {
 }
  
 void irq14_handler(void) {
+          ata_dma_irq();             /* ATA Bus Master DMA completion */
           outb(0xA0, 0x20);
           outb(0x20, 0x20); //EOI
 }
