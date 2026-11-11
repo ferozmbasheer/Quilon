@@ -60,9 +60,15 @@ build) real programs inside Quilon.
 
 ## Where We Are Now
 
-*(Updated 2026-06: Sections 11–14 are complete. The graphical desktop is stable
+*(Updated 2026-11: Sections 11–16 are complete. The graphical desktop is stable
 after a substantial round of concurrency hardening and a WM rearchitecture —
-see the note under 14.2. Next milestone is Section 15, the BSD socket API.)*
+see the note under 14.2. User space has BSD sockets + DNS (`wget` fetches real
+pages), the ATA driver uses Bus Master DMA, and Quilon boots off a read-only
+ext2 disk (falling back to FAT16). Next milestone is Section 17, porting.)*
+
+> **Before Section 17:** see [REVIEW.md](REVIEW.md) — an architecture/stability
+> review with kernel bugs (demand-paging panics in syscalls, CoW bypass, leaked
+> address spaces, VFS races) to fix before the ports exercise them.
 
 | Component | File(s) | Status |
 |-----------|---------|--------|
@@ -72,16 +78,19 @@ see the note under 14.2. Next milestone is Section 15, the BSD socket API.)*
 | >4 MiB physical access | `paging.c` (`kmap`/`pmm_alloc_data_page`) | ✓ Complete — data pages above the 4 MiB identity map |
 | SMP + APIC | `smp.c`, `apic.c` | ✓ Complete — IRQ stubs load kernel segments |
 | IRQ-safe kernel locks | `spinlock.h`, `pmm.c`, `tty.c`, `ata.c`, `waitq.c` | ✓ Complete — see [thread-concurrency memory] |
-| ~28 syscalls | `syscall.c` | ✓ Partial — POSIX coverage thin; user-ptr validated |
+| ~50 syscalls | `syscall.c` | ✓ Partial — POSIX coverage thin; user-ptr validated |
 | Ring-3 shell | `user/shell/main.c` | ✓ Complete |
-| User libc | `user/libc/` | ✓ Partial — missing stat wrapper, real threads |
+| User libc | `user/libc/` | ✓ Partial — stat/clone/sockets wrapped; no real threads |
 | FAT16 R/W, VFS, pipes | `fat16.c`, `vfs.c`, `pipe.c` | ✓ Complete; per-process std fds via `owns_std_fds` |
-| TCP/IP stack | `net.c`, `rtl8139.c` | ✓ Partial — **no user-space sockets (Section 15)** |
+| TCP/IP stack | `net.c`, `rtl8139.c` | ✓ Complete — exposed to user space via BSD sockets |
 | VBE framebuffer | `vbe.c` | ✓ Complete — ANSI codes, PSF2 font, double-buffer, graphics-mode gating |
 | Terminal emulator (11) | `gterm.h`, `tty.c` | ✓ Complete |
 | Extended POSIX (12) | `vfs.c`, `waitq.c`, `syscall.c` | ✓ Complete (stat/mkdir/chdir/getcwd, blocking I/O, clone) |
 | PS/2 mouse (13) | `mouse.c` | ✓ Complete |
 | Graphical desktop (14) | `user/wm/`, `user/{gterm,clock,filebr,textview}/` | ✓ Complete — **single-threaded event loop** (see 14.2 note) |
+| BSD sockets + DNS (15) | `syscall.c`, `net.c`, `user/libc/include/sys/socket.h`, `user/wget/` | ✓ Complete — `socket`/`connect`/`send`/`recv`, `dns_resolve`, `wget` |
+| ATA Bus Master DMA (16.1) | `ata_dma.c`, `ata.c` | ✓ Complete |
+| ext2 filesystem (16.2) | `ext2.c` | ✓ Complete — **read-only**; probed before FAT16; `fs` command + `SYS_FSINFO` |
 
 ---
 

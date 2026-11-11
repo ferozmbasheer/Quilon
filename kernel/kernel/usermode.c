@@ -74,21 +74,26 @@ void usermode_initialize(void)
         tss_loaded = 1;
     }
 
-    /* -- Step 2: make first 4 MiB user-accessible in the active PD ------
-     * paging_set_user_access() reads CR3, so it operates on whatever page
-     * directory is currently loaded -- the calling process's private PD.
-     * This must run for EVERY process launch (not just the first), because
-     * each process has its own PD and needs PAGE_USER on PD[0] before
-     * ring-3 code can access the user stack in the first 4 MiB.
-     */
-    paging_set_user_access(0x00000000u, 0x00400000u);
+    /* That is all a real (ELF) process needs: its text, heap and stack live
+     * in its own pages above 4 MiB.  This function used to also grant
+     * PAGE_USER on the identity map and the kernel-high window, so every
+     * exec'd process could read and write the kernel image, PCBs and page
+     * tables (REVIEW.md H).  Only the in-kernel ring-3 demos need that --
+     * see usermode_grant_demo_access(). */
+}
 
-    /* After higher-half: mark the kernel-high region user-accessible so that
-     * ring-3 demo tasks (compiled into kernel text at 0xC01xxxxx) can execute.
-     * PD[0] and PD[KERNEL_PD_IDX] share the same page table, so the PTEs are
-     * already marked USER by the call above -- this only adds PAGE_USER to
-     * the PD[KERNEL_PD_IDX] entry itself.                                   */
+/* The identity map (PD[0]) and the kernel-high window (PD[KERNEL_PD_IDX])
+ * share one page table, so both ranges are opened / closed together. */
+void usermode_grant_demo_access(void)
+{
+    paging_set_user_access(0x00000000u, 0x00400000u);
     paging_set_user_access(KERNEL_OFFSET, KERNEL_OFFSET + 0x00400000u);
+}
+
+void usermode_revoke_demo_access(void)
+{
+    paging_clear_user_access(0x00000000u, 0x00400000u);
+    paging_clear_user_access(KERNEL_OFFSET, KERNEL_OFFSET + 0x00400000u);
 }
 
 void usermode_enter_esp(void (*user_func)(void), uint32_t user_esp_top)

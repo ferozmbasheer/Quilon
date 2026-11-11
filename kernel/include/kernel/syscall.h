@@ -65,6 +65,7 @@
 #define SYS_ACCEPT     50 /* accept(fd) -> connected fd or -1 (single-conn: same fd)   */
 #define SYS_DNS_RESOLVE 51 /* dns_resolve(host, uint32_t *out_ip) -> 0 or -1 (sec 15.2) */
 #define SYS_FSINFO     52 /* fsinfo(fsinfo_t *out) -> 0 or -1 (section 16.2)           */
+#define SYS_MEMINFO    53 /* free_pages() -> free physical page count (REVIEW.md)       */
 
 /* mouse_event_t -- filled by SYS_MOUSE_READ; matches user/libc/include/mouse.h */
 typedef struct {
@@ -145,6 +146,13 @@ typedef struct {
  * ring-3 (user mode) code can invoke `int $0x80` without a GPF.
  */
 void syscall_initialize(void);
+
+/* SYS_WAIT option (EDX): return 1 at once instead of blocking if the child
+ * is still running.  Lets the single-threaded WM reap terminal shells. */
+#define WAIT_NOHANG  1
+
+/* Give up the graphics surface if `pid` owns it (process exit path). */
+void gfx_release_owner(uint32_t pid);
 
 /* Kernel-side dispatcher.  Called from int80_stub via `push %esp; call …`.
  * Dispatch is on regs->eax (syscall number); return value is stored in

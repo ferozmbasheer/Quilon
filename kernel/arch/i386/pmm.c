@@ -214,9 +214,13 @@ done:
 
 void pmm_ref_page(void *addr)
 {
+    /* Locked like pmm_free_page: an unlocked ++ could be preempted between
+     * load and store and lose a concurrent decrement (or vice versa). */
+    uint32_t flags = spinlock_acquire_irqsave(&pmm_lock);
     uint32_t page = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
     if (page_test(page) && refcount[page] < 255u)
         refcount[page]++;
+    spinlock_release_irqrestore(&pmm_lock, flags);
 }
 
 uint8_t pmm_page_refcount(void *addr)

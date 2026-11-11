@@ -73,22 +73,11 @@ void exception_handler(registers_t *regs)
      *
      * CR2 always holds the faulting virtual address.
      *
-     * Decision tree:
-     *
-     *  [kernel-mode fault, bit 2 = 0]
-     *    -> kernel bug: fall through to panic below.
-     *
-     *  [user-mode fault, bit 0 = 1 (page present but protection violation)]
-     *    -> genuine fault (e.g. write to read-only page). -> SIGSEGV.
-     *    (Copy-on-write, section 9.3, will intercept this case first.)
-     *
-     *  [user-mode fault, bit 0 = 0 (page not present)]
-     *    -> demand paging candidate:
-     *      - Look up fault_addr in the process's VMA list.
-     *      - No VMA -> out-of-bounds access -> SIGSEGV.
-     *      - VMA found -> allocate a zero physical page, map it with the
-     *        VMA's permission flags, and return.  The CPU re-executes the
-     *        faulting instruction automatically.
+     * Decision tree: see vma_fault_action() in vma.c.  In short, for a user
+     * address inside a VMA, a not-present fault demand-pages a zeroed page and
+     * a write to a present page in a writable VMA resolves copy-on-write --
+     * whether the access came from ring 3 or from ring 0 inside a syscall.
+     * Anything else is SIGSEGV from ring 3 and a panic from ring 0.
      */
     if (regs->int_no == 14 && current_process) {
         uint32_t fault_addr;
@@ -100,84 +89,59 @@ void exception_handler(registers_t *regs)
          * the leader grew afterwards.  Page mapping still uses the faulting
          * process's cr3, which is shared within the group. */
         process_t *vma_owner = process_group_leader(current_process);
+        int        user_mode = (regs->cs & 3) == 3;
+        uint32_t  *proc_pd   = (uint32_t *)(uintptr_t)current_process->cr3;
 
-        /* Only handle user-mode faults here. */
-        if ((regs->cs & 3) == 3) {
+        /* Ring-0 faults on user addresses are serviced too (REVIEW.md A/B):
+         * a syscall writing into a not-yet-touched demand-paged buffer, or
+         * (CR0.WP is set) into a CoW page shared after fork.  The syscall layer
+         * validated the range with uap_ok first, so a VMA covers it.  The
+         * policy itself is vma_fault_action(), unit-tested on the host. */
+        pf_action_t act = vma_fault_action(vma_owner->vmas, PROC_VMA_MAX,
+                                           fault_addr, regs->err_code,
+                                           user_mode);
 
-            /* Protection fault (page was present but access was denied). */
-            if (regs->err_code & 1u) {
-                /* Check for a copy-on-write write fault (section 9.3).
-                 * Conditions: write fault (bit 1) + VMA says writable +
-                 * PTE has PAGE_COW set.                                   */
-                if (regs->err_code & 2u) {
-                    vma_t *cow_vma = vma_find(vma_owner->vmas,
-                                              PROC_VMA_MAX, fault_addr);
-                    if (cow_vma && (cow_vma->flags & VMA_W)) {
-                        uint32_t *proc_pd =
-                            (uint32_t *)(uintptr_t)current_process->cr3;
-                        if (paging_cow_handle(proc_pd, fault_addr) == 0) {
-                            /* Handled -- CPU re-executes the faulting insn. */
-                            return;
-                        }
-                    }
-                }
-                printf("\r\n[pf] pid %d: protection fault at 0x%x "
-                       "(EIP=0x%x) -> SIGSEGV\r\n",
-                       (int)current_process->pid,
-                       (unsigned)fault_addr, (unsigned)regs->eip);
-                signal_send(current_process, SIGSEGV);
-                signal_dispatch();
-                __builtin_unreachable();
-            }
-
-            /* Not-present fault -- check VMAs. */
-            vma_t *vma = vma_find(vma_owner->vmas, PROC_VMA_MAX, fault_addr);
-            if (!vma) {
-                printf("\r\n[pf] pid %d: no VMA at 0x%x "
-                       "(EIP=0x%x) -> SIGSEGV\r\n",
-                       (int)current_process->pid,
-                       (unsigned)fault_addr, (unsigned)regs->eip);
-                signal_send(current_process, SIGSEGV);
-                signal_dispatch();
-                __builtin_unreachable();
-            }
-
+        if (act == PF_ACT_COW) {
+            /* Write to a present page in a writable VMA: resolve CoW. */
+            act = (paging_cow_handle(proc_pd, fault_addr) == 0)
+                  ? PF_ACT_DEMAND /* handled */ : pf_unresolved(user_mode);
+            if (act == PF_ACT_DEMAND) return;   /* CPU re-executes the insn */
+        } else if (act == PF_ACT_DEMAND) {
             /* Demand-page: allocate a zeroed data page (above the identity map)
              * and map it.  pmm_alloc_data_page zeroes it via a transient kmap,
-             * so we must NOT touch `phys` directly here -- it may be >4 MiB. */
-            void *phys = pmm_alloc_data_page();
-            if (!phys) {
-                printf("\r\n[pf] pid %d: OOM at 0x%x -> SIGSEGV\r\n",
-                       (int)current_process->pid, (unsigned)fault_addr);
-                signal_send(current_process, SIGSEGV);
-                signal_dispatch();
-                __builtin_unreachable();
-            }
-
+             * so we must NOT touch `phys` directly here -- it may be >4 MiB.
+             * Do NOT printf on success: this handler runs with IF=0 (interrupt
+             * gate), so spinning on tty_lock held elsewhere would deadlock. */
+            vma_t   *vma        = vma_find(vma_owner->vmas, PROC_VMA_MAX,
+                                           fault_addr);
             uint32_t page_flags = PAGE_PRESENT | PAGE_USER;
             if (vma->flags & VMA_W) page_flags |= PAGE_WRITABLE;
-
             uint32_t fault_page = fault_addr & ~(PAGE_SIZE - 1u);
-            uint32_t *proc_pd   = (uint32_t *)(uintptr_t)current_process->cr3;
 
-            if (paging_map_page_alloc_into(proc_pd, fault_page,
-                                           (uint32_t)(uintptr_t)phys,
-                                           page_flags) != 0) {
-                pmm_free_page(phys);
-                printf("\r\n[pf] pid %d: mapping failed at 0x%x -> SIGSEGV\r\n",
-                       (int)current_process->pid, (unsigned)fault_addr);
-                signal_send(current_process, SIGSEGV);
-                signal_dispatch();
-                __builtin_unreachable();
-            }
-
-            /* Return normally -- CPU re-executes the faulting instruction.
-             * Do NOT printf here: this handler runs with IF=0 (interrupt gate)
-             * so spinning on tty_lock while another thread holds it would
-             * deadlock permanently. */
-            return;
+            void *phys = pmm_alloc_data_page();
+            if (phys && paging_map_page_alloc_into(proc_pd, fault_page,
+                                                   (uint32_t)(uintptr_t)phys,
+                                                   page_flags) == 0)
+                return;                         /* CPU re-executes the insn */
+            if (phys) pmm_free_page(phys);
+            printf("\r\n[pf] pid %d: out of memory paging in 0x%x\r\n",
+                   (int)current_process->pid, (unsigned)fault_addr);
+            act = pf_unresolved(user_mode);
         }
-        /* Kernel-mode page fault: fall through to panic. */
+
+        if (act == PF_ACT_SEGV) {
+            printf("\r\n[pf] pid %d: %s at 0x%x (EIP=0x%x) -> SIGSEGV\r\n",
+                   (int)current_process->pid,
+                   (regs->err_code & PF_ERR_PRESENT) ? "protection fault"
+                                                     : "invalid access",
+                   (unsigned)fault_addr, (unsigned)regs->eip);
+            signal_send(current_process, SIGSEGV);
+            signal_dispatch();
+            __builtin_unreachable();
+        }
+        /* PF_ACT_PANIC: an unresolvable ring-0 fault -- fall through. */
+        printf("\r\n[pf] kernel fault at 0x%x err=0x%x\r\n",
+               (unsigned)fault_addr, (unsigned)regs->err_code);
     }
 #endif
 

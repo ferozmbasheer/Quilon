@@ -21,6 +21,12 @@
  *     first write fault is taken against this page. */
 #define PAGE_COW       (1u << 9)
 
+/* Bit 10 (also OS-available): the process does NOT own this physical page --
+ * it is shared kernel memory mapped into user space (the VBE shadow buffer
+ * behind SYS_GFX_MAP).  Address-space teardown must not free it, and fork
+ * shares it as-is (no refcount, no CoW).  REVIEW.md C. */
+#define PAGE_NOFREE    (1u << 10)
+
 /* -- Higher-half kernel constants (section 9.1) ----------------------------
  *
  * The kernel is linked at virtual 0xC0100000 but loaded at physical 0x100000.
@@ -93,6 +99,9 @@ void paging_initialize(void);
  * identity-mapped first 4 MiB.
  */
 void paging_set_user_access(uint32_t virt_start, uint32_t virt_end);
+
+/* Inverse of paging_set_user_access (active PD).  REVIEW.md H. */
+void paging_clear_user_access(uint32_t virt_start, uint32_t virt_end);
 
 /* Map a single physical page at virtual address virt with the given flags.
  *
@@ -230,5 +239,32 @@ int paging_cow_handle(uint32_t *pd, uint32_t fault_addr);
  */
 int paging_map_page_alloc_into(uint32_t *pd, uint32_t virt,
                                 uint32_t phys, uint32_t flags);
+
+/*
+ * as_destroy -- release everything a user address space owns (REVIEW.md C).
+ *
+ * Walks the user half of pd (PDE 1 .. KERNEL_PD_IDX-1; PDE 0 is the shared
+ * identity table and the kernel half is shared by every process), and for
+ * each present page table:
+ *   - frees every present user page except PAGE_NOFREE ones (CoW-shared pages
+ *     just drop one reference -- pmm_free_page is refcounted),
+ *   - frees the page table itself,
+ * then frees the page directory.  Returns the number of user pages released.
+ *
+ * Pure C over two callbacks so the walk is unit-testable on the host
+ * (tests/test_addrspace.c); the kernel wrapper is
+ * paging_destroy_address_space().  The address space must NOT be the one
+ * loaded in CR3.
+ */
+typedef struct {
+    uint32_t *(*table)(uint32_t phys, void *ctx);  /* phys -> its 1024 entries */
+    void      (*free_page)(uint32_t phys, void *ctx);
+    void       *ctx;
+} as_ops_t;
+
+uint32_t as_destroy(uint32_t pd_phys, const as_ops_t *ops);
+
+/* Kernel wrapper: as_destroy with identity-mapped tables + pmm_free_page. */
+uint32_t paging_destroy_address_space(uint32_t *pd);
 
 #endif /* _KERNEL_PAGING_H */

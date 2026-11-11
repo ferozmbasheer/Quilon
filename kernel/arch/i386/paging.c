@@ -70,7 +70,11 @@ void paging_initialize(void)
     asm volatile(
         "mov %0, %%cr3\n\t"
         "mov %%cr0, %%eax\n\t"
-        "or  $0x80000000, %%eax\n\t"
+        /* PG (bit 31) + WP (bit 16).  WP makes ring 0 honour read-only PTEs,
+         * so a kernel write into a CoW page shared after fork faults and is
+         * resolved by paging_cow_handle instead of silently writing the
+         * shared frame (REVIEW.md B). */
+        "or  $0x80010000, %%eax\n\t"
         "mov %%eax, %%cr0\n\t"
         :
         : "r"(pd_phys)
@@ -191,6 +195,27 @@ void paging_set_user_access(uint32_t virt_start, uint32_t virt_end)
         "mov %%eax, %%cr3\n\t"
         :: : "eax"
     );
+}
+
+void paging_clear_user_access(uint32_t virt_start, uint32_t virt_end)
+{
+    /* Inverse of paging_set_user_access on the ACTIVE page directory.
+     * Clearing the PDE is what matters (both levels must allow ring 3);
+     * the shared PTEs are cleared too so nothing inherits stale USER bits. */
+    uint32_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3));
+    uint32_t *active_pd = (uint32_t *)(uintptr_t)cr3;
+
+    for (uint32_t addr = virt_start; addr < virt_end; addr += PAGE_SIZE) {
+        uint32_t pd_idx = VIRT_PD_INDEX(addr);
+        uint32_t pt_idx = VIRT_PT_INDEX(addr);
+        if (!(active_pd[pd_idx] & PAGE_PRESENT))
+            continue;
+        active_pd[pd_idx] &= ~(uint32_t)PAGE_USER;
+        uint32_t *pt = (uint32_t *)(active_pd[pd_idx] & ~0xFFFu);
+        pt[pt_idx] &= ~(uint32_t)PAGE_USER;
+    }
+    asm volatile("mov %%cr3, %%eax\n\tmov %%eax, %%cr3\n\t" ::: "eax");
 }
 
 int paging_map_page(uint32_t virt, uint32_t phys, uint32_t flags)
@@ -324,6 +349,14 @@ int paging_fork_address_space(uint32_t *parent_pd, uint32_t *child_pd)
             uint32_t phys  = parent_pt[j] & ~(uint32_t)0xFFF;
             uint32_t flags = parent_pt[j] & (uint32_t)0xFFF;
 
+            /* Kernel memory mapped into user space (e.g. the gfx shadow
+             * buffer): not owned by either process -- share it as-is, with no
+             * refcount and no CoW (REVIEW.md C). */
+            if (flags & PAGE_NOFREE) {
+                child_pt[j] = parent_pt[j];
+                continue;
+            }
+
             /* Both processes now reference this physical page. */
             pmm_ref_page((void *)(uintptr_t)phys);
 
@@ -451,4 +484,25 @@ int paging_map_page_alloc(uint32_t virt, uint32_t phys, uint32_t flags)
     asm volatile("invlpg (%0)" :: "r"(virt) : "memory");
 
     return 0;
+}
+
+/* -- Address-space teardown (REVIEW.md C) -----------------------------------
+ * Page directories and page tables come from pmm_alloc_page(), i.e. the
+ * identity-mapped first 4 MiB, so a physical address is directly usable. */
+static uint32_t *as_identity_table(uint32_t phys, void *ctx)
+{
+    (void)ctx;
+    return (uint32_t *)(uintptr_t)phys;
+}
+
+static void as_pmm_free(uint32_t phys, void *ctx)
+{
+    (void)ctx;
+    pmm_free_page((void *)(uintptr_t)phys);
+}
+
+uint32_t paging_destroy_address_space(uint32_t *pd)
+{
+    static const as_ops_t ops = { as_identity_table, as_pmm_free, 0 };
+    return as_destroy((uint32_t)(uintptr_t)pd, &ops);
 }

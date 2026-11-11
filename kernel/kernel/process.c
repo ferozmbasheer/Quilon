@@ -20,9 +20,14 @@
 #include <kernel/process.h>
 #include <kernel/vma.h>
 
+#include <kernel/vfs.h>       /* VFS_FD_BASE */
+
 #ifdef __is_kernel
 #include <kernel/usermode.h>
 #include <kernel/gdt.h>
+#include <kernel/paging.h>
+#include <kernel/scheduler.h>
+#include <kernel/syscall.h>   /* gfx_release_owner */
 /* process_first_run is an assembly label in boot.S */
 extern void process_first_run(void);
 #endif
@@ -62,6 +67,9 @@ void process_init(void)
 
 process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
 {
+    /* Orphaned zombies would otherwise hold slots (and memory) forever. */
+    process_reap_orphans();
+
     for (int i = 0; i < PROCESS_MAX; i++) {
         if (process_table[i].state != PROC_UNUSED)
             continue;
@@ -109,6 +117,12 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
          * After pop edi/esi/ebx/ebp, ret pops the return address and jumps
          * to process_first_run, which calls process_launch().
          */
+        /* Guard + high-water pattern (REVIEW.md G): canary in the lowest
+         * word, fill pattern everywhere else. */
+        memset(p->kernel_stack, KSTACK_FILL, sizeof(p->kernel_stack));
+        uint32_t canary = KSTACK_CANARY;
+        memcpy(p->kernel_stack, &canary, sizeof canary);
+
         uint32_t *sp = (uint32_t *)(p->kernel_stack + sizeof(p->kernel_stack));
 #ifdef __is_kernel
         *(--sp) = (uint32_t)(uintptr_t)process_first_run;  /* ret address   */
@@ -146,6 +160,164 @@ process_t *process_group_leader(process_t *p)
     process_t *leader = process_find(p->thread_group);
     return leader ? leader : p;   /* fall back to self if leader already reaped */
 }
+
+/* -- Exit / reap lifecycle (REVIEW.md C, D, E) ----------------------------- */
+
+#ifdef __is_kernel
+static void release_address_space(uint32_t cr3)
+{
+    paging_destroy_address_space((uint32_t *)(uintptr_t)cr3);
+}
+static void close_fd(int fd) { vfs_close(fd); }
+#else
+uint32_t process_test_released_cr3[16];
+int      process_test_released_count;
+int      process_test_closed_fds[16];
+int      process_test_closed_count;
+static void release_address_space(uint32_t cr3)
+{
+    if (process_test_released_count < 16)
+        process_test_released_cr3[process_test_released_count] = cr3;
+    process_test_released_count++;
+}
+static void close_fd(int fd)
+{
+    if (process_test_closed_count < 16)
+        process_test_closed_fds[process_test_closed_count] = fd;
+    process_test_closed_count++;
+}
+#endif
+
+/* -- Kernel-stack guard (REVIEW.md G) --------------------------------------- */
+
+/* Warn at exit when a process came within 1/4 of overflowing. */
+#define KSTACK_WARN_BYTES (PROCESS_KSTACK_SIZE * 3u / 4u)
+
+int process_stack_intact(const process_t *p)
+{
+    if (!p) return 0;
+    uint32_t word;
+    memcpy(&word, p->kernel_stack, sizeof word);
+    return word == KSTACK_CANARY;
+}
+
+uint32_t process_stack_used(const process_t *p)
+{
+    if (!p) return 0;
+    /* Scan up from just above the canary to the first byte the stack has
+     * touched; everything from there to the top has been used. */
+    uint32_t i = sizeof(uint32_t);
+    while (i < sizeof(p->kernel_stack) && p->kernel_stack[i] == KSTACK_FILL)
+        i++;
+    return (uint32_t)sizeof(p->kernel_stack) - i;
+}
+
+/* Is cr3 still the address space of some live (non-UNUSED) slot other than p?
+ * True for a CLONE_VM thread group until its last member is reaped. */
+static int cr3_in_use_by_other(const process_t *p, uint32_t cr3)
+{
+    for (int i = 0; i < PROCESS_MAX; i++) {
+        const process_t *q = &process_table[i];
+        if (q != p && q->state != PROC_UNUSED && q->cr3 == cr3)
+            return 1;
+    }
+    return 0;
+}
+
+void process_reap(process_t *p)
+{
+    if (!p || p->state == PROC_UNUSED) return;
+    uint32_t cr3 = p->cr3;
+    p->state = PROC_UNUSED;
+    p->cr3   = 0;
+    if (cr3 && !cr3_in_use_by_other(p, cr3))
+        release_address_space(cr3);
+}
+
+void process_reap_orphans(void)
+{
+    for (int i = 0; i < PROCESS_MAX; i++) {
+        process_t *q = &process_table[i];
+        if (q->state != PROC_ZOMBIE || q == current_process) continue;
+        if (q->parent_pid == PROC_NO_PARENT || q->parent_pid == q->pid ||
+            !process_find(q->parent_pid))
+            process_reap(q);
+    }
+}
+
+int process_is_waitable_by(const process_t *child, const process_t *waiter)
+{
+    if (!child || !waiter || child == waiter) return 0;
+    if (child->parent_pid == waiter->pid) return 1;
+    /* pthread_join from a sibling: the child's parent is in our group. */
+    const process_t *parent = process_find(child->parent_pid);
+    return parent &&
+           process_group_leader((process_t *)parent) ==
+           process_group_leader((process_t *)waiter);
+}
+
+void process_mark_exited(process_t *p, int code)
+{
+    if (!p) return;
+
+    /* Close the pipe ends this process OWNS (handed over by exec_redir).  A
+     * plain-exec child merely inherited them from an ancestor still using
+     * them, so it must not close them. */
+    if (p->owns_std_fds) {
+        if (p->stdin_fd >= VFS_FD_BASE)
+            close_fd(p->stdin_fd);
+        if (p->stdout_fd >= VFS_FD_BASE && p->stdout_fd != p->stdin_fd)
+            close_fd(p->stdout_fd);
+    }
+    p->stdin_fd     = -1;
+    p->stdout_fd    = -1;
+    p->owns_std_fds = 0;
+
+#ifdef __is_kernel
+    /* If the WM dies -- even by SIGSEGV -- free the screen for a new startx. */
+    gfx_release_owner(p->pid);
+
+    /* Early warning before a kernel stack overflow (REVIEW.md G). */
+    uint32_t used = process_stack_used(p);
+    if (used > KSTACK_WARN_BYTES)
+        printf("[kernel] pid %d used %u of %u bytes of kernel stack\r\n",
+               (int)p->pid, (unsigned)used, (unsigned)PROCESS_KSTACK_SIZE);
+#endif
+
+    p->exit_code = code;
+    p->state     = PROC_ZOMBIE;
+
+    /* Children: zombies can never be waited for now -- reap them; live ones
+     * are orphaned and will be reaped as soon as they exit. */
+    for (int i = 0; i < PROCESS_MAX; i++) {
+        process_t *q = &process_table[i];
+        if (q == p || q->state == PROC_UNUSED || q->parent_pid != p->pid)
+            continue;
+        if (q->state == PROC_ZOMBIE) process_reap(q);
+        else                         q->parent_pid = PROC_NO_PARENT;
+    }
+
+    /* Wake the parent if it is sleeping in SYS_WAIT. */
+    process_t *parent = (p->parent_pid != p->pid) ? process_find(p->parent_pid)
+                                                  : NULL;
+    if (parent && parent->state == PROC_BLOCKED)
+        parent->state = PROC_READY;
+}
+
+#ifdef __is_kernel
+void process_exit(int code)
+{
+    process_mark_exited(current_process, code);
+    scheduler_yield();                  /* never resumes: we are a zombie */
+    for (;;) asm volatile("hlt");       /* nothing else runnable */
+}
+#else
+void process_exit(int code)
+{
+    process_mark_exited(current_process, code);
+    while (1) { }
+}
+#endif
 
 /* -- Round-robin scheduling helper ----------------------------------------- */
 
@@ -202,14 +374,13 @@ void __attribute__((noreturn)) process_launch(void)
     gdt_set_kernel_stack(kstack_top);
 
     /*
-     * Load the TSS into TR (once only -- ltr faults if called twice) and
-     * set PAGE_USER on the active page directory's first-4-MiB entry so
-     * ring-3 code can access the user stack.
+     * Load the TSS into TR (once only -- ltr faults if called twice;
+     * usermode_initialize() guards it with a static flag).
      *
-     * usermode_initialize() guards ltr with a static flag but always calls
-     * paging_set_user_access(), which uses the current CR3.  This is
-     * correct: every process has its own PD and needs PAGE_USER set on it
-     * before its first ring-3 instruction can access the stack.
+     * It deliberately grants NO user access to the identity map or the
+     * kernel-high window: it used to, which let every exec'd process read
+     * and write kernel memory (REVIEW.md H).  An ELF process only touches its
+     * own pages (text/data at 0x400000+, heap, stack below USER_STACK_TOP).
      */
     usermode_initialize();
 

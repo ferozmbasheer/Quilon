@@ -32,6 +32,7 @@ void gterm_open(window_t *win);
 void clock_open(window_t *win);
 void filebr_open(window_t *win);
 void textview_open(window_t *win);
+void gterm_reap_shells(void);   /* reap shells of closed terminals */
 
 /* ── App table ────────────────────────────────────────────────────────────── */
 
@@ -244,6 +245,9 @@ int main(void)
             if (w->id != 0 && w->on_tick)
                 w->on_tick(w);
         }
+
+        /* -- Reap the shells of terminals closed earlier (never blocks) ----- */
+        gterm_reap_shells();
 
         /* -- Destroy windows that requested close -------------------------- */
         for (i = 0; i < WM_MAX_WINDOWS; i++) {

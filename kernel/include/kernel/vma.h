@@ -162,4 +162,43 @@ void vma_remove(vma_t *vmas, int count, uint32_t start);
 int vma_range_ok(const vma_t *vmas, int count,
                  uint32_t addr, uint32_t len, int need_write);
 
+/*
+ * Page-fault policy (REVIEW.md items A + B).
+ *
+ * vma_fault_action decides what the vector-14 handler should do with a fault,
+ * given the faulting address, the CPU error code and whether the faulting
+ * instruction ran in ring 3.  It is pure C so the whole decision table is
+ * unit-testable on the host; exceptions.c does the actual paging work.
+ *
+ * Ring-0 faults on USER addresses are serviced exactly like ring-3 ones.
+ * They happen whenever a syscall copies into a user buffer (read(), copyout)
+ * that lies on a demand-paged page not yet touched, or -- with CR0.WP set --
+ * on a copy-on-write page shared after fork.  The syscall layer has already
+ * validated the range with vma_range_ok, so a VMA covers it.  A ring-0 fault
+ * with no covering VMA, or on a kernel address, is still a kernel bug.
+ */
+#define PF_ERR_PRESENT  (1u << 0)   /* 1 = protection fault, 0 = not present */
+#define PF_ERR_WRITE    (1u << 1)   /* 1 = write access                      */
+
+/* First kernel virtual address; user addresses lie below it. */
+#define VMA_USER_LIMIT  0xC0000000u
+
+typedef enum {
+    PF_ACT_DEMAND = 0,  /* not present inside a VMA: map a zeroed page      */
+    PF_ACT_COW,         /* write to a present page in a writable VMA: try CoW */
+    PF_ACT_SEGV,        /* ring-3 access violation: deliver SIGSEGV          */
+    PF_ACT_PANIC        /* ring-0 fault the kernel cannot resolve            */
+} pf_action_t;
+
+pf_action_t vma_fault_action(const vma_t *vmas, int count,
+                             uint32_t fault_addr, uint32_t err_code,
+                             int user_mode);
+
+/* What a fault the handler could not resolve (a CoW/mapping/OOM failure on
+ * the chosen path) turns into: SIGSEGV from ring 3, a panic from ring 0. */
+static inline pf_action_t pf_unresolved(int user_mode)
+{
+    return user_mode ? PF_ACT_SEGV : PF_ACT_PANIC;
+}
+
 #endif /* _KERNEL_VMA_H */

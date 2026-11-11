@@ -82,6 +82,16 @@
  * so app diagnostics never flash on top of the composited desktop.  Cleared
  * when the owner exits (SYS_EXIT). */
 int gfx_owner_pid = -1;
+
+void gfx_release_owner(uint32_t pid)
+{
+    /* Release the surface so a later startx can claim it again, and leave
+     * graphics mode so the kernel text console / cursor work again. */
+    if (gfx_owner_pid >= 0 && (uint32_t)gfx_owner_pid == pid) {
+        gfx_owner_pid = -1;
+        vbe_set_graphics_mode(0);
+    }
+}
 #endif
 
 /* -- Kernel-only initialisation ----------------------------------------------
@@ -181,6 +191,28 @@ static int uap_str_ok(uint32_t uaddr)
     return 0;   /* no terminator within the cap -- treat as invalid */
 }
 
+/* "[kernel] pid N exited (code C)" to the serial log only (no snprintf in
+ * libk).  tools/smoke_test.sh and `make wmtest` read exits from serial. */
+static void serial_put_int(int v)
+{
+    char d[12];
+    int  n = 0;
+    unsigned u = (v < 0) ? (unsigned)-(long)v : (unsigned)v;
+    if (v < 0) serial_putchar('-');
+    do { d[n++] = (char)('0' + u % 10u); u /= 10u; } while (u);
+    while (n) serial_putchar(d[--n]);
+}
+
+static void log_exit_to_serial(int pid, int code)
+{
+    static const char a[] = "\r\n[kernel] pid ", b[] = " exited (code ";
+    serial_write(a, sizeof a - 1);
+    serial_put_int(pid);
+    serial_write(b, sizeof b - 1);
+    serial_put_int(code);
+    serial_write(")\r\n", 3);
+}
+
 /* Copy len bytes from a kernel buffer into a validated user range. 0 / -1. */
 static int copyout(uint32_t udst, const void *ksrc, uint32_t len)
 {
@@ -213,10 +245,8 @@ void syscall_handler(syscall_regs_t *regs)
      *   EDX = len   -- number of bytes.
      *   Returns: bytes written on success, 0 on unsupported fd / NULL buf.
      *
-     * Security note: in a production OS you must validate that [buf, buf+len)
-     * is entirely within user-accessible memory before touching it.  Here
-     * the first 4 MiB is identity-mapped and user-accessible, so any pointer
-     * in that range is safe to dereference.
+     * The buffer is validated with uap_ok() against the caller's VMAs before
+     * it is touched (a NULL or unmapped buffer returns -1).
      * ------------------------------------------------------------------------ */
     case SYS_WRITE: {
         const char *buf = (const char *)(uintptr_t)regs->ecx;
@@ -298,13 +328,14 @@ void syscall_handler(syscall_regs_t *regs)
      * shell-exec flow (when the shell drives exec directly).
      * ------------------------------------------------------------------------ */
     case SYS_EXIT:
-        printf("\r\n[kernel] pid %d exited (code %d)\r\n",
 #ifdef __is_kernel
-               current_process ? (int)current_process->pid : -1,
+        /* Serial only: on the console this line landed in the middle of
+         * whatever the user's terminal was showing after every command. */
+        log_exit_to_serial(current_process ? (int)current_process->pid : -1,
+                           (int)regs->ebx);
 #else
-               -1,
+        printf("\r\n[kernel] pid %d exited (code %d)\r\n", -1, (int)regs->ebx);
 #endif
-               (int)regs->ebx);
 #ifdef __is_kernel
         if (exec_return_active &&
             (!current_process || current_process->thread_group == 0)) {
@@ -315,46 +346,8 @@ void syscall_handler(syscall_regs_t *regs)
             exec_longjmp(&exec_return_buf, 1);
             __builtin_unreachable();
         }
-        if (current_process) {
-            /* Close pipe fds this process still holds so their global fd-table
-             * slots (and the pipe's reader/writer refcount) are released on
-             * exit.  Without this, every exec'd shell that inherited stdin/
-             * stdout pipe ends leaks 2 fd slots for good -- which is what
-             * exhausted the table when launching a second terminal.  Only
-             * close real pipe fds (>= VFS_FD_BASE); -1 means "no override".
-             * close_fds_on_exit() is a no-op for fds < VFS_FD_BASE.        */
-            /* Only close the pipe ends this process OWNS (handed to it via
-             * exec_redir).  A plain-exec child that merely inherited them must
-             * not close them -- they belong to an ancestor still using them. */
-            if (current_process->owns_std_fds) {
-                if (current_process->stdin_fd >= VFS_FD_BASE)
-                    vfs_close(current_process->stdin_fd);
-                if (current_process->stdout_fd >= VFS_FD_BASE &&
-                    current_process->stdout_fd != current_process->stdin_fd)
-                    vfs_close(current_process->stdout_fd);
-            }
-            current_process->stdin_fd     = -1;
-            current_process->stdout_fd    = -1;
-            current_process->owns_std_fds = 0;
-
-            /* If the graphics owner (WM) is exiting, release the surface so a
-             * later startx can claim it again, and leave graphics mode so the
-             * kernel text console / cursor work again. */
-            if ((int)current_process->pid == gfx_owner_pid) {
-                gfx_owner_pid = -1;
-                vbe_set_graphics_mode(0);
-            }
-
-            current_process->exit_code = (int)regs->ebx;
-            current_process->state     = PROC_ZOMBIE;
-            /* Wake the parent if it is sleeping in SYS_WAIT. */
-            process_t *_parent = process_find(current_process->parent_pid);
-            if (_parent && _parent->state == PROC_BLOCKED)
-                _parent->state = PROC_READY;
-            scheduler_yield();   /* returns only if no other runnable process */
-            for (;;) asm volatile("hlt");  /* all processes exited -- halt CPU */
-            __builtin_unreachable();
-        }
+        if (current_process)
+            process_exit((int)regs->ebx);   /* fds, gfx, zombie, wake parent */
         for (;;) asm volatile("hlt");
         __builtin_unreachable();
 #else
@@ -367,8 +360,8 @@ void syscall_handler(syscall_regs_t *regs)
      *   EBX = pointer to null-terminated path string (user-space address).
      *   Returns: file descriptor (>= VFS_FD_BASE) on success, -1 on failure.
      *
-     * Security note: the path pointer is trusted here (same caveat as
-     * SYS_WRITE -- pointer validation is left for a future memory-map check).
+     * The path string is validated with uap_str_ok() (every byte up to the NUL
+     * must lie in a readable VMA) before the VFS sees it.
      * ------------------------------------------------------------------------ */
     case SYS_OPEN: {
 #ifdef __is_kernel
@@ -485,6 +478,7 @@ void syscall_handler(syscall_regs_t *regs)
 #ifdef __is_kernel
         uint32_t   child_pid    = regs->ebx;
         int       *exit_code_p  = (int *)(uintptr_t)regs->ecx;
+        int        nohang       = (regs->edx & WAIT_NOHANG) != 0;
 
         /* Reject an exit-code pointer that is not writable user memory. */
         if (exit_code_p && !uap_ok(regs->ecx, sizeof(int), 1)) {
@@ -492,8 +486,16 @@ void syscall_handler(syscall_regs_t *regs)
             break;
         }
 
+        /* Only a parent (or its thread group) may reap a child -- otherwise a
+         * stray wait() could steal another process's exit status. */
         process_t *_child = process_find(child_pid);
-        if (!_child) { ret = (uint32_t)-1; break; }
+        if (!_child || !current_process ||
+            !process_is_waitable_by(_child, current_process)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+
+        if (nohang && _child->state != PROC_ZOMBIE) { ret = 1; break; }
 
         /*
          * Block until the child becomes a zombie.  Re-resolve the child by PID
@@ -502,17 +504,25 @@ void syscall_handler(syscall_regs_t *regs)
          * would otherwise leave us spinning on a stale or reused PCB.  If the
          * child disappears without us reaping it, treat the wait as failed.
          */
-        current_process->state = PROC_BLOCKED;
+        /* Re-block on EVERY iteration, before looking at the child.  The
+         * parent is woken by ANY child's exit; it used to set BLOCKED only
+         * once, so after a sibling's exit woke it, it went back to sleep
+         * still RUNNING and the awaited child's exit -- which only wakes a
+         * BLOCKED parent -- was lost: wait() hung forever.  Setting BLOCKED
+         * before the check also covers an exit landing between the check
+         * and the yield (that exit makes us READY again). */
         for (;;) {
+            current_process->state = PROC_BLOCKED;
             _child = process_find(child_pid);
             if (!_child) { ret = (uint32_t)-1; break; }
             if (_child->state == PROC_ZOMBIE) break;
             scheduler_yield();
         }
-        if (!_child) { current_process->state = PROC_RUNNING; break; }
+        current_process->state = PROC_RUNNING;
+        if (!_child) break;
 
         if (exit_code_p) *exit_code_p = _child->exit_code;
-        _child->state = PROC_UNUSED;   /* reap: free the slot */
+        process_reap(_child);   /* frees the slot AND its address space */
         ret = 0;
 #else
         ret = (uint32_t)-1;
@@ -556,7 +566,8 @@ void syscall_handler(syscall_regs_t *regs)
 
         uint32_t _entry = elf_load_into(path, child_pd, child_vmas);
         if (!_entry) {
-            pmm_free_page(child_pd);
+            /* elf_load_into may have mapped some segments before failing. */
+            paging_destroy_address_space(child_pd);
             ret = (uint32_t)-1;
             break;
         }
@@ -565,7 +576,7 @@ void syscall_handler(syscall_regs_t *regs)
         process_t *_child = process_create(path, _entry,
                                            (uint32_t)(uintptr_t)child_pd);
         if (!_child) {
-            pmm_free_page(child_pd);
+            paging_destroy_address_space(child_pd);
             ret = (uint32_t)-1;
             break;
         }
@@ -1458,9 +1469,12 @@ void syscall_handler(syscall_regs_t *regs)
         for (uint32_t i = 0; i < npages; i++) {
             uint32_t phys = vbe_shadow_page_phys(i);
             if (!phys) { ret = (uint32_t)-1; break; }
+            /* PAGE_NOFREE: the shadow buffer is kernel memory; tearing down
+             * the WM's address space must not free it (REVIEW.md C). */
             paging_map_page_alloc_into(pd, GFX_MAP_UADDR + i * PAGE_SIZE,
                                        phys,
-                                       PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+                                       PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER |
+                                       PAGE_NOFREE);
         }
         /* Full TLB flush to make the new user mappings visible immediately. */
         paging_switch(current_process->cr3);
@@ -1720,6 +1734,18 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
         break;
     }
+
+    /* ------------------------------------------------------------------------
+     * SYS_MEMINFO (53) -- number of free physical pages.  No arguments.
+     * Lets user space (ktest) check that exit/wait really return memory.
+     * ------------------------------------------------------------------------ */
+    case SYS_MEMINFO:
+#ifdef __is_kernel
+        ret = pmm_free_page_count();
+#else
+        ret = 0;
+#endif
+        break;
 
     /* ------------------------------------------------------------------------
      * Unknown syscall

@@ -408,6 +408,226 @@ static void test_no_current_process_gives_parent_zero(void)
     ASSERT_EQ(p->parent_pid, 0u, "orphan parent_pid == 0");
 }
 
+
+/* ===========================================================================
+ * Exit / reap lifecycle (REVIEW.md C, D, E)
+ * =========================================================================== */
+
+static void lifecycle_reset(void)
+{
+    process_init();
+    process_test_released_count = 0;
+    process_test_closed_count   = 0;
+}
+
+/* parent (pid 0) spawns a child with its own address space. */
+static process_t *spawn(process_t *parent, const char *name, uint32_t cr3)
+{
+    current_process = parent;
+    process_t *p = process_create(name, 0x400000, cr3);
+    current_process = NULL;
+    return p;
+}
+
+static void test_reap_releases_address_space(void)
+{
+    lifecycle_reset();
+    process_t *parent = process_create("parent", 0, 0x10000);
+    process_t *child  = spawn(parent, "child", 0x20000);
+
+    process_mark_exited(child, 7);
+    ASSERT_EQ(child->state, PROC_ZOMBIE, "exit -> zombie");
+    ASSERT_EQ(child->exit_code, 7, "exit code recorded");
+    ASSERT_EQ(process_test_released_count, 0,
+              "address space kept until reaped (child may still be on it)");
+
+    process_reap(child);
+    ASSERT_EQ(child->state, PROC_UNUSED, "reap frees the slot");
+    ASSERT_EQ(process_test_released_count, 1, "reap releases the address space");
+    ASSERT_EQ(process_test_released_cr3[0], 0x20000u, "...the child's own one");
+    ASSERT_EQ(child->cr3, 0u, "slot no longer references it");
+
+    process_reap(child);
+    ASSERT_EQ(process_test_released_count, 1, "double reap is a no-op");
+}
+
+static void test_reap_keeps_space_shared_by_threads(void)
+{
+    lifecycle_reset();
+    process_t *leader = process_create("wm", 0, 0x30000);
+    process_t *thread = spawn(leader, "thr", 0x30000);   /* CLONE_VM */
+    thread->thread_group = leader->pid;
+
+    process_mark_exited(thread, 0);
+    process_reap(thread);
+    ASSERT_EQ(process_test_released_count, 0,
+              "a thread's reap must not free the leader's live address space");
+
+    process_t *parent = process_create("sh", 0, 0x40000);
+    leader->parent_pid = parent->pid;
+    process_mark_exited(leader, 0);
+    process_reap(leader);
+    ASSERT_EQ(process_test_released_count, 1, "last user of the space frees it");
+    ASSERT_EQ(process_test_released_cr3[0], 0x30000u, "the shared space");
+}
+
+static void test_exit_closes_owned_fds_only(void)
+{
+    lifecycle_reset();
+    process_t *parent = process_create("wm", 0, 0x10000);
+    process_t *owner  = spawn(parent, "sh1", 0x20000);
+    owner->stdin_fd = 5; owner->stdout_fd = 6; owner->owns_std_fds = 1;
+    process_t *heir   = spawn(parent, "sh2", 0x21000);
+    heir->stdin_fd = 5; heir->stdout_fd = 6; heir->owns_std_fds = 0;
+
+    process_mark_exited(heir, 0);
+    ASSERT_EQ(process_test_closed_count, 0,
+              "an inheriting child must not close its ancestor's pipes");
+    process_mark_exited(owner, 0);
+    ASSERT_EQ(process_test_closed_count, 2, "the owner closes both of its pipe ends");
+    ASSERT_EQ(process_test_closed_fds[0], 5, "stdin pipe closed");
+    ASSERT_EQ(process_test_closed_fds[1], 6, "stdout pipe closed");
+    ASSERT_EQ(owner->stdin_fd, -1, "fd overrides cleared");
+    ASSERT_EQ(owner->owns_std_fds, 0, "ownership cleared");
+}
+
+static void test_exit_wakes_blocked_parent(void)
+{
+    lifecycle_reset();
+    process_t *parent = process_create("sh", 0, 0x10000);
+    process_t *child  = spawn(parent, "c", 0x20000);
+    parent->state = PROC_BLOCKED;                 /* sleeping in wait() */
+    process_mark_exited(child, 0);
+    ASSERT_EQ(parent->state, PROC_READY, "a blocked parent is woken");
+}
+
+static void test_exit_orphans_and_reaps_children(void)
+{
+    lifecycle_reset();
+    process_t *gp     = process_create("init", 0, 0x10000);
+    process_t *parent = spawn(gp, "p", 0x20000);
+    process_t *live   = spawn(parent, "live", 0x30000);
+    process_t *zomb   = spawn(parent, "zomb", 0x40000);
+    process_mark_exited(zomb, 3);                 /* parent never waited */
+
+    process_mark_exited(parent, 0);
+    ASSERT_EQ(zomb->state, PROC_UNUSED,
+              "a dead parent's zombie child is reaped at once");
+    ASSERT_EQ(process_test_released_count, 1, "...and its memory released");
+    ASSERT_EQ(process_test_released_cr3[0], 0x40000u, "the zombie's space");
+    ASSERT_EQ(live->parent_pid, PROC_NO_PARENT, "a live child is orphaned");
+    ASSERT_EQ(live->state, PROC_READY, "the orphan keeps running");
+
+    /* The orphan exits later: nobody will wait(), so the next slot
+     * allocation sweeps it up instead of leaking it forever. */
+    process_mark_exited(live, 0);
+    ASSERT_EQ(live->state, PROC_ZOMBIE, "orphan exits -> zombie");
+    process_t *next = process_create("next", 0, 0x50000);
+    ASSERT_EQ(process_test_released_count, 2,
+              "orphaned zombie reaped by the sweep, address space released");
+    ASSERT_EQ(process_test_released_cr3[1], 0x30000u, "the orphan's space");
+    ASSERT(next == live || next == zomb || next == parent,
+           "a freed slot is reused rather than growing the table");
+}
+
+static void test_orphan_sweep_spares_waitable_zombies(void)
+{
+    lifecycle_reset();
+    process_t *parent = process_create("sh", 0, 0x10000);
+    process_t *child  = spawn(parent, "c", 0x20000);
+    process_mark_exited(child, 9);
+    process_reap_orphans();
+    ASSERT_EQ(child->state, PROC_ZOMBIE,
+              "a zombie whose parent lives waits for that parent's wait()");
+    ASSERT_EQ(child->exit_code, 9, "exit status preserved for wait()");
+    ASSERT_EQ(process_test_released_count, 0, "nothing released");
+}
+
+static void test_orphan_sweep_skips_current(void)
+{
+    lifecycle_reset();
+    process_t *p = process_create("p", 0, 0x10000);
+    p->parent_pid = PROC_NO_PARENT;
+    p->state = PROC_ZOMBIE;
+    current_process = p;          /* still executing its final yield */
+    process_reap_orphans();
+    ASSERT_EQ(p->state, PROC_ZOMBIE,
+              "never reap the running process (its CR3 is loaded)");
+    current_process = NULL;
+    process_reap_orphans();
+    ASSERT_EQ(p->state, PROC_UNUSED, "reaped once it is switched away");
+}
+
+static void test_waitable_by(void)
+{
+    lifecycle_reset();
+    process_create("shell", 0, 0x5000);  /* pid 0: thread_group 0 means
+                                          * "leader", so pid 0 can't lead one */
+    process_t *parent  = process_create("wm", 0, 0x10000);
+    process_t *child   = spawn(parent, "sh", 0x20000);
+    process_t *other   = process_create("other", 0, 0x30000);
+    process_t *sibling = spawn(parent, "thr", 0x10000);
+    sibling->thread_group = parent->pid;
+
+    ASSERT(process_is_waitable_by(child, parent), "the parent may wait");
+    ASSERT(!process_is_waitable_by(child, other),
+           "an unrelated process may not steal the exit status");
+    ASSERT(process_is_waitable_by(child, sibling),
+           "a thread of the parent may (pthread_join from a sibling)");
+    ASSERT(!process_is_waitable_by(child, child), "not yourself");
+    ASSERT(!process_is_waitable_by(NULL, parent), "NULL child");
+}
+
+
+/* ===========================================================================
+ * Kernel-stack guard (REVIEW.md G)
+ * =========================================================================== */
+
+static void test_stack_canary_set_on_create(void)
+{
+    process_init();
+    process_t *p = process_create("a", 0, 0);
+    ASSERT(process_stack_intact(p), "a fresh process has an intact canary");
+    ASSERT(!process_stack_intact(NULL), "NULL is never intact");
+}
+
+static void test_stack_overflow_detected(void)
+{
+    process_init();
+    process_t *p = process_create("a", 0, 0);
+    /* An overflow writes the lowest bytes of the stack last of all. */
+    p->kernel_stack[1] = 0x00;
+    ASSERT(!process_stack_intact(p), "a clobbered canary is detected");
+}
+
+static void test_stack_high_water(void)
+{
+    process_init();
+    process_t *p = process_create("a", 0, 0);
+    /* process_create pre-pushes a 5-word context_switch frame at the top
+     * (all zeros on the host). */
+    ASSERT_EQ(process_stack_used(p), 5u * 4u,
+              "only the initial context_switch frame is in use");
+    /* Simulate a deep call chain touching byte 1000 from the top. */
+    p->kernel_stack[PROCESS_KSTACK_SIZE - 1000] = 0x11;
+    ASSERT_EQ(process_stack_used(p), 1000u, "high-water mark tracks the deepest byte");
+    ASSERT(process_stack_intact(p), "deep but in-bounds use keeps the canary");
+    ASSERT_EQ(process_stack_used(NULL), 0u, "NULL -> 0");
+}
+
+static void test_stack_reset_on_reuse(void)
+{
+    process_init();
+    process_t *p = process_create("a", 0, 0);
+    p->kernel_stack[100] = 0x22;              /* deep use ... */
+    memset(p->kernel_stack, 0, 4);            /* ... and a smashed canary */
+    p->state = PROC_UNUSED;
+    process_t *q = process_create("b", 0, 0);
+    ASSERT(q == p, "slot reused");
+    ASSERT(process_stack_intact(q), "a reused slot gets a fresh canary");
+    ASSERT_EQ(process_stack_used(q), 5u * 4u, "and a fresh high-water mark");
+}
+
 /* ===========================================================================
  * main
  * =========================================================================== */
@@ -452,6 +672,22 @@ int main(void)
     /* Parent/child */
     RUN_SUITE(test_child_records_parent_pid);
     RUN_SUITE(test_no_current_process_gives_parent_zero);
+
+    /* Exit / reap lifecycle (REVIEW.md C, D, E) */
+    RUN_SUITE(test_reap_releases_address_space);
+    RUN_SUITE(test_reap_keeps_space_shared_by_threads);
+    RUN_SUITE(test_exit_closes_owned_fds_only);
+    RUN_SUITE(test_exit_wakes_blocked_parent);
+    RUN_SUITE(test_exit_orphans_and_reaps_children);
+    RUN_SUITE(test_orphan_sweep_spares_waitable_zombies);
+    RUN_SUITE(test_orphan_sweep_skips_current);
+    RUN_SUITE(test_waitable_by);
+
+    /* Kernel-stack guard (REVIEW.md G) */
+    RUN_SUITE(test_stack_canary_set_on_create);
+    RUN_SUITE(test_stack_overflow_detected);
+    RUN_SUITE(test_stack_high_water);
+    RUN_SUITE(test_stack_reset_on_reuse);
 
     TEST_SUMMARY();
 }

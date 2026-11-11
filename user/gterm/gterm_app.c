@@ -89,22 +89,50 @@ static void gterm_event(window_t *win, const wm_event_t *ev)
         write(st->to_shell[1], &ev->ascii, 1);
 }
 
+static void reap_queue_add(int pid);
+
 static void gterm_destroy(window_t *win)
 {
     gterm_state_t *st = (gterm_state_t *)win->app_state;
     if (st) {
-        /* Close our pipe ends.  The shell child will see EOF on its stdin and
-         * a broken pipe on its stdout, and exit; its own fds are closed when it
-         * is reaped (SYS_EXIT close-on-exit).  We do not wait() for it here --
-         * the WM loop must not block. */
-        close(st->to_shell[0]);
+        /* Close only OUR pipe ends.  to_shell[0] / from_shell[1] were handed
+         * to the shell by exec_redir -- it owns them and the kernel closes
+         * them when it exits.  Closing them here too was a double close of a
+         * global fd slot that another process might already have reused.
+         * Closing the write end gives the shell EOF on stdin, so it exits. */
         close(st->to_shell[1]);
         close(st->from_shell[0]);
-        close(st->from_shell[1]);
+        /* The WM loop must not block in wait(): queue the pid and let
+         * gterm_reap_shells() collect it from the loop (REVIEW.md E). */
+        if (st->shell_pid > 0) reap_queue_add(st->shell_pid);
         free(st);
         win->app_state = (void *)0;
     }
     if (win->backbuf) { canvas_free(win->backbuf); win->backbuf = (canvas_t *)0; }
+}
+
+/* ── Reaping closed terminals' shells (REVIEW.md E) ─────────────────────────
+ * The shell exits shortly after its window closes (EOF on stdin).  The WM is
+ * its parent and must reap it, or its process slot and memory are held until
+ * the WM itself exits.  The loop calls gterm_reap_shells() every iteration;
+ * it never blocks. */
+#define REAP_MAX 16
+static int reap_pids[REAP_MAX];
+static int reap_count;
+
+static void reap_queue_add(int pid)
+{
+    if (reap_count < REAP_MAX) reap_pids[reap_count++] = pid;
+}
+
+void gterm_reap_shells(void)
+{
+    for (int i = 0; i < reap_count; ) {
+        if (wait_nohang(reap_pids[i], (int *)0) != 1)  /* reaped, or gone */
+            reap_pids[i] = reap_pids[--reap_count];
+        else
+            i++;
+    }
 }
 
 /* ── Launcher entry point ────────────────────────────────────────────────── */

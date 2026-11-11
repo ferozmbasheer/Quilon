@@ -149,8 +149,30 @@ wait:
     movl  $7,       %eax    /* SYS_WAIT */
     movl  8(%esp),  %ebx    /* pid */
     movl  12(%esp), %ecx    /* exit_code pointer */
+    xorl  %edx,     %edx    /* options = 0: block (EDX used to be garbage) */
     int   $0x80
     popl  %ebx
+    ret
+
+/* -- wait_nohang(pid, *exit_code) -> 0 reaped / 1 still running / -1 ----- */
+/* SYS_WAIT with WAIT_NOHANG: never blocks (REVIEW.md E -- the WM reaps the  */
+/* shells of closed terminals from its event loop).                           */
+.global wait_nohang
+wait_nohang:
+    pushl %ebx
+    movl  $7,       %eax    /* SYS_WAIT */
+    movl  8(%esp),  %ebx    /* pid */
+    movl  12(%esp), %ecx    /* exit_code pointer */
+    movl  $1,       %edx    /* WAIT_NOHANG */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* -- free_pages() -> number of free physical pages (SYS_MEMINFO, 53) ------ */
+.global free_pages
+free_pages:
+    movl  $53, %eax
+    int   $0x80
     ret
 
 /* -- readdir(unsigned int index, dirent_t *out) -> int ----------------- */

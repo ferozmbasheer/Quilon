@@ -27,6 +27,18 @@ Getting here took a long stabilization arc after 14.4. The headline outcome:
 loop**, and a series of kernel concurrency/memory bugs were fixed. Don't
 reintroduce the threaded model.
 
+## Stability review (2026-11) — read REVIEW.md
+
+Before starting §17, a review ([REVIEW.md](REVIEW.md)) found and fixed real
+kernel bugs: ring-0 page faults on user buffers panicked, CR0.WP was off,
+exited processes leaked their address space, every exec'd process could
+read/write kernel memory, the VFS had no lock, wait() could hang, and closed
+terminals left shells spinning. Each fix has host tests plus an in-OS check:
+**`make ktest`** (user/ktest, typed into the VM via the QEMU monitor) and
+**`make wmtest`** (mouse-driven desktop test). Run both on kernel changes, on
+both images (`SMOKE_DISK=ext2.img make ktest`). Still open in REVIEW.md:
+per-process fd tables + cwd, errno, boot-demo gating, single TCP connection.
+
 ## Next milestone
 
 **Section 16 — More device drivers: 16.1 ATA Bus Master DMA and 16.2 ext2 are

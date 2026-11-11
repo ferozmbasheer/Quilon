@@ -11,6 +11,8 @@ make          # build kernel + libc (needs i686-elf cross toolchain)
 make test     # host unit-test suite (host gcc only) — run on every change
 make run      # boot under QEMU (GUI)
 make smoke    # headless QEMU boot smoke test
+make ktest    # headless in-OS kernel regression tests (user/ktest) — run on kernel changes
+make wmtest   # headless desktop test: open/close terminals via the mouse
 make disk     # rebuild the FAT16 disk.img
 make ext2disk # rebuild ext2.img (needs host mke2fs)
 make clean

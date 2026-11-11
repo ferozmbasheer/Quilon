@@ -10,6 +10,8 @@
 #   make disk       build user programs into the FAT16 disk image (disk.img)
 #   make run        build everything and boot under QEMU (GUI)
 #   make smoke      headless QEMU boot smoke test (see tools/smoke_test.sh)
+#   make ktest      headless in-OS kernel regression tests (user/ktest)
+#   make wmtest     headless desktop test: open/close a terminal 3x via the mouse
 #   make test       run the host unit-test suite (uses host gcc, no toolchain)
 #   make clean      remove build artifacts
 #
@@ -18,7 +20,7 @@
 
 HOST ?= $(shell ./default-host.sh)
 
-.PHONY: all build headers iso disk ext2disk run smoke test clean check-toolchain
+.PHONY: all build headers iso disk ext2disk run smoke ktest wmtest test clean check-toolchain
 
 all: build
 
@@ -54,6 +56,22 @@ run: check-toolchain
 
 smoke: check-toolchain
 	@./tools/smoke_test.sh
+
+# In-OS kernel regression tests (user/ktest, REVIEW.md): boots headless, types
+# `exec ktest.elf` into the ring-3 shell and requires "KTEST: ALL PASS".
+ktest: check-toolchain
+	@SMOKE_KEYS='exec ktest.elf\n' SMOKE_SENTINEL='KTEST: ALL PASS' \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-180} ./tools/smoke_test.sh
+
+# Desktop regression (REVIEW.md E): startx, then open and close a Terminal three
+# times with the mouse (taskbar button at (55,786), close box at (670,70) on the
+# 1280x800 screen).  Each closed terminal's shell must see EOF and exit -- it
+# used to spin forever as an unreaped orphan.
+WM_CYCLE = {mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:670,70}{click}{wait:4}
+wmtest: check-toolchain
+	@SMOKE_KEYS='startx\n{until:[wm] screen}{wait:2}$(WM_CYCLE)$(WM_CYCLE)$(WM_CYCLE)' \
+	    SMOKE_SENTINEL='exited (code 0)' SMOKE_SENTINEL_COUNT=3 \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
 
 # Host unit tests — deliberately NOT gated on the cross toolchain.
 test:

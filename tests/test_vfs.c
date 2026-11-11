@@ -901,6 +901,126 @@ static void test_getcwd_zero_len(void)
  * main
  * =========================================================================== */
 
+
+/* ===========================================================================
+ * VFS lock (REVIEW.md F)
+ *
+ * A spy driver records whether the VFS lock was held during every callback:
+ * all driver work (and the fd-slot claim around open) must run under it.
+ * After every operation -- success or failure -- the lock must be released,
+ * and it must never have been taken while already held (contentions == 0;
+ * in the single-threaded host build that can only mean nested/unbalanced use).
+ * =========================================================================== */
+
+static int spy_calls, spy_unlocked_calls;
+static void spy_note(void)
+{
+    spy_calls++;
+    if (!vfs_lock_is_held()) spy_unlocked_calls++;
+}
+static int spy_open(void *c, const char *p, vfs_node_t *o)
+{ spy_note(); return mock_open(c, p, o); }
+static int spy_read(void *c, vfs_node_t *n, uint32_t off, uint32_t sz, uint8_t *b)
+{ spy_note(); return mock_read(c, n, off, sz, b); }
+static int spy_write(void *c, vfs_node_t *n, uint32_t off, uint32_t sz, const uint8_t *b)
+{ spy_note(); return mock_write_fn(c, n, off, sz, b); }
+static int spy_readdir(void *c, const char *p, uint32_t i, vfs_dirent_t *o)
+{ spy_note(); return mock_readdir(c, p, i, o); }
+static void spy_close(void *c, vfs_node_t *n) { spy_note(); mock_close(c, n); }
+static int spy_create(void *c, const char *p) { spy_note(); return mock_create_fn(c, p); }
+static int spy_remove(void *c, const char *p) { spy_note(); return mock_remove_fn(c, p); }
+static int spy_stat(void *c, const char *p, vfs_stat_t *o)
+{ spy_note(); return mock_stat_fn(c, p, o); }
+static int spy_mkdir(void *c, const char *p) { spy_note(); return mock_mkdir_fn(c, p); }
+static int spy_rename(void *c, const char *a, const char *b)
+{ spy_note(); return mock_rename_fn(c, a, b); }
+static int spy_fsinfo(void *c, vfs_fsinfo_t *o)
+{ (void)c; spy_note(); memset(o, 0, sizeof *o); return 0; }
+
+static const vfs_ops_t spy_ops = {
+    .open = spy_open, .read = spy_read, .write = spy_write,
+    .readdir = spy_readdir, .close = spy_close, .create = spy_create,
+    .remove = spy_remove, .stat = spy_stat, .mkdir = spy_mkdir,
+    .rename = spy_rename, .fsinfo = spy_fsinfo,
+};
+
+#define LOCK_RELEASED(msg) \
+    ASSERT(!vfs_lock_is_held() && vfs_lock_contentions() == 0, msg)
+
+static void test_lock_held_during_driver_calls(void)
+{
+    vfs_mount(&spy_ops, NULL);
+    vfs_chdir("/");
+    spy_calls = spy_unlocked_calls = 0;
+    mock_wbuf_len = 0;
+
+    int fd = vfs_open("README.TXT");                 LOCK_RELEASED("open");
+    char buf[8];
+    vfs_read(fd, buf, sizeof buf);                    LOCK_RELEASED("read");
+    vfs_write(fd, "x", 1);                            LOCK_RELEASED("write");
+    vfs_lseek(fd, 0, VFS_SEEK_SET);                   LOCK_RELEASED("lseek");
+    vfs_readable(fd);                                 LOCK_RELEASED("readable");
+    vfs_close(fd);                                    LOCK_RELEASED("close");
+    vfs_dirent_t de; vfs_readdir(0, &de);             LOCK_RELEASED("readdir");
+    vfs_create("NEW.TXT");                            LOCK_RELEASED("create");
+    vfs_remove("NOTES.TXT");                          LOCK_RELEASED("remove");
+    vfs_stat_t st; vfs_stat("README.TXT", &st);       LOCK_RELEASED("stat");
+    vfs_mkdir("D");                                   LOCK_RELEASED("mkdir");
+    vfs_rename("README.TXT", "R.TXT");                LOCK_RELEASED("rename");
+    vfs_fsinfo_t fi; vfs_fsinfo(&fi);                 LOCK_RELEASED("fsinfo");
+    vfs_chdir("TESTDIR"); vfs_chdir("/");             LOCK_RELEASED("chdir");
+    char cwd[16]; vfs_getcwd(cwd, sizeof cwd);        LOCK_RELEASED("getcwd");
+
+    ASSERT_EQ(spy_calls, 12, "the 12 driver-backed operations reached the driver");
+    ASSERT_EQ(spy_unlocked_calls, 0,
+              "no driver callback ran without the VFS lock held");
+}
+
+static void test_lock_released_on_error_paths(void)
+{
+    vfs_mount(&spy_ops, NULL);
+    vfs_chdir("/");
+    ASSERT_EQ(vfs_open("MISSING.TXT"), -1, "open of a missing file fails");
+    LOCK_RELEASED("failed open releases the lock");
+    char buf[4];
+    ASSERT_EQ(vfs_read(999, buf, 4), -1, "read of a bad fd fails");
+    LOCK_RELEASED("failed read releases the lock");
+    ASSERT_EQ(vfs_close(999), -1, "close of a bad fd fails");
+    LOCK_RELEASED("failed close releases the lock");
+    ASSERT_EQ(vfs_lseek(999, 0, VFS_SEEK_SET), -1, "lseek of a bad fd fails");
+    LOCK_RELEASED("failed lseek releases the lock");
+    ASSERT_EQ(vfs_chdir("NOPE"), -1, "chdir to a missing dir fails");
+    LOCK_RELEASED("failed chdir releases the lock");
+    ASSERT_EQ(vfs_chdir("README.TXT"), -1, "chdir to a file fails");
+    LOCK_RELEASED("chdir-to-file releases the lock");
+    vfs_stat_t st;
+    ASSERT_EQ(vfs_stat("NOPE", &st), -1, "stat of a missing path fails");
+    LOCK_RELEASED("failed stat releases the lock");
+    ASSERT_EQ(vfs_rename("NOPE", "X"), -1, "rename of a missing file fails");
+    LOCK_RELEASED("failed rename releases the lock");
+
+    /* Fill the fd table: the full-table failure must also unlock. */
+    int fds[VFS_MAX_FDS], n = 0;
+    for (; n < VFS_MAX_FDS; n++)
+        if ((fds[n] = vfs_open("README.TXT")) < 0) break;
+    ASSERT_EQ(vfs_open("README.TXT"), -1, "open fails when the table is full");
+    LOCK_RELEASED("table-full open releases the lock");
+    for (int i = 0; i < n; i++) vfs_close(fds[i]);
+    LOCK_RELEASED("closing everything leaves the lock free");
+}
+
+static void test_open_fds_distinct_under_lock(void)
+{
+    vfs_mount(&spy_ops, NULL);
+    vfs_chdir("/");
+    int a = vfs_open("README.TXT");
+    int b = vfs_open("NOTES.TXT");
+    ASSERT(a >= VFS_FD_BASE && b >= VFS_FD_BASE, "both opens succeed");
+    ASSERT_NE(a, b, "concurrent-style opens get distinct fd slots");
+    vfs_close(a); vfs_close(b);
+    LOCK_RELEASED("lock free afterwards");
+}
+
 int main(void)
 {
     /* vfs_mounted / vfs_mount */
@@ -989,6 +1109,11 @@ int main(void)
     RUN_SUITE(test_chdir_to_unknown_path_fails);
     RUN_SUITE(test_getcwd_null_buf);
     RUN_SUITE(test_getcwd_zero_len);
+
+    /* VFS lock (REVIEW.md F) */
+    RUN_SUITE(test_lock_held_during_driver_calls);
+    RUN_SUITE(test_lock_released_on_error_paths);
+    RUN_SUITE(test_open_fds_distinct_under_lock);
 
     TEST_SUMMARY();
 }

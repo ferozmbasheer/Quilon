@@ -378,6 +378,98 @@ static void test_range_overflow(void)
               "range_ok: range wrapping the address space rejected");
 }
 
+/* -- Page-fault policy (REVIEW.md A/B) -------------------------------------- */
+
+/* A typical process: read-only text, demand-paged heap, stack. */
+static void pf_setup(vma_t *v)
+{
+    vma_init(v, PROC_VMA_MAX);
+    vma_add(v, PROC_VMA_MAX, 0x00401000u, 0x00403000u, VMA_R | VMA_X);
+    vma_add(v, PROC_VMA_MAX, 0x00800000u, 0x00840000u, VMA_R | VMA_W | VMA_ANON);
+    vma_add(v, PROC_VMA_MAX, 0xBC000000u, 0xC0000000u,
+            VMA_R | VMA_W | VMA_ANON | VMA_STACK);
+}
+
+#define NP_R  0u                                /* not present, read  */
+#define NP_W  PF_ERR_WRITE                      /* not present, write */
+#define P_R   PF_ERR_PRESENT                    /* protection, read   */
+#define P_W   (PF_ERR_PRESENT | PF_ERR_WRITE)   /* protection, write  */
+
+static void test_pf_user_faults(void)
+{
+    vma_t v[PROC_VMA_MAX]; pf_setup(v);
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00810123u, NP_W, 1),
+              PF_ACT_DEMAND, "user: write to untouched heap demand-pages");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00810123u, NP_R, 1),
+              PF_ACT_DEMAND, "user: read of untouched heap demand-pages");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0xBFFFFFF0u, NP_W, 1),
+              PF_ACT_DEMAND, "user: stack growth demand-pages");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00810000u, P_W, 1),
+              PF_ACT_COW, "user: write to present heap page is a CoW candidate");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00900000u, NP_R, 1),
+              PF_ACT_SEGV, "user: access outside every VMA is SIGSEGV");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00000000u, NP_R, 1),
+              PF_ACT_SEGV, "user: NULL dereference is SIGSEGV");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00401000u, P_W, 1),
+              PF_ACT_SEGV, "user: write to present read-only text is SIGSEGV");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00402000u, NP_W, 1),
+              PF_ACT_SEGV, "user: write to unmapped read-only text is SIGSEGV");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0xC0100000u, NP_R, 1),
+              PF_ACT_SEGV, "user: touching a kernel address is SIGSEGV");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00810000u, P_R, 1),
+              PF_ACT_SEGV, "user: read protection fault on present page is SIGSEGV");
+}
+
+/* Item A: a syscall copying into a user buffer on an untouched heap page used
+ * to panic the kernel.  It must now be demand-paged like a user access. */
+static void test_pf_kernel_on_user_buffer(void)
+{
+    vma_t v[PROC_VMA_MAX]; pf_setup(v);
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00811000u, NP_W, 0),
+              PF_ACT_DEMAND, "kernel: read() into untouched heap demand-pages");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00401000u, NP_R, 0),
+              PF_ACT_DEMAND, "kernel: reading user text/BSS demand-pages");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0xBFFFF000u, NP_W, 0),
+              PF_ACT_DEMAND, "kernel: copyout to an untouched stack page demand-pages");
+}
+
+/* Item B: with CR0.WP, a kernel write into a CoW page shared after fork
+ * faults; it must be resolved by CoW rather than panic. */
+static void test_pf_kernel_cow(void)
+{
+    vma_t v[PROC_VMA_MAX]; pf_setup(v);
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00810000u, P_W, 0),
+              PF_ACT_COW, "kernel: write to shared heap page resolves CoW");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0xBFFFE000u, P_W, 0),
+              PF_ACT_COW, "kernel: write to shared stack page resolves CoW");
+}
+
+static void test_pf_kernel_bugs_still_panic(void)
+{
+    vma_t v[PROC_VMA_MAX]; pf_setup(v);
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00000000u, NP_R, 0),
+              PF_ACT_PANIC, "kernel: NULL dereference still panics");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00900000u, NP_W, 0),
+              PF_ACT_PANIC, "kernel: user address outside every VMA panics");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0xC0500000u, NP_W, 0),
+              PF_ACT_PANIC, "kernel: fault on a kernel address panics");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0xFFFFF000u, P_W, 0),
+              PF_ACT_PANIC, "kernel: top-of-memory fault panics");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00401000u, P_W, 0),
+              PF_ACT_PANIC, "kernel: write into read-only user text panics");
+    ASSERT_EQ(pf_unresolved(1), PF_ACT_SEGV, "unresolved user fault -> SIGSEGV");
+    ASSERT_EQ(pf_unresolved(0), PF_ACT_PANIC, "unresolved kernel fault -> panic");
+}
+
+static void test_pf_empty_table(void)
+{
+    vma_t v[PROC_VMA_MAX]; vma_init(v, PROC_VMA_MAX);
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00800000u, NP_W, 1),
+              PF_ACT_SEGV, "no VMAs: user fault is SIGSEGV");
+    ASSERT_EQ(vma_fault_action(v, PROC_VMA_MAX, 0x00800000u, NP_W, 0),
+              PF_ACT_PANIC, "no VMAs: kernel fault panics");
+}
+
 /* -- main ------------------------------------------------------------------- */
 
 int main(void)
@@ -401,6 +493,11 @@ int main(void)
     RUN_SUITE(test_range_permissions);
     RUN_SUITE(test_range_straddle);
     RUN_SUITE(test_range_overflow);
+    RUN_SUITE(test_pf_user_faults);
+    RUN_SUITE(test_pf_kernel_on_user_buffer);
+    RUN_SUITE(test_pf_kernel_cow);
+    RUN_SUITE(test_pf_kernel_bugs_still_panic);
+    RUN_SUITE(test_pf_empty_table);
     TEST_SUMMARY();
     return (fw_failed > 0) ? 1 : 0;
 }

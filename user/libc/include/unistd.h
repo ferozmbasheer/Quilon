@@ -93,6 +93,11 @@ int  exec(const char *path);
 int  exec_redir(const char *path, int in_fd, int out_fd);
 int  fork(void);
 int  wait(int pid, int *exit_code);
+/* Non-blocking wait: 0 = reaped (exit code stored), 1 = still running,
+ * -1 = no such child.  Only the parent (or its threads) may reap a child. */
+int  wait_nohang(int pid, int *exit_code);
+/* Free physical pages right now (SYS_MEMINFO) -- used by ktest leak checks. */
+unsigned int free_pages(void);
 /* clone(fn, stack, flags) -- create a kernel thread (SYS_CLONE).
  * fn    : user-space function where the thread begins executing.
  * stack : stack pointer (caller must allocate and set up the stack).

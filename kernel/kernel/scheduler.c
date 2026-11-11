@@ -3,6 +3,7 @@
 #include <kernel/scheduler.h>
 
 #ifdef __is_kernel
+#include <stdio.h>
 #include <kernel/process.h>
 #include <kernel/paging.h>
 #include <kernel/gdt.h>
@@ -102,6 +103,20 @@ uint32_t scheduler_task_count(void)
  * In the host (test) build, falls back to the task_t round-robin table
  * without any hardware-specific code so unit tests remain runnable.
  */
+#ifdef __is_kernel
+/* REVIEW.md G: a process overran its kernel stack into its own PCB.  Nothing
+ * after this point can be trusted (cr3, state, signal handlers may all be
+ * garbage), so stop with a message that names the culprit. */
+static void scheduler_check_stack(process_t *p)
+{
+    if (process_stack_intact(p)) return;
+    asm volatile("cli");
+    printf("\r\n--- KERNEL PANIC ---\r\nkernel stack overflow: pid %d\r\n",
+           (int)p->pid);
+    for (;;) asm volatile("hlt");
+}
+#endif
+
 void scheduler_tick(void)
 {
 #ifdef __is_kernel
@@ -109,6 +124,7 @@ void scheduler_tick(void)
 
     process_t *next = process_pick_next();
     if (!next) return;   /* no other runnable process */
+    scheduler_check_stack(current_process);
 
     /* Switch address space if the new process has a different PD. */
     if (next->cr3 && next->cr3 != current_process->cr3)
@@ -160,6 +176,7 @@ void scheduler_yield(void)
 
     process_t *next = process_pick_next();
     if (!next || next == current_process) return;
+    scheduler_check_stack(current_process);
 
     if (next->cr3 && next->cr3 != current_process->cr3)
         paging_switch(next->cr3);
@@ -170,8 +187,13 @@ void scheduler_yield(void)
 
     process_t *prev = current_process;
     current_process = next;
-    /* NOTE: do NOT change prev->state here.  Callers (SYS_EXIT, SYS_WAIT)
-     * have already set it to PROC_ZOMBIE or PROC_BLOCKED.               */
+    /* Callers that are going to sleep or die have already set prev->state
+     * (PROC_BLOCKED / PROC_ZOMBIE) -- leave those alone.  But a caller still
+     * marked RUNNING is just yielding: it must stay schedulable.  Leaving it
+     * RUNNING while switched out stranded it forever, since
+     * process_pick_next() only picks READY processes and a wake only touches
+     * BLOCKED ones (the SYS_WAIT lost-wakeup hang). */
+    if (prev->state == PROC_RUNNING) prev->state = PROC_READY;
     next->state = PROC_RUNNING;
 
     context_switch(&prev->kernel_esp, next->kernel_esp);

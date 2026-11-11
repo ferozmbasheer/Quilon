@@ -40,7 +40,10 @@
  * Reads characters one-at-a-time via SYS_READ(FD_STDIN) until Enter
  * (\r or \n) is received or the buffer is full.  Supports backspace.
  *
- * Returns the number of characters in buf (not counting the NUL terminator).
+ * Returns the number of characters in buf (not counting the NUL terminator),
+ * or -1 at end of input: stdin is a pipe whose writer closed (the terminal
+ * window was closed) or a read error.  Retrying would spin forever -- an
+ * orphaned shell burning 100% CPU after every closed terminal.
  */
 static int readline(char *buf, int size)
 {
@@ -49,7 +52,7 @@ static int readline(char *buf, int size)
 
     while (i < size - 1) {
         if (read(STDIN_FILENO, &c, 1) <= 0)
-            continue;
+            return -1;
 
         if (c == '\r' || c == '\n') {
             write(STDOUT_FILENO, "\r\n", 2);
@@ -1390,9 +1393,10 @@ int main(void)
 
     for (;;) {
         write(STDOUT_FILENO, "quilon> ", 8);
-        readline(line, (int)sizeof(line));
+        if (readline(line, (int)sizeof(line)) < 0)
+            break;                      /* EOF: our terminal went away */
         dispatch(line);
     }
 
-    return 0;  /* unreachable */
+    return 0;
 }

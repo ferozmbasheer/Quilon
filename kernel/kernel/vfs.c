@@ -20,10 +20,65 @@
  */
 
 #include <kernel/vfs.h>
+#include <kernel/spinlock.h>
 #ifdef __is_kernel
 #include <kernel/pipe.h>
 #include <kernel/net.h>
+#include <kernel/process.h>
+#include <kernel/scheduler.h>
 #endif
+
+/* -- VFS lock (REVIEW.md F) -------------------------------------------------
+ *
+ * One lock serialises the fd table, the working directory and every call
+ * into the mounted driver.  Syscalls are preemptible (int $0x80 is a trap
+ * gate and IRQ0 switches tasks even in ring 0), and before this lock:
+ *   - two concurrent vfs_open()s could claim the same fd slot -- the slot is
+ *     only marked in_use after the driver's directory lookup (several disk
+ *     reads), so both processes ended up sharing one fd;
+ *   - FAT16 / ext2 keep static scratch buffers (sector_buf, meta_buf, ...)
+ *     that a preempted read could find overwritten by another process.
+ * ktest's concurrent-read check saw wrong data in ~1 of 200 reads.
+ *
+ * It is NOT held across pipe or socket I/O: those block (waitq / network
+ * polling), and holding the lock there would stall every file operation.
+ *
+ * Waiting: only one CPU schedules, so spinning while the holder is preempted
+ * would just burn the waiter's slice.  A waiter marks itself READY and
+ * yields, which runs the holder.  Not IRQ-safe by design: the VFS is never
+ * entered from interrupt context, and a ring-0 page fault taken inside a
+ * driver (copying into a user buffer) does not touch the VFS.
+ */
+static spinlock_t vfs_lk = SPINLOCK_INIT;
+static int        vfs_lock_contended;   /* host tests: nested/unbalanced use */
+
+static void vfs_lock(void)
+{
+    while (!spinlock_trylock(&vfs_lk)) {
+#ifdef __is_kernel
+        if (current_process) {
+            current_process->state = PROC_READY;
+            scheduler_yield();
+            current_process->state = PROC_RUNNING;
+        } else {
+            asm volatile("pause");
+        }
+#else
+        /* Single-threaded host tests can only get here by taking the lock
+         * twice (or never releasing it) -- record it instead of hanging. */
+        vfs_lock_contended++;
+        spinlock_release(&vfs_lk);
+#endif
+    }
+}
+
+static void vfs_unlock(void) { spinlock_release(&vfs_lk); }
+
+int vfs_lock_is_held(void)      { return spinlock_is_locked(&vfs_lk); }
+int vfs_lock_contentions(void)  { return vfs_lock_contended; }
+
+/* Find a free fd slot; caller holds the VFS lock.  -1 if the table is full. */
+static int fd_alloc_locked(void);
 
 /* -- Mounted filesystem --------------------------------------------------- */
 
@@ -128,13 +183,22 @@ static int fd_to_idx(int fd)
 
 /* -- Public API ----------------------------------------------------------- */
 
+static int fd_alloc_locked(void)
+{
+    for (int i = 0; i < VFS_MAX_FDS; i++)
+        if (!fd_table[i].in_use) return i;
+    return -1;
+}
+
 void vfs_mount(const vfs_ops_t *ops, void *ctx)
 {
+    vfs_lock();
     mounted_ops = ops;
     mounted_ctx = ctx;
     /* Close all open fds when a new filesystem is mounted. */
     for (int i = 0; i < VFS_MAX_FDS; i++)
         fd_table[i].in_use = 0;
+    vfs_unlock();
 }
 
 int vfs_mounted(void)
@@ -146,23 +210,22 @@ int vfs_open(const char *path)
 {
     if (!vfs_mounted()) return -1;
 
-    /* Find a free fd slot */
-    int idx = -1;
-    for (int i = 0; i < VFS_MAX_FDS; i++) {
-        if (!fd_table[i].in_use) { idx = i; break; }
-    }
-    if (idx < 0) return -1;   /* fd table full */
-
+    /* Slot choice, driver lookup and install happen under one lock: the slot
+     * used to be claimed only after the (preemptible) lookup, so two opens
+     * could both pick it. */
+    vfs_lock();
+    int idx = fd_alloc_locked();
     char abs[VFS_PATH_MAX];
-    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
-
     vfs_node_t node = {0};   /* zero all fields including is_pipe */
-    if (mounted_ops->open(mounted_ctx, abs, &node) < 0)
+    if (idx < 0 || vfs_normalize(path, abs, sizeof abs) < 0 ||
+        mounted_ops->open(mounted_ctx, abs, &node) < 0) {
+        vfs_unlock();
         return -1;
-
+    }
     node.in_use = 1;
     node.offset = 0;
     fd_table[idx] = node;
+    vfs_unlock();
     return idx + VFS_FD_BASE;
 }
 
@@ -181,8 +244,11 @@ int vfs_readable(int fd)
         return (node->sock_type == SOCK_STREAM) ? net_tcp_readable() : 0;
 #endif
     if (!vfs_mounted()) return 0;
-    if (node->offset >= node->size) return 0;
-    return (int)(node->size - node->offset);
+    vfs_lock();
+    int avail = (node->offset >= node->size) ? 0
+              : (int)(node->size - node->offset);
+    vfs_unlock();
+    return avail;
 }
 
 int vfs_read(int fd, void *buf, uint32_t len)
@@ -205,23 +271,31 @@ int vfs_read(int fd, void *buf, uint32_t len)
 
     if (!vfs_mounted()) return -1;
 
-    /* Clamp len to bytes remaining in the file */
-    if (node->offset >= node->size) return 0;   /* EOF */
-    if (len > node->size - node->offset)
-        len = node->size - node->offset;
-    if (len == 0) return 0;
+    vfs_lock();
+    if (fd_to_idx(fd) != idx) { vfs_unlock(); return -1; }  /* closed meanwhile */
 
-    int n = mounted_ops->read(mounted_ctx, node, node->offset,
-                              len, (uint8_t *)buf);
-    if (n > 0)
-        node->offset += (uint32_t)n;
+    /* Clamp len to bytes remaining in the file */
+    int n = 0;
+    if (node->offset < node->size) {
+        if (len > node->size - node->offset)
+            len = node->size - node->offset;
+        if (len > 0)
+            n = mounted_ops->read(mounted_ctx, node, node->offset,
+                                  len, (uint8_t *)buf);
+        if (n > 0)
+            node->offset += (uint32_t)n;
+    }
+    vfs_unlock();
     return n;
 }
 
 int vfs_close(int fd)
 {
+    /* Locked so a slot is never freed while another process is installing or
+     * using it.  Pipe/socket close does not block, so it can run locked. */
+    vfs_lock();
     int idx = fd_to_idx(fd);
-    if (idx < 0) return -1;
+    if (idx < 0) { vfs_unlock(); return -1; }
 
     vfs_node_t *node = &fd_table[idx];
 
@@ -232,12 +306,14 @@ int vfs_close(int fd)
         else
             pipe_close_read((int)node->pipe_idx);
         node->in_use = 0;
+        vfs_unlock();
         return 0;
     }
     if (node->is_socket) {
         if (node->sock_type == SOCK_STREAM)
             net_tcp_close();
         node->in_use = 0;
+        vfs_unlock();
         return 0;
     }
 #endif
@@ -245,6 +321,7 @@ int vfs_close(int fd)
     if (vfs_mounted())
         mounted_ops->close(mounted_ctx, node);
     node->in_use = 0;
+    vfs_unlock();
     return 0;
 }
 
@@ -273,10 +350,13 @@ int vfs_write(int fd, const void *buf, uint32_t len)
     if (!mounted_ops->write) return -1;   /* driver has no write support */
     if (!buf || len == 0) return 0;
 
+    vfs_lock();
+    if (fd_to_idx(fd) != idx) { vfs_unlock(); return -1; }  /* closed meanwhile */
     int n = mounted_ops->write(mounted_ctx, node, node->offset,
                                len, (const uint8_t *)buf);
     if (n > 0)
         node->offset += (uint32_t)n;
+    vfs_unlock();
     return n;
 }
 
@@ -286,8 +366,11 @@ int vfs_create(const char *path)
     if (!mounted_ops->create) return -1;
 
     char abs[VFS_PATH_MAX];
-    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
-    return mounted_ops->create(mounted_ctx, abs);
+    vfs_lock();
+    int r = (vfs_normalize(path, abs, sizeof abs) < 0) ? -1
+          : mounted_ops->create(mounted_ctx, abs);
+    vfs_unlock();
+    return r;
 }
 
 int vfs_remove(const char *path)
@@ -296,20 +379,36 @@ int vfs_remove(const char *path)
     if (!mounted_ops->remove) return -1;
 
     char abs[VFS_PATH_MAX];
-    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
-    return mounted_ops->remove(mounted_ctx, abs);
+    vfs_lock();
+    int r = (vfs_normalize(path, abs, sizeof abs) < 0) ? -1
+          : mounted_ops->remove(mounted_ctx, abs);
+    vfs_unlock();
+    return r;
 }
 
 int vfs_readdir(uint32_t index, vfs_dirent_t *out)
 {
     if (!vfs_mounted() || !out) return -1;
     if (!mounted_ops->readdir) return -1;
-    return mounted_ops->readdir(mounted_ctx, vfs_cwd, index, out);
+    vfs_lock();
+    int r = mounted_ops->readdir(mounted_ctx, vfs_cwd, index, out);
+    vfs_unlock();
+    return r;
 }
 
 /* -- Section 12.1 -- file metadata & directory ops ------------------------- */
 
+static int vfs_lseek_locked(int fd, int32_t offset, int whence);
+
 int vfs_lseek(int fd, int32_t offset, int whence)
+{
+    vfs_lock();
+    int r = vfs_lseek_locked(fd, offset, whence);
+    vfs_unlock();
+    return r;
+}
+
+static int vfs_lseek_locked(int fd, int32_t offset, int whence)
 {
     int idx = fd_to_idx(fd);
     if (idx < 0) return -1;
@@ -355,8 +454,11 @@ int vfs_stat(const char *path, vfs_stat_t *out)
     if (!mounted_ops->stat) return -1;
 
     char abs[VFS_PATH_MAX];
-    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
-    return mounted_ops->stat(mounted_ctx, abs, out);
+    vfs_lock();
+    int r = (vfs_normalize(path, abs, sizeof abs) < 0) ? -1
+          : mounted_ops->stat(mounted_ctx, abs, out);
+    vfs_unlock();
+    return r;
 }
 
 int vfs_mkdir(const char *path)
@@ -365,8 +467,11 @@ int vfs_mkdir(const char *path)
     if (!mounted_ops->mkdir) return -1;
 
     char abs[VFS_PATH_MAX];
-    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
-    return mounted_ops->mkdir(mounted_ctx, abs);
+    vfs_lock();
+    int r = (vfs_normalize(path, abs, sizeof abs) < 0) ? -1
+          : mounted_ops->mkdir(mounted_ctx, abs);
+    vfs_unlock();
+    return r;
 }
 
 int vfs_rename(const char *oldpath, const char *newpath)
@@ -375,22 +480,37 @@ int vfs_rename(const char *oldpath, const char *newpath)
     if (!mounted_ops->rename) return -1;
 
     char oldabs[VFS_PATH_MAX], newabs[VFS_PATH_MAX];
-    if (vfs_normalize(oldpath, oldabs, sizeof oldabs) < 0) return -1;
-    if (vfs_normalize(newpath, newabs, sizeof newabs) < 0) return -1;
-    return mounted_ops->rename(mounted_ctx, oldabs, newabs);
+    vfs_lock();
+    int r = (vfs_normalize(oldpath, oldabs, sizeof oldabs) < 0 ||
+             vfs_normalize(newpath, newabs, sizeof newabs) < 0) ? -1
+          : mounted_ops->rename(mounted_ctx, oldabs, newabs);
+    vfs_unlock();
+    return r;
 }
 
 int vfs_fsinfo(vfs_fsinfo_t *out)
 {
     if (!vfs_mounted() || !out) return -1;
     if (!mounted_ops->fsinfo) return -1;
-    return mounted_ops->fsinfo(mounted_ctx, out);
+    vfs_lock();
+    int r = mounted_ops->fsinfo(mounted_ctx, out);
+    vfs_unlock();
+    return r;
 }
+
+static int vfs_chdir_locked(const char *path);
 
 int vfs_chdir(const char *path)
 {
     if (!path) return -1;
+    vfs_lock();
+    int r = vfs_chdir_locked(path);
+    vfs_unlock();
+    return r;
+}
 
+static int vfs_chdir_locked(const char *path)
+{
     /* Resolve first, so `cd sub`, `cd ..` and `cd /a/../b` all end up as a
      * clean absolute path -- vfs_normalize relies on vfs_cwd already being
      * one, and getcwd should report one. */
@@ -417,9 +537,11 @@ int vfs_chdir(const char *path)
 int vfs_getcwd(char *buf, uint32_t len)
 {
     if (!buf || len == 0) return -1;
+    vfs_lock();
     uint32_t i = 0;
     while (i < len - 1 && vfs_cwd[i]) { buf[i] = vfs_cwd[i]; i++; }
     buf[i] = '\0';
+    vfs_unlock();
     return 0;
 }
 
@@ -432,6 +554,7 @@ int vfs_pipe(int fds[2])
     if (pipe_idx < 0) return -1;
 
     /* Find two free fd slots. */
+    vfs_lock();
     int rslot = -1, wslot = -1;
     for (int i = 0; i < VFS_MAX_FDS; i++) {
         if (!fd_table[i].in_use) {
@@ -440,6 +563,7 @@ int vfs_pipe(int fds[2])
         }
     }
     if (rslot < 0 || wslot < 0) {
+        vfs_unlock();
         pipe_close_read(pipe_idx);
         pipe_close_write(pipe_idx);
         return -1;
@@ -463,6 +587,7 @@ int vfs_pipe(int fds[2])
     w->inode         = 0; w->size = 0; w->type = 0;
     w->offset        = 0; w->dir_sector = 0; w->dir_entry_idx = 0;
 
+    vfs_unlock();
     fds[0] = rslot + VFS_FD_BASE;   /* read end  */
     fds[1] = wslot + VFS_FD_BASE;   /* write end */
     return 0;
@@ -484,17 +609,16 @@ int vfs_socket(int type)
 #ifdef __is_kernel
     if (type != SOCK_STREAM && type != SOCK_DGRAM) return -1;
 
-    int idx = -1;
-    for (int i = 0; i < VFS_MAX_FDS; i++) {
-        if (!fd_table[i].in_use) { idx = i; break; }
-    }
-    if (idx < 0) return -1;   /* fd table full */
+    vfs_lock();
+    int idx = fd_alloc_locked();
+    if (idx < 0) { vfs_unlock(); return -1; }   /* fd table full */
 
     vfs_node_t node = {0};
     node.in_use    = 1;
     node.is_socket = 1;
     node.sock_type = (uint8_t)type;
     fd_table[idx]  = node;
+    vfs_unlock();
     return idx + VFS_FD_BASE;
 #else
     (void)type;

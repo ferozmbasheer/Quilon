@@ -68,9 +68,10 @@ smp_trampoline_32:
     movl    0x8F00, %eax
     movl    %eax,  %cr3
 
-    /* Enable Paging: set CR0 bit 31 (PG).                                  */
+    /* Enable Paging: set CR0 bit 31 (PG) and bit 16 (WP), matching the BSP
+     * (paging.c) so ring 0 honours read-only/CoW PTEs on every CPU.        */
     movl    %cr0, %eax
-    orl     $0x80000000, %eax
+    orl     $0x80010000, %eax
     movl    %eax, %cr0
 
     /* Load per-AP kernel stack top from 0x8F08 (a kernel-high VA).         */

@@ -84,15 +84,9 @@ void signal_dispatch(void)
         printf("[signal] pid %d terminated by signal %d\r\n",
                (int)current_process->pid, signum);
 
-        current_process->exit_code = -signum;
-        current_process->state     = PROC_ZOMBIE;
-
-        process_t *parent = process_find(current_process->parent_pid);
-        if (parent && parent->state == PROC_BLOCKED)
-            parent->state = PROC_READY;
-
-        scheduler_yield();   /* never returns -- process is ZOMBIE */
-        __builtin_unreachable();
+        /* Same cleanup as SYS_EXIT (owned fds, gfx surface, children) --
+         * a crashing WM used to leave the screen stuck in graphics mode. */
+        process_exit(-signum);
     }
 
     /* User handler -- TODO: build ring-3 signal stack frame.
@@ -102,15 +96,7 @@ void signal_dispatch(void)
            " - applying SIG_DFL\r\n",
            (int)current_process->pid, signum);
 
-    current_process->exit_code = -signum;
-    current_process->state     = PROC_ZOMBIE;
-
-    process_t *parent = process_find(current_process->parent_pid);
-    if (parent && parent->state == PROC_BLOCKED)
-        parent->state = PROC_READY;
-
-    scheduler_yield();
-    __builtin_unreachable();
+    process_exit(-signum);
 
 #endif /* __is_kernel */
 }

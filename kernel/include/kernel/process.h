@@ -19,6 +19,19 @@
 #include <kernel/vma.h>      /* vma_t, PROC_VMA_MAX -- demand paging (9.2) */
 
 #define PROCESS_MAX        16    /* maximum concurrent processes               */
+
+/* Per-process kernel stack (REVIEW.md G).  An overflow grows DOWN into the PCB
+ * fields declared before the stack (name, signal handlers, std fds, heap_end,
+ * cr3, state ...) and used to go unnoticed.  Now a canary at the low end is
+ * checked on every context switch, and exit warns past 3/4 use.  Measured
+ * high-water (ktest incl. ring-0 page faults inside syscalls, concurrent file
+ * I/O, fork/exec/signals; desktop with terminals): ~1 KiB, so 4 KiB stays. */
+#define PROCESS_KSTACK_SIZE 4096u
+
+/* Lowest word of every kernel stack: checked on each context switch. */
+#define KSTACK_CANARY      0x5AFEC0DEu
+/* Fill pattern for the rest of the stack, for high-water measurement. */
+#define KSTACK_FILL        0xA5u
 #define PROCESS_NAME_LEN   16    /* max process name length (including NUL)    */
 
 /*
@@ -141,7 +154,7 @@ typedef struct process {
      * scheduler first picks this process and calls context_switch, the
      * subsequent ret lands in process_first_run (boot.S trampoline).
      */
-    uint8_t      kernel_stack[4096] __attribute__((aligned(16)));
+    uint8_t      kernel_stack[PROCESS_KSTACK_SIZE] __attribute__((aligned(16)));
 
     /*
      * Virtual Memory Areas (section 9.2 -- demand paging).
@@ -229,5 +242,59 @@ process_t *process_pick_next(void);
  * Never returns.
  */
 void process_launch(void) __attribute__((noreturn));
+
+/* -- Exit / reap lifecycle (REVIEW.md C, D, E) ------------------------------
+ *
+ *   running --process_mark_exited--> PROC_ZOMBIE --process_reap--> PROC_UNUSED
+ *
+ * Every way a process can die (SYS_EXIT, a fatal signal) goes through
+ * process_exit -> process_mark_exited, so the cleanup cannot diverge again.
+ */
+
+/* parent_pid of a process whose parent has exited: nobody will wait() for it,
+ * so it is reaped automatically once it becomes a zombie. */
+#define PROC_NO_PARENT  0xFFFFFFFFu
+
+/*
+ * process_mark_exited -- turn p into a zombie and release what it holds
+ * that does not need its address space: closes the pipe fds it owns, gives
+ * up the graphics surface, reaps its zombie children and reparents its live
+ * ones to PROC_NO_PARENT, and wakes a parent blocked in wait().
+ * Does not switch away -- see process_exit.
+ */
+void process_mark_exited(process_t *p, int code);
+
+/*
+ * process_reap -- free a zombie's slot and (unless a CLONE_VM sibling still
+ * runs on it) its whole address space.  Must not be called on the process
+ * whose address space is loaded in CR3, i.e. never on current_process.
+ */
+void process_reap(process_t *p);
+
+/* Reap every zombie nobody will wait() for (parent gone).  Called before
+ * allocating a slot, so orphans never pin the table or their memory. */
+void process_reap_orphans(void);
+
+/* May `waiter` wait() for `child`?  Its parent, or a thread in the parent's
+ * thread group (pthread_join from a sibling thread). */
+int process_is_waitable_by(const process_t *child, const process_t *waiter);
+
+/* Kernel-stack guard (REVIEW.md G).
+ *   process_stack_intact -- is the canary at the stack's low end untouched?
+ *   process_stack_used   -- high-water mark in bytes: how deep the stack has
+ *                           ever grown (bytes no longer holding KSTACK_FILL). */
+int      process_stack_intact(const process_t *p);
+uint32_t process_stack_used(const process_t *p);
+
+/* Exit the current process: process_mark_exited + switch away for good. */
+void process_exit(int code) __attribute__((noreturn));
+
+#ifndef __is_kernel
+/* Host-test observability: what the lifecycle code would have released. */
+extern uint32_t process_test_released_cr3[16];
+extern int      process_test_released_count;
+extern int      process_test_closed_fds[16];
+extern int      process_test_closed_count;
+#endif
 
 #endif /* _KERNEL_PROCESS_H */

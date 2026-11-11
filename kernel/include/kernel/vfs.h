@@ -171,6 +171,12 @@ int  vfs_socket(int type);
  */
 vfs_node_t *vfs_node_for_fd(int fd);
 
+/* VFS lock introspection (REVIEW.md F) -- for host tests: is the lock held
+ * right now, and how many times was it taken while already held (nested or
+ * unbalanced use; always 0 in a correct build). */
+int vfs_lock_is_held(void);
+int vfs_lock_contentions(void);
+
 
 /*
  * vfs_mount -- register a filesystem driver.

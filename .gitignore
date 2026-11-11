@@ -61,3 +61,6 @@ tests/bin/
 build/
 *.orig
 
+
+# Serial log kept by tools/smoke_test.sh when a run fails
+smoke-fail.log

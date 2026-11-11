@@ -109,3 +109,27 @@ int vma_range_ok(const vma_t *vmas, int count,
     }
     return 1;
 }
+
+pf_action_t vma_fault_action(const vma_t *vmas, int count,
+                             uint32_t fault_addr, uint32_t err_code,
+                             int user_mode)
+{
+    pf_action_t fail = pf_unresolved(user_mode);
+
+    /* Kernel addresses are never demand-paged or CoW. */
+    if (fault_addr >= VMA_USER_LIMIT)
+        return fail;
+
+    const vma_t *v = vma_find((vma_t *)vmas, count, fault_addr);
+    if (!v)
+        return fail;                       /* outside every VMA */
+
+    int write = (err_code & PF_ERR_WRITE) != 0;
+    if (write && !(v->flags & VMA_W))
+        return fail;                       /* write to a read-only region */
+
+    if (err_code & PF_ERR_PRESENT)
+        return write ? PF_ACT_COW : fail;  /* read of a present page can't fault legitimately */
+
+    return PF_ACT_DEMAND;
+}

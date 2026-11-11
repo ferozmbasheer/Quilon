@@ -67,18 +67,21 @@ extern int            exec_return_active;
  *   2. usermode_enter(fn)      -- to jump to ring 3; never returns
  */
 
-/* Prepare for ring-3 execution:
- *   • Load the TSS into the CPU task register (ltr) so that the CPU can
- *     find the kernel stack (esp0/ss0) when a ring-3 exception fires.
- *   • Mark the first 4 MiB of the page table USER-accessible so that
- *     ring-3 demo code (which lives in kernel text) can execute.
- *     NOTE: a production OS would never do this -- user pages would be
- *     isolated in a separate address space.  Here it is a teaching aid.
- *   • Mark the per-task user stack page writable + user-accessible.
+/* Prepare for ring-3 execution: load the TSS into the CPU task register
+ * (ltr, once) so the CPU can find the kernel stack (esp0/ss0) when a ring-3
+ * exception fires.  Grants NO access to kernel memory (REVIEW.md H).
  *
  * Must be called after paging_initialize() and gdt_initialize().
  */
 void usermode_initialize(void);
+
+/* Teaching-aid demos only (kernel shell `ring3`, `syscall`, `sbrk`, `fork`):
+ * those run functions compiled into the kernel image in ring 3, so they need
+ * PAGE_USER on the identity map and the kernel-high window of the ACTIVE
+ * page directory.  A production OS would never do this.  Revoke afterwards
+ * (on the kernel PD) so later address spaces don't copy the grant. */
+void usermode_grant_demo_access(void);
+void usermode_revoke_demo_access(void);
 
 /* Jump to ring 3 and begin executing user_func.
  *

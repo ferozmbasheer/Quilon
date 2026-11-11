@@ -282,9 +282,11 @@ static void shell_run_ring3_task(void (*task)(void), const char *label)
      *   triggers a protection-violation page fault (err_code 0x5).
      *
      * usermode_initialize() is idempotent (static initialized guard), so
-     * calling it here every time is safe.
+     * calling it here every time is safe.  The demo task is kernel code, so
+     * it also needs the explicit demo grant (revoked below on return).
      */
     usermode_initialize();
+    usermode_grant_demo_access();
 
     uint32_t *proc_pd = paging_create_address_space();
     if (!proc_pd) {
@@ -301,6 +303,7 @@ static void shell_run_ring3_task(void (*task)(void), const char *label)
     paging_switch(paging_kernel_cr3());
     asm volatile("sti");
     exec_return_active = 0;
+    usermode_revoke_demo_access();   /* kernel PD: don't leak the grant */
     pmm_free_page(proc_pd);
     printf("%s: task exited; back in kernel\r\n", label);
 }
@@ -1351,12 +1354,14 @@ static void shell_execute(const char *cmd) {
         printf("Entering ring 3 (user mode)...\r\n");
         printf("Expect: white-on-green banner on line 2, then a GPF.\r\n");
         usermode_initialize();
+        usermode_grant_demo_access();    /* demo code lives in kernel text */
         usermode_enter(user_task_demo);
         /* usermode_enter() never returns; the GPF handler halts the CPU. */
     } else if (strcmp(cmd, "syscall") == 0) {
         printf("Entering ring 3 to demo system calls via int $0x80...\r\n");
         printf("Expect: SYS_WRITE output, SYS_GETPID result, then SYS_EXIT halt.\r\n");
         usermode_initialize();
+        usermode_grant_demo_access();    /* demo code lives in kernel text */
         usermode_enter(user_task_syscall);
         /* usermode_enter() never returns; SYS_EXIT halts the CPU. */
     } else if (strcmp(cmd, "sbrk") == 0) {
