@@ -52,9 +52,21 @@ build) real programs inside Quilon.
     - 16.2 Ext2 Filesystem
 
 17. [Porting & Self-Hosting](#17-porting--self-hosting)
+    - 17.0 Prerequisites (keyboard, kernel ABI, user libc)
     - 17.1 Porting Lua
     - 17.2 Porting a Text Editor
     - 17.3 Self-Hosting: Compiling on Quilon
+
+18. [Desktop Polish](#18-desktop-polish)
+    - 18.1 An Idle, Damage-Driven Event Loop
+    - 18.2 Richer Input Events for Apps
+    - 18.3 Window Operations (resize, maximize, minimize, placement)
+    - 18.4 Taskbar: Window List and Tray
+    - 18.5 A Small Widget Kit and App Upgrades
+
+**Order of work (2026-11):** 17.0.1 (keyboard, ✓ done) first — it unblocks typing
+code, Ctrl-C, and arrow keys for both the ports and the desktop. Then
+Section 18 (desktop polish), then the rest of 17.0, then 17.1 → 17.3.
 
 ---
 
@@ -64,24 +76,32 @@ build) real programs inside Quilon.
 after a substantial round of concurrency hardening and a WM rearchitecture —
 see the note under 14.2. User space has BSD sockets + DNS (`wget` fetches real
 pages), the ATA driver uses Bus Master DMA, and Quilon boots off a read-only
-ext2 disk (falling back to FAT16). Next milestone is Section 17, porting.)*
+ext2 disk (falling back to FAT16). Next is Section 17, porting — starting with
+the new 17.0 prerequisites — interleaved with Section 18, desktop polish.)*
 
-> **Before Section 17:** see [REVIEW.md](REVIEW.md) — an architecture/stability
-> review with kernel bugs (demand-paging panics in syscalls, CoW bypass, leaked
-> address spaces, VFS races) to fix before the ports exercise them.
+> **Stability review done (2026-11):** [REVIEW.md](REVIEW.md) found and fixed
+> kernel bugs the Section 17 ports would have hit — ring-0 page faults on user
+> buffers panicked, CR0.WP was off (CoW bypass), exited processes leaked their
+> address space, every exec'd process could read/write kernel memory, no VFS
+> lock, a `wait()` lost wakeup, and closed terminals left shells spinning.
+> Each fix has host tests plus in-OS checks (`make ktest`, `make wmtest`).
+> Still open there: per-process fd tables and cwd, errno, single TCP connection.
 
 | Component | File(s) | Status |
 |-----------|---------|--------|
 | Higher-half kernel | `linker.ld` (`0xC0100000`) | ✓ Complete |
-| Demand paging + VMAs | `exceptions.c`, `vma.c` | ✓ Complete |
-| CoW fork | `paging.c` (`paging_fork_address_space`) | ✓ Complete |
+| Demand paging + VMAs | `exceptions.c`, `vma.c` | ✓ Complete — also for ring-0 faults on user buffers (`vma_fault_action`) |
+| CoW fork | `paging.c` (`paging_fork_address_space`) | ✓ Complete — CR0.WP set, so kernel writes honour CoW too |
+| User/kernel isolation | `usermode.c`, `paging.c` | ✓ Complete — processes get no access to kernel memory (REVIEW.md H) |
+| Process exit / reap | `process.c` (`process_exit`, `process_reap`) | ✓ Complete — frees the address space; orphans reaped; stack canary |
 | >4 MiB physical access | `paging.c` (`kmap`/`pmm_alloc_data_page`) | ✓ Complete — data pages above the 4 MiB identity map |
 | SMP + APIC | `smp.c`, `apic.c` | ✓ Complete — IRQ stubs load kernel segments |
 | IRQ-safe kernel locks | `spinlock.h`, `pmm.c`, `tty.c`, `ata.c`, `waitq.c` | ✓ Complete — see [thread-concurrency memory] |
+| VFS lock | `vfs.c` | ✓ Complete — fd table + driver calls serialised; never held across pipe/socket I/O |
 | ~50 syscalls | `syscall.c` | ✓ Partial — POSIX coverage thin; user-ptr validated |
 | Ring-3 shell | `user/shell/main.c` | ✓ Complete |
 | User libc | `user/libc/` | ✓ Partial — stat/clone/sockets wrapped; no real threads |
-| FAT16 R/W, VFS, pipes | `fat16.c`, `vfs.c`, `pipe.c` | ✓ Complete; per-process std fds via `owns_std_fds` |
+| FAT16 R/W, VFS, pipes | `fat16.c`, `vfs.c`, `pipe.c` | ✓ Complete; per-process std fds via `owns_std_fds` — fd table and cwd still global (REVIEW.md E) |
 | TCP/IP stack | `net.c`, `rtl8139.c` | ✓ Complete — exposed to user space via BSD sockets |
 | VBE framebuffer | `vbe.c` | ✓ Complete — ANSI codes, PSF2 font, double-buffer, graphics-mode gating |
 | Terminal emulator (11) | `gterm.h`, `tty.c` | ✓ Complete |
@@ -91,6 +111,8 @@ ext2 disk (falling back to FAT16). Next milestone is Section 17, porting.)*
 | BSD sockets + DNS (15) | `syscall.c`, `net.c`, `user/libc/include/sys/socket.h`, `user/wget/` | ✓ Complete — `socket`/`connect`/`send`/`recv`, `dns_resolve`, `wget` |
 | ATA Bus Master DMA (16.1) | `ata_dma.c`, `ata.c` | ✓ Complete |
 | ext2 filesystem (16.2) | `ext2.c` | ✓ Complete — **read-only**; probed before FAT16; `fs` command + `SYS_FSINFO` |
+| Keyboard + Ctrl-C (17.0.1) | `kbd_xlate.c`, `keyboard.c`, `signal.c`, `process.c` | ✓ Complete — shift/caps/ctrl/alt, arrows as VT100 escapes, Ctrl-C → SIGINT to the foreground job; `kill`/`signal`/`setfg`/`intr` |
+| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (21 checks) + `make wmtest` (desktop) + `make kbdtest` (keyboard) |
 
 ---
 
@@ -1471,6 +1493,119 @@ descriptor) follows the same pattern as FAT16 write but with more moving parts.
 
 ## 17. Porting & Self-Hosting
 
+### 17.0 Prerequisites
+
+*(Added 2026-11 after auditing the tree against what the ports need.)* The
+original 17.1 text below says Lua needs "about 5–10 small stubs". That
+underestimates the gap considerably: the user libc is ~530 lines, there is no
+`FILE` abstraction, and the keyboard cannot type most of the characters Lua or
+C source uses. These three groups of work come first.
+
+#### 17.0.1 Keyboard: modifiers, extended keys, Ctrl-C
+
+> **✓ Done (2026-11).** As built:
+> - `kernel/kernel/kbd_xlate.c` — pure scancode → byte-stream state machine
+>   (shift/caps/ctrl/alt, E0 keys as VT100 escapes, PrtSc fake-shift and Pause
+>   handled); host-tested in `tests/test_kbd.c`. `keyboard.c` buffers each
+>   sequence atomically.
+> - **Foreground jobs instead of process groups:** each PCB has `fg_child`; a
+>   shell calls `setfg(child)` around `wait()`. Ctrl-C follows the chain from
+>   a terminal's shell (`process_intr_target`) and SIGINTs the deepest
+>   process, or delivers 0x03 as data when there is no job or it ignores
+>   SIGINT. Text console: from the keyboard IRQ, rooted at
+>   `console_shell_pid`. Desktop: the WM ignores SIGINT, so gterm gets the
+>   0x03 key and calls `intr(shell_pid)`.
+> - Syscalls 54–57: `kill`, `signal` (SIG_DFL/SIG_IGN only — user handlers
+>   are still not delivered), `setfg`, `intr`; `<signal.h>` in user libc.
+>   Ignored signals are discarded at send. Shells ignore SIGINT (so a nested
+>   shell survives Ctrl-C at its prompt); exec'd programs start with SIG_DFL.
+> - Signals now reach a process in any state: dispatched on timer-IRQ return
+>   to ring 3 (a `for(;;);` loop can be killed), and keyboard reads, pipe
+>   reads/writes and `wait()` abort when a signal is pending.
+> - Both shells swallow escape sequences, drop the line on Ctrl-C at the
+>   prompt, and gained `kill <pid> [sig]`. The kernel shell's `exec` runs
+>   programs without a process, so Ctrl-C can't interrupt them there.
+> - Tests: `test_kbd`, new `test_signal` suites, 9 `ktest` checks (shown to
+>   hang with the timer-dispatch or pipe-interrupt fix removed), and
+>   **`make kbdtest`** — real keystrokes in text mode and in a desktop
+>   terminal. `tools/qemu_type.py` now types shifted characters and
+>   `{key:ctrl-c}`.
+> - Not done: line editing/history using the arrow keys; new desktop windows
+>   still need a click before they get keyboard focus (18.3).
+
+Original plan:
+
+`kernel/kernel/keyboard.c` has a single unshifted scancode map. Missing:
+
+- **Shift and Caps Lock** — a second, shifted map. Without it
+  `( ) " { } + * < > _ : ! # & |` cannot be typed, so no Lua, no C, and no
+  shell syntax that needs them. (The ext2 case-insensitive lookup fallback
+  exists only because uppercase is untypeable; keep it, but it stops being
+  load-bearing.)
+- **Ctrl** — Ctrl+letter produces 0x01–0x1A.
+- **Extended (0xE0-prefixed) scancodes** — arrows, Home/End, PgUp/PgDn,
+  Insert/Delete. Encode them into the byte stream as VT100/xterm escape
+  sequences (`ESC [ A` … `ESC [ 3 ~`) so terminals, the shell's line editor,
+  and a future `vi` all parse one standard format, and the existing
+  `read()`-a-byte-stream ABI is unchanged.
+- **Ctrl-C → SIGINT.** Quilon has no controlling terminal or foreground
+  process group, and in the desktop the WM — not the shell — reads the
+  keyboard. So:
+  - Text mode: the keyboard IRQ delivers SIGINT to the shell's current
+    foreground child (the shell records it).
+  - Desktop: gterm receives `0x03` as a key event and must signal its shell's
+    foreground child. That needs a **`SYS_KILL(pid, sig)`** syscall (none
+    exists today; `signal_send` is kernel-internal).
+  - Both shells must survive SIGINT themselves (dual-shell rule).
+
+*Tests:* host tests for the scancode → byte-sequence translation (shift state,
+caps, 0xE0 prefixes, release codes clearing modifiers); a `ktest` check for
+`SYS_KILL`.
+
+#### 17.0.2 Kernel ABI the ports will lean on
+
+These are the open Architecture items in [REVIEW.md](REVIEW.md), which says
+they should land before ported programs start relying on them:
+
+- **errno** — syscalls return `-errno`; user libc sets `errno`.
+- **Per-process fd tables** with a refcounted open-file-description table,
+  real fd inheritance on fork/exec, and a general `dup2` (today `dup2` only
+  accepts fds 0–2). Removes the `owns_std_fds` workaround.
+- **Per-process cwd** — `vfs_cwd` is one global.
+- **A writable root.** ext2 is read-only, so on an ext2 boot an editor cannot
+  save and TinyCC cannot write output. Either do 17.2/17.3 on the FAT16 image
+  or add ext2 write support (block/inode bitmaps, allocation, directory entry
+  insert) — the latter is a sizeable sub-project of its own.
+
+#### 17.0.3 User libc: grow it or port one
+
+Lua's minimum needs, none of which exist today:
+
+| Need | Why |
+|------|-----|
+| `realloc`, `calloc` | Lua's allocator (`l_alloc`) is built entirely on `realloc` |
+| `FILE*` stdio: `fopen/fclose/fread/fwrite/fgets/getc/ungetc/fprintf/fflush`, `stdin/stdout/stderr` | `io` library, script loading |
+| `printf` family with `%f %g %e`, `snprintf`, `sprintf` | number → string (`%.14g`) |
+| `strtod`, `strtol`, `strtoul` | number parsing |
+| `setjmp` / `longjmp` | Lua's error handling (`luaD_throw`) |
+| `math.h` (`floor`, `fmod`, `pow`, `sqrt`, `exp`, `log`, `sin`…), `ctype.h`, `limits.h`, `float.h` | `math` library, lexer |
+| `errno`, `strerror`, `time`, `clock`, `getenv`, `locale.h` (`localeconv`) | `os` library, number formatting |
+
+TinyCC needs substantially more (`fdopen`, `qsort`, `strtoll`, `mmap` or a
+large `sbrk`, `unlink`, ...).
+
+**Decision to make:** keep hand-growing `user/libc` (educational, but
+TinyCC will drag it to many thousands of lines), or port an existing small
+libc — **PDCLib** (small, clean, public domain) or **newlib** (the classic
+hobby-OS choice: implement ~20 syscall stubs in `libgloss` and get a full
+libc + libm). Recommendation: hand-write the Lua subset if the goal is
+learning libc internals; port newlib if the goal is reaching TinyCC.
+
+*Tests:* the libc pieces (`printf` floats, `strtod`, `realloc`) are pure C
+and should get host unit tests in `tests/`.
+
+---
+
 ### 17.1 Porting Lua
 
 **Why it matters:** Porting an existing program to Quilon is the acid test of
@@ -1560,6 +1695,115 @@ editing with the ported text editor, without ever leaving the virtual machine.
 
 ---
 
+## 18. Desktop Polish
+
+*(Added 2026-11.)* Section 14 produced a stable desktop on a single-threaded
+event loop (see the 14.2 note). It works, but it is expensive and spare: the
+loop never sleeps, every cursor movement repaints and copies the whole screen,
+apps only see ASCII keys and button presses, and windows can't be resized,
+maximized, or minimized. This section keeps the single-threaded model — **do
+not reintroduce app threads** — and makes the desktop efficient and pleasant.
+
+### 18.1 An Idle, Damage-Driven Event Loop
+
+**Today:** `user/wm/main.c` spins on `mouse_read()` + `read_nonblock()` with no
+blocking call, so the WM consumes a full CPU even when nothing happens. Any
+mouse movement sets `any_dirty`, which recomposites every window, redraws the
+taskbar, and calls `SYS_GFX_FLUSH` — which marks *all* rows dirty, so the
+kernel copies the entire shadow buffer to VRAM every frame.
+
+**Changes:**
+
+1. **Block for input with a timeout.** Add a `SYS_WAIT_INPUT(timeout_ms)`
+   (or a minimal `poll()` over the keyboard and mouse) that sleeps on both
+   wait queues and wakes on either event or the timeout. The WM passes the
+   time until the next app tick is due (e.g. the clock's next second, a
+   terminal's pipe-poll interval). This is the same sleep/wakeup machinery as
+   12.2. Apps declare a tick interval instead of being ticked every iteration.
+2. **Damage rectangles.** The WM keeps a small list of dirty screen rects
+   (merge or fall back to full-screen when the list overflows). Sources:
+   old ∪ new cursor rect on move; old ∪ new window bounds on drag; a window's
+   on-screen bounds when its `dirty` flag is set; the taskbar when it changes.
+   Compositing is clipped to each damage rect (`gfx_set_clip` already exists).
+3. **Partial flush.** `SYS_GFX_FLUSH_RECT(x, y, w, h)` (or an argument to
+   `SYS_GFX_FLUSH`) marks only those rows/columns dirty, so `vbe_flush()`
+   copies just the damage.
+4. **Cursor without recomposite.** Save the pixels under the cursor and
+   restore them on move, so pure cursor motion touches two 16×16 rects instead
+   of the whole desktop.
+
+*Tests:* host tests for damage-rect merging/clipping (pure logic in `wm.h`);
+measure CPU idle in `ps` before/after; `make wmtest` must still pass.
+
+### 18.2 Richer Input Events for Apps
+
+**Today:** `wm_event_t` carries only `ascii`; apps get `WM_EV_MOUSE_BTN` on
+press only, with no release, motion, or which-button.
+
+- **Key events** gain a `keycode` and `mods` (shift/ctrl/alt) next to
+  `ascii`, decoded by the WM from the escape sequences that 17.0.1 emits.
+  gterm forwards the raw bytes to its shell; other apps use the keycodes.
+- **Mouse events:** press *and* release, per-button state (left/right/middle),
+  and motion while a button is held inside the content (drag-select in a
+  terminal or text viewer). Optionally the IntelliMouse scroll wheel
+  (sample-rate knock 200/100/80 → device ID 3, 4-byte packets) delivered as
+  `WM_EV_SCROLL`.
+- **WM shortcuts:** Alt-Tab cycles focus; Alt-F4 closes the focused window.
+
+### 18.3 Window Operations
+
+- **Resize:** a grip in the bottom-right corner (and/or edges). On release,
+  allocate a new `backbuf`, send `WM_EV_RESIZE`; the app re-lays out and
+  redraws. gterm recomputes rows/columns. Respect `WM_MIN_W`/`WM_MIN_H`.
+  Draw a resize outline during the drag rather than reallocating per motion.
+- **Maximize/restore:** a titlebar button and double-click on the titlebar;
+  remember the restore bounds.
+- **Minimize:** hide the window (out of `z_order` but still alive and ticking);
+  restore from the taskbar (18.4).
+- **Placement:** cascade new windows (offset by a titlebar height from the last
+  one, wrapping at the screen edge) instead of the fixed per-app position,
+  which currently stacks a second Terminal exactly on top of the first. Clamp
+  drags so a titlebar can't be lost off-screen.
+- **Chrome:** proper min/max/close glyph buttons with the existing bevel
+  helpers; distinct focused/unfocused title text; a hover state on the close
+  button.
+
+*Tests:* host tests for resize clamping, maximize/restore round-trip,
+cascade placement, minimize/z-order invariants (all pure `wm.h` logic); extend
+`make wmtest` with a resize and a minimize/restore.
+
+### 18.4 Taskbar: Window List and Tray
+
+**Today:** the taskbar is three fixed launcher buttons.
+
+- A **start/launcher button** opening a menu of apps (data-driven from
+  `g_apps[]`; later, from a directory of `.elf`s).
+- A **window list**: one button per open window, pressed-in when focused;
+  click focuses/raises, or restores if minimized, or minimizes if already
+  focused.
+- A **tray** on the right with a clock (replacing the need for the Clock
+  window) and, optionally, network status (IP from `SYS_NET_GETIP`) and free
+  memory (`SYS_MEMINFO`).
+
+### 18.5 A Small Widget Kit and App Upgrades
+
+Apps hand-draw everything today. Add a tiny retained-nothing helper set to
+`libgfx` (or `user/wm/widgets.c`): button, label, vertical scrollbar, list
+view, and a text-line input, each a draw function plus a hit-test/event
+function, styled with the existing bevels.
+
+Then use it:
+- **Files:** scrollbar and wheel scrolling, double-click to open, a `..` entry
+  and path bar, open `.txt` in Textview and `.elf` in a Terminal.
+- **Textview:** scrollbar, wheel, PgUp/PgDn; pass the path through
+  `app_state` instead of the 32-byte `title` (long paths are truncated today).
+- **Terminal:** scrollback (view history with Shift-PgUp / the wheel),
+  resizable (18.3), Ctrl-C (17.0.1).
+- **Desktop:** an optional wallpaper (a raw/BMP image from disk, blitted once
+  into a cached background canvas so compositing cost doesn't change).
+
+---
+
 ## Suggested Milestones
 
 | Milestone | Sections | What it proves |
@@ -1573,6 +1817,10 @@ editing with the ported text editor, without ever leaving the virtual machine.
 | **Milestone 13 — Apps** | 14.4 | Clock, file browser, and text viewer run alongside the terminal |
 | **Milestone 14 — Socket programs** | 15.1 + 15.2 + 15.3 | `wget` fetches a page over TCP from inside QEMU |
 | **Milestone 15 — Ext2** | 16.2 | Quilon boots from an ext2 disk image |
+| **Milestone 15.5 — Full keyboard** | 17.0.1 | Shifted symbols, arrows, and Ctrl-C work in the shell and terminal windows |
+| **Milestone 15.6 — Efficient desktop** | 18.1 + 18.2 | WM idles near 0% CPU; cursor motion flushes only the damage |
+| **Milestone 15.7 — Polished desktop** | 18.3 – 18.5 | Resize/maximize/minimize, taskbar window list + clock, scrollbars |
+| **Milestone 15.8 — Port-ready libc** | 17.0.2 + 17.0.3 | errno, per-process fds/cwd, `FILE*` stdio, float printf, setjmp |
 | **Milestone 16 — Lua** | 17.1 | `exec lua.elf` at the shell prompt runs a Lua script |
 | **Milestone 17 — Self-hosting** | 17.2 + 17.3 | TinyCC compiles a C program inside Quilon |
 

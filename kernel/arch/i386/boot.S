@@ -219,7 +219,9 @@ irq\num:
     mov  $0x10, %ax      /* kernel data segment */
     mov  %ax, %ds
     mov  %ax, %es
+    push %esp            /* arg: frame -- [0]=ds [1..8]=pusha [9]=eip [10]=cs */
     call irq\num\()_handler
+    add  $4, %esp
     pop  %eax            /* restore caller's data segment */
     mov  %ax, %ds
     mov  %ax, %es

@@ -25,8 +25,10 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <gfx.h>
+#include <signal.h>
 
 static int failures;
+static int me_pid;
 
 static void report(const char *name, int ok)
 {
@@ -386,6 +388,109 @@ static void test_wait_survives_sibling_exit(void)
            r1 == 0 && code == 7 && r2 == 0 && fcode == 0);
 }
 
+/*
+ * ROADMAP3 17.0.1 -- signals reach a process wherever it is.
+ *
+ * Before: there was no kill() syscall, and signals were acted on only at
+ * syscall exit -- a process spinning in user code, or asleep in a blocking
+ * read, could never be stopped (so Ctrl-C could not work).  On the old kernel
+ * these checks hang (kill() is an unknown syscall, the child never dies, and
+ * wait() never returns), so the run fails with no KTEST line.
+ */
+static int wait_code(int pid)
+{
+    int code = 12345;
+    if (pid <= 0 || wait(pid, &code) != 0) return 12345;
+    return code;
+}
+
+static void test_kill_reaches_any_state(void)
+{
+    /* Spinning in ring 3, never making a syscall: needs the timer-IRQ path. */
+    int spin = fork();
+    if (spin == 0) { for (;;) { } }
+    sleep_ms(50);
+    int k = kill(spin, SIGTERM);
+    report("kill() stops a child spinning in user code (-15)",
+           k == 0 && wait_code(spin) == -SIGTERM);
+
+    /* Asleep in a pipe read with no writer activity. */
+    int fds[2];
+    if (pipe(fds) != 0) { report("kill() wakes a blocked pipe reader (pipe)", 0); return; }
+    int rd = fork();
+    if (rd == 0) {
+        char c;
+        read(fds[0], &c, 1);            /* blocks: nobody writes */
+        exit(0);
+    }
+    sleep_ms(50);
+    k = kill(rd, SIGINT);
+    report("kill() wakes a child blocked in a pipe read (-2)",
+           k == 0 && wait_code(rd) == -SIGINT);
+    close(fds[0]);
+    close(fds[1]);
+
+    /* Asleep reading the keyboard (stdin is the console under ktest). */
+    int kb = fork();
+    if (kb == 0) {
+        char c;
+        read(STDIN_FILENO, &c, 1);      /* blocks: nobody types */
+        exit(0);
+    }
+    sleep_ms(50);
+    k = kill(kb, SIGKILL);
+    report("kill() wakes a child blocked reading the keyboard (-9)",
+           k == 0 && wait_code(kb) == -SIGKILL);
+
+    report("kill() of a nonexistent pid fails", kill(1000, SIGTERM) == -1);
+}
+
+/*
+ * ROADMAP3 17.0.1 -- Ctrl-C reaches the foreground job, and only it.  intr()
+ * is what the desktop terminal calls on Ctrl-C (the console path runs the
+ * same process_intr_target() from the keyboard IRQ).
+ */
+static void test_ctrl_c_foreground_job(void)
+{
+    me_pid = getpid();
+    report("intr() with no foreground job sends nothing", intr(me_pid) == 0);
+
+    int job = fork();
+    if (job == 0) { for (;;) { } }
+    setfg(job);
+    int r = intr(me_pid);
+    int code = wait_code(job);
+    setfg(-1);
+    report("intr() SIGINTs the foreground job (-2)", r == 1 && code == -SIGINT);
+
+    /* A job that ignores SIGINT (like the WM) gets the key as data instead. */
+    int ready[2];
+    if (pipe(ready) != 0) { report("SIG_IGN job is not interrupted (pipe)", 0); return; }
+    int ign = fork();
+    if (ign == 0) {
+        signal(SIGINT, SIG_IGN);
+        write(ready[1], "r", 1);
+        for (;;) { }
+    }
+    char c;
+    read(ready[0], &c, 1);              /* child has ignored SIGINT */
+    setfg(ign);
+    r = intr(me_pid);
+    int k2 = kill(ign, SIGINT);         /* ignored: discarded, still alive */
+    sleep_ms(30);
+    int alive = (wait_nohang(ign, (int *)0) == 1);
+    kill(ign, SIGKILL);
+    code = wait_code(ign);
+    setfg(-1);
+    close(ready[0]);
+    close(ready[1]);
+    report("a job ignoring SIGINT is not interrupted (intr()==0, survives)",
+           r == 0 && k2 == 0 && alive && code == -SIGKILL);
+
+    report("signal() rejects ignoring SIGKILL",
+           signal(SIGKILL, SIG_IGN) == SIG_ERR);
+}
+
 int main(void)
 {
     printf("ktest: kernel regression tests\r\n");
@@ -398,6 +503,8 @@ int main(void)
     test_kernel_memory_isolated();
     test_wait_survives_sibling_exit();
     test_concurrent_reads();
+    test_kill_reaches_any_state();
+    test_ctrl_c_foreground_job();
 
     if (failures == 0) printf("KTEST: ALL PASS\r\n");
     else               printf("KTEST: %d FAILED\r\n", failures);

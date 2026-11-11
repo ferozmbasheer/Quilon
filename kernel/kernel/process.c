@@ -88,6 +88,7 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
         p->stdout_fd       = -1;
         p->owns_std_fds    = 0;
         p->pending_signals = 0;
+        p->fg_child        = -1;
         for (int s = 0; s < NSIG; s++)
             p->signal_handlers[s] = SIG_DFL;
         vma_init(p->vmas, PROC_VMA_MAX);
@@ -255,6 +256,43 @@ int process_is_waitable_by(const process_t *child, const process_t *waiter)
            process_group_leader((process_t *)parent) ==
            process_group_leader((process_t *)waiter);
 }
+
+/* -- Ctrl-C / foreground jobs (ROADMAP3 17.0.1) ---------------------------- */
+
+int console_shell_pid = -1;
+
+process_t *process_intr_target(process_t *root)
+{
+    if (!root) return NULL;
+
+    process_t *p = root;
+    /* Bounded: a chain can't be longer than the table (guards a cycle made
+     * of stale links). */
+    for (int depth = 0; depth < PROCESS_MAX && p->fg_child >= 0; depth++) {
+        process_t *c = process_find((uint32_t)p->fg_child);
+        /* A stale link (the job exited, or its PID was recycled by a process
+         * that is not our child) ends the chain. */
+        if (!c || c == p || c->state == PROC_ZOMBIE || c->parent_pid != p->pid)
+            break;
+        p = c;
+    }
+
+    if (p == root) return NULL;                         /* shell at its prompt */
+    if (p->signal_handlers[SIGINT] == SIG_IGN) return NULL;  /* e.g. the WM */
+    return p;
+}
+
+#ifdef __is_kernel
+/* Kernel-only: the host tests that link process.c don't all link signal.c. */
+int process_console_interrupt(void)
+{
+    if (console_shell_pid < 0) return 0;
+    process_t *t = process_intr_target(process_find((uint32_t)console_shell_pid));
+    if (!t) return 0;
+    signal_send(t, SIGINT);
+    return 1;
+}
+#endif
 
 void process_mark_exited(process_t *p, int code)
 {

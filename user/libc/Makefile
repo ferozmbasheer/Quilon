@@ -25,8 +25,8 @@ AR = i686-elf-ar
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
          -MMD -MP -Iinclude
 
-SRCS   = string.c stdio.c stdlib.c pthread.c
-OBJS   = string.o stdio.o stdlib.o syscall.o pthread.o
+SRCS   = string.c stdio.c stdlib.c pthread.c signal.c
+OBJS   = string.o stdio.o stdlib.o syscall.o pthread.o signal.o
 
 .PHONY: all clean
 

@@ -7,6 +7,8 @@
 #include <kernel/interrupts.h>
 #include <kernel/keyboard.h>
 #include <kernel/pit.h>
+#include <kernel/process.h>
+#include <kernel/signal.h>
 #include <kernel/mouse.h>
 #include <kernel/ata_dma.h>
 
@@ -95,10 +97,25 @@ void idt_load_ap(void)
     load_idt(idt_ptr);
 }
 
-void irq0_handler(void) {
+/* frame: the stack IRQ_STUB built -- [0]=saved ds, [1..8]=pusha, [9]=eip,
+ * [10]=cs of the interrupted code (boot.S). */
+#define IRQ_FRAME_CS 10
+
+void irq0_handler(uint32_t *frame) {
     outb(0x20, 0x20); /* EOI -- must come before pit_tick so the PIC
                          is ready for the next IRQ before we process */
     pit_tick();
+
+    /* Deliver pending signals to a process interrupted in ring 3.  Without
+     * this, signals were only acted on at syscall exit, so Ctrl-C or kill
+     * could never stop a program spinning in user code (for(;;);).  Only
+     * when the interrupted code was ring 3: a process interrupted inside the
+     * kernel may hold locks, and gets the signal at its syscall exit.  EOI
+     * has already been sent, so dying here (signal_dispatch -> process_exit
+     * never returns) leaves the PIC ready, as on the page-fault path. */
+    if ((frame[IRQ_FRAME_CS] & 3) == 3 && current_process &&
+        signal_pending(current_process))
+        signal_dispatch();
 }
  
 void irq1_handler(void) {

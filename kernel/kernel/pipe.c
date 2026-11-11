@@ -25,6 +25,15 @@
 
 #ifdef __is_kernel
 #include <kernel/waitq.h>
+#include <kernel/process.h>
+#include <kernel/signal.h>
+
+/* A signal (Ctrl-C, kill) readies a process sleeping on a pipe; it must then
+ * stop waiting so the syscall returns and signal_dispatch() runs. */
+static int interrupted(void)
+{
+    return current_process && signal_pending(current_process);
+}
 #endif /* __is_kernel */
 
 /* -- Pipe pool ------------------------------------------------------------ */
@@ -76,6 +85,7 @@ int pipe_write(int idx, const uint8_t *buf, uint32_t len)
         if (space == 0) {
 #ifdef __is_kernel
             /* Buffer full -- sleep until a reader drains some bytes. */
+            if (interrupted()) return written ? (int)written : -1;
             waitq_sleep(&p->wq);
             continue;
 #else
@@ -113,6 +123,7 @@ int pipe_read(int idx, uint8_t *buf, uint32_t len)
 #ifdef __is_kernel
         /* Sleep until data arrives or the last writer closes. */
         while (avail == 0 && p->writers > 0) {
+            if (interrupted()) return -1;
             waitq_sleep(&p->wq);
             avail = pipe_bytes_available(idx);
         }

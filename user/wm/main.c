@@ -24,6 +24,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <gfx.h>
+#include <signal.h>
 #include "wm.h"
 
 /* App "open" entry points: each sets up the window's callbacks + app_state.
@@ -157,6 +158,11 @@ static void request_close(window_t *w)
 int main(void)
 {
     printf("[wm] Quilon Desktop starting\r\n");
+
+    /* Ctrl-C must reach us as an ordinary 0x03 key (forwarded to the focused
+     * terminal, which interrupts its own shell's job) rather than kill the
+     * desktop: we are the console shell's foreground job.  ROADMAP3 17.0.1. */
+    signal(SIGINT, SIG_IGN);
 
     /* 1. Map shadow framebuffer. */
     gfx_info_t info;

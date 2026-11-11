@@ -253,6 +253,108 @@ static void test_bitmask_coverage(void)
  * main
  * =========================================================================== */
 
+/* ===========================================================================
+ * 6. SIG_IGN, signal_set_handler, signal_pending (ROADMAP3 17.0.1)
+ * =========================================================================== */
+
+static void test_ignored_signal_discarded(void)
+{
+    process_init();
+    process_t *p = process_create("ign", 0, 0);
+    ASSERT_EQ(signal_set_handler(p, SIGINT, SIG_IGN), 0, "ignore SIGINT");
+    signal_send(p, SIGINT);
+    ASSERT_EQ(p->pending_signals, 0u, "ignored SIGINT is not pending");
+    ASSERT_EQ(signal_pending(p), 0, "signal_pending false");
+
+    signal_send(p, SIGTERM);
+    ASSERT(signal_pending(p), "a non-ignored signal is pending");
+}
+
+static void test_set_handler_rules(void)
+{
+    process_init();
+    process_t *p = process_create("rules", 0, 0);
+    ASSERT_EQ(signal_set_handler(p, SIGKILL, SIG_IGN), -1, "SIGKILL can't be ignored");
+    signal_send(p, SIGKILL);
+    ASSERT(p->pending_signals & (1u << SIGKILL), "SIGKILL still delivered");
+
+    ASSERT_EQ(signal_set_handler(p, 0, SIG_IGN), -1, "signal 0 rejected");
+    ASSERT_EQ(signal_set_handler(p, NSIG, SIG_IGN), -1, "NSIG rejected");
+    ASSERT_EQ(signal_set_handler(p, SIGINT, (void (*)(int))0x1234), -1,
+              "user-function handlers rejected (not delivered yet)");
+    ASSERT_EQ(signal_set_handler(NULL, SIGINT, SIG_IGN), -1, "NULL proc");
+
+    /* Ignoring discards an already-pending instance; SIG_DFL restores. */
+    process_init();
+    p = process_create("rules2", 0, 0);
+    signal_send(p, SIGINT);
+    ASSERT_EQ(signal_set_handler(p, SIGINT, SIG_IGN), 0, "ignore");
+    ASSERT_EQ(p->pending_signals, 0u, "pending SIGINT dropped on ignore");
+    ASSERT_EQ(signal_set_handler(p, SIGINT, SIG_DFL), 0, "restore default");
+    signal_send(p, SIGINT);
+    ASSERT(signal_pending(p), "SIGINT pending again after SIG_DFL");
+}
+
+/* ===========================================================================
+ * 7. process_intr_target -- who Ctrl-C interrupts (ROADMAP3 17.0.1)
+ * =========================================================================== */
+
+static process_t *child_of(process_t *parent, const char *name)
+{
+    process_t *c = process_create(name, 0, 0);
+    c->parent_pid = parent->pid;
+    return c;
+}
+
+static void test_intr_target_chain(void)
+{
+    process_init();
+    process_t *sh  = process_create("shell", 0, 0);
+    ASSERT_NULL(process_intr_target(sh), "shell at prompt: no target");
+    ASSERT_NULL(process_intr_target(NULL), "NULL root");
+
+    process_t *job = child_of(sh, "job");
+    ASSERT_NULL(process_intr_target(sh), "child exists but is not fg");
+
+    sh->fg_child = (int)job->pid;
+    ASSERT(process_intr_target(sh) == job, "fg child is the target");
+
+    /* A nested shell running its own job: the deepest one is interrupted. */
+    process_t *grand = child_of(job, "grand");
+    job->fg_child = (int)grand->pid;
+    ASSERT(process_intr_target(sh) == grand, "deepest fg process");
+    ASSERT(process_intr_target(job) == grand, "from the inner shell too");
+
+    /* The deepest one exiting ends the chain at its parent. */
+    grand->state = PROC_ZOMBIE;
+    ASSERT(process_intr_target(sh) == job, "zombie link ignored");
+}
+
+static void test_intr_target_ignored_and_stale(void)
+{
+    process_init();
+    process_t *sh = process_create("shell", 0, 0);
+    process_t *wm = child_of(sh, "wm");
+    sh->fg_child = (int)wm->pid;
+    signal_set_handler(wm, SIGINT, SIG_IGN);
+    ASSERT_NULL(process_intr_target(sh),
+                "fg job ignores SIGINT (the WM): pass Ctrl-C on as data");
+
+    /* A stale link to a PID now held by an unrelated process. */
+    process_init();
+    sh = process_create("shell", 0, 0);
+    process_t *other = process_create("other", 0, 0);
+    other->parent_pid = 99;
+    sh->fg_child = (int)other->pid;
+    ASSERT_NULL(process_intr_target(sh), "recycled PID, not our child");
+
+    /* Self-link and dead PID must not loop or crash. */
+    sh->fg_child = (int)sh->pid;
+    ASSERT_NULL(process_intr_target(sh), "self link");
+    sh->fg_child = PROCESS_MAX + 3;
+    ASSERT_NULL(process_intr_target(sh), "out-of-range PID");
+}
+
 int main(void)
 {
     /* Signal constants */
@@ -277,6 +379,12 @@ int main(void)
 
     /* Bitmask */
     RUN_SUITE(test_bitmask_coverage);
+
+    /* SIG_IGN / handlers / Ctrl-C target (17.0.1) */
+    RUN_SUITE(test_ignored_signal_discarded);
+    RUN_SUITE(test_set_handler_rules);
+    RUN_SUITE(test_intr_target_chain);
+    RUN_SUITE(test_intr_target_ignored_and_stale);
 
     TEST_SUMMARY();
 }

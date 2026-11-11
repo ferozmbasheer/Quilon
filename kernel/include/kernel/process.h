@@ -143,6 +143,15 @@ typedef struct process {
     uint32_t     pending_signals;
     void       (*signal_handlers[NSIG])(int);
 
+    /*
+     * Foreground job (ROADMAP3 17.0.1, Ctrl-C).  A shell sets this to the
+     * child it is waiting for (SYS_SETFG) and back to -1 afterwards.  Ctrl-C
+     * follows the fg_child chain down from a terminal's shell and sends
+     * SIGINT to the deepest process -- see process_intr_target().
+     * -1 = none (PIDs are slot indices, so 0 is a valid PID).
+     */
+    int          fg_child;
+
     char         name[PROCESS_NAME_LEN];
 
     /*
@@ -278,6 +287,28 @@ void process_reap_orphans(void);
 /* May `waiter` wait() for `child`?  Its parent, or a thread in the parent's
  * thread group (pthread_join from a sibling thread). */
 int process_is_waitable_by(const process_t *child, const process_t *waiter);
+
+/* -- Ctrl-C / foreground jobs (ROADMAP3 17.0.1) ----------------------------- */
+
+/* PID of the shell that owns the text console (the keyboard), or -1.  Set by
+ * kmain when it launches SHELL.ELF. */
+extern int console_shell_pid;
+
+/*
+ * process_intr_target -- who should Ctrl-C interrupt in root's terminal?
+ *
+ * Follows fg_child links down from root (each link must point at a live,
+ * non-zombie child of the previous process) and returns the deepest process,
+ * or NULL when the Ctrl-C should be passed on as an ordinary 0x03 byte:
+ *   - root has no foreground job (the shell is at its prompt), or
+ *   - the deepest process ignores SIGINT (the WM, which forwards Ctrl-C to
+ *     the focused terminal itself).
+ */
+process_t *process_intr_target(process_t *root);
+
+/* Ctrl-C on the text console (keyboard IRQ hook): SIGINT the console shell's
+ * foreground job.  Returns 1 if a signal was sent, 0 otherwise. */
+int process_console_interrupt(void);
 
 /* Kernel-stack guard (REVIEW.md G).
  *   process_stack_intact -- is the canary at the stack's low end untouched?

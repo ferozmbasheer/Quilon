@@ -44,10 +44,34 @@ segments, stack, CoW copies) are allocated above 4 MiB via
 `kmap()` / `kunmap()` (paging.c). This is what lets the graphical desktop's
 working set exceed 4 MiB without faulting the kernel.
 
+**Isolation and faults (REVIEW.md A/B/H).** The identity map and the kernel
+half are shared by every address space but are **not** user-accessible; only
+the in-kernel ring-3 teaching demos get a temporary grant
+(`usermode_grant_demo_access` / `..._revoke_...`). CR0.WP is set on every CPU,
+so ring 0 honours read-only PTEs. The page-fault policy is the pure
+`vma_fault_action()` (vma.c): a fault on a user address inside a VMA is demand-
+paged (not present) or copy-on-write resolved (write to a present page) whether
+it came from ring 3 or from ring 0 inside a syscall copying to a user buffer;
+anything else is SIGSEGV from ring 3 and a panic from ring 0. PTE bit 10,
+`PAGE_NOFREE`, marks kernel memory mapped into a process (the WM's view of the
+VBE shadow buffer): fork shares it as-is and teardown skips it.
+
 ## Processes, threads, scheduling
 
 - `process.c` owns the process table and `process_t` (address space / `cr3`,
-  kernel stack, VMAs, heap end, state, parent pid, name).
+  kernel stack, VMAs, heap end, state, parent pid, name). PIDs are slot
+  numbers, so they are reused as soon as a slot is reaped.
+- **Lifecycle:** every death (SYS_EXIT, fatal signal) goes through
+  `process_exit` → `process_mark_exited` (close owned pipe fds, release the
+  graphics surface, reap zombie children / orphan live ones to
+  `PROC_NO_PARENT`, wake the parent). `process_reap` (from `wait`, or the
+  orphan sweep before each slot allocation) frees the slot and the address
+  space via `paging_destroy_address_space` / `as_destroy` — unless a CLONE_VM
+  sibling still uses that CR3. `wait` only lets the parent (or its thread
+  group) reap, and supports `WAIT_NOHANG`.
+- Kernel stacks are 4 KiB inside the PCB with a canary in the lowest word,
+  checked on every context switch; exit warns past 3/4 use (measured
+  high-water ~1 KiB).
 - `scheduler.c` is a round-robin preemptive scheduler driven by the PIT.
 - `fork` uses copy-on-write (`paging.c` marks PTEs COW and the fault handler
   copies on write).
@@ -65,6 +89,13 @@ and `pmm_lock`/`tty_lock`/`kmap_lock`/`waitq` are IRQ-safe (`spinlock.h`
 slow and never called from IRQ context). See the "thread concurrency" project
 memory for the specific bugs these prevent.
 
+Syscalls are preemptible (int $0x80 is a trap gate and IRQ0 switches tasks even
+in ring 0). The VFS therefore has its own lock (`vfs.c`) around the fd table,
+the cwd and every driver call; a waiter marks itself READY and yields to the
+holder rather than spinning. `scheduler_yield` turns a still-RUNNING caller
+into READY, and code that sleeps must set BLOCKED *before* re-checking its
+condition (the `wait()` lost-wakeup bug, REVIEW.md I).
+
 ## Syscalls
 
 Dispatched through a single switch in `kernel/kernel/syscall.c`. The register
@@ -77,13 +108,18 @@ convention is documented in [BUILD.md](BUILD.md); user-side stubs are in
 > pointers must use them. `sbrk` is bounds-checked; `SYS_WAIT` re-resolves the
 > child each wake. Notable newer syscalls: `SYS_READ_NB` (35, non-blocking read,
 > used by the WM loop) and `SYS_EXEC_REDIR` (36, exec with explicit child
-> stdin/stdout fds).
+> stdin/stdout fds). Since the 2026-11 review: `SYS_WAIT` takes an options
+> word in EDX (`WAIT_NOHANG`; libc `wait_nohang()`), and `SYS_MEMINFO` (53)
+> returns the free physical page count (used by ktest's leak checks).
 
 ## Filesystem
 
-`vfs.c` provides a function-pointer VFS over multiple backends: `fat16.c` (the
-on-disk FAT16 image, `disk.img`), `initrd.c` (the boot module), and `pipe.c`
-(anonymous pipes). `elf.c` loads ELF executables into a new address space.
+`vfs.c` provides a function-pointer VFS over multiple backends: `ext2.c`
+(read-only, probed first) or `fat16.c` (`disk.img`) on the disk, `initrd.c`
+(the boot module), and `pipe.c` (anonymous pipes); sockets also live in the fd
+table. Paths are normalised against the CWD (`vfs_normalize`). The fd table
+(32 slots) and the CWD are **global**, not per-process — see REVIEW.md E and
+Architecture. `elf.c` loads ELF executables into a new address space.
 
 ## Graphics & windowing (user space)
 
@@ -104,6 +140,15 @@ design that was deeply race-prone).
   entry points that install callbacks and allocate `app_state`. The terminal
   drains its shell's stdout pipe in `on_tick` (non-blocking) and spawns the
   shell with `exec_redir` so the WM keeps reading the real keyboard.
+- **Keyboard and Ctrl-C (ROADMAP3 17.0.1).** `kbd_xlate.c` turns scancodes into
+  bytes (shifted layout, Ctrl codes, VT100 escape sequences for arrows/F-keys).
+  Ctrl-C is a SIGINT to a shell's *foreground job*: shells `setfg(child)`
+  around `wait()`, and the kernel follows the `fg_child` chain
+  (`process_intr_target`). On the text console the keyboard IRQ does this from
+  `console_shell_pid`; on the desktop the WM ignores SIGINT, receives 0x03 as a
+  key, and gterm calls `intr(shell_pid)`. Signals are dispatched at syscall
+  exit and on timer-IRQ return to ring 3; blocking reads and `wait()` abort
+  when one is pending.
 - The kernel tracks the single graphics owner (`gfx_owner_pid`, syscall.c):
   refuses a second WM, and while graphics mode is active suppresses the kernel
   VBE text console + kernel mouse cursor (`vbe_set_graphics_mode`) so they don't
@@ -114,13 +159,26 @@ exercised by `tests/test_wm.c` on the host.
 
 ## Networking
 
-A TCP/IP stack exists in the kernel (`kernel/kernel/net.c` over the RTL8139
-driver, `arch/i386/rtl8139.c`) but is **not yet exposed to user space** — adding
-the BSD socket syscalls is the next roadmap milestone (Section 15).
+A TCP/IP stack in the kernel (`kernel/kernel/net.c` over the RTL8139 driver,
+`arch/i386/rtl8139.c`) is exposed to user space through BSD-style socket
+syscalls (44–50) and `SYS_DNS_RESOLVE` (51); `wget` fetches real pages.
+Networking is polled, not IRQ-driven, and there is a single global TCP
+connection with shared static frame buffers — two processes using sockets at
+once would interfere.
 
 ## Testing
 
-All unit tests are **host-compiled** (`tests/`, custom `framework.h`): kernel
+Unit tests are **host-compiled** (`tests/`, custom `framework.h`): kernel
 `.c` files are built with the host gcc, with hardware-only code excluded via
-`#ifdef __is_kernel`. There is currently no in-VM integration test beyond the
-`make smoke` headless-boot check.
+`#ifdef __is_kernel`. Keep policy logic pure so it can be tested this way
+(e.g. `vma_fault_action`, `as_destroy`, the process lifecycle).
+
+In-VM tests run headless under QEMU (`tools/smoke_test.sh`):
+- `make smoke` — boots and requires the ring-3 shell banner.
+- `make ktest` — types `exec ktest.elf` into the shell through the QEMU
+  monitor (`tools/qemu_type.py`); `user/ktest` has one check per fixed kernel
+  bug and must print `KTEST: ALL PASS`. Run on both images
+  (`SMOKE_DISK=ext2.img make ktest`).
+- `make wmtest` — `startx`, then opens/closes a Terminal three times with the
+  mouse and counts shell exits.
+A failing run keeps its serial log in `smoke-fail.log`.

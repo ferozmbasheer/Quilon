@@ -66,6 +66,11 @@
 #define SYS_DNS_RESOLVE 51 /* dns_resolve(host, uint32_t *out_ip) -> 0 or -1 (sec 15.2) */
 #define SYS_FSINFO     52 /* fsinfo(fsinfo_t *out) -> 0 or -1 (section 16.2)           */
 #define SYS_MEMINFO    53 /* free_pages() -> free physical page count (REVIEW.md)       */
+/* Signals & foreground jobs (ROADMAP3 17.0.1) */
+#define SYS_KILL       54 /* kill(pid, sig) -> 0 or -1                                  */
+#define SYS_SIGNAL     55 /* signal(sig, SIG_DFL|SIG_IGN) -> old (0/1) or -1           */
+#define SYS_SETFG      56 /* setfg(pid) -> 0 or -1; pid<0 clears (caller's fg job)      */
+#define SYS_INTR       57 /* intr(shell_pid) -> 1 SIGINT sent, 0 no fg job, -1 err      */
 
 /* mouse_event_t -- filled by SYS_MOUSE_READ; matches user/libc/include/mouse.h */
 typedef struct {

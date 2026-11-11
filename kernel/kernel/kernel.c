@@ -1088,6 +1088,11 @@ void kernel_main(void) {
 					for (int _v = 0; _v < PROC_VMA_MAX; _v++)
 						shell_proc->vmas[_v] = shell_vmas[_v];
 
+					/* Ctrl-C on the text console interrupts this
+					 * shell's foreground job (ROADMAP3 17.0.1). */
+					console_shell_pid = (int)shell_proc->pid;
+					keyboard_set_intr_handler(process_console_interrupt);
+
 					printf("user space: launching SHELL.ELF "
 					       "(pid=%d, entry=0x%x)\r\n",
 					       (int)shell_proc->pid,

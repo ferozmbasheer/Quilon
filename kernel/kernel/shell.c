@@ -22,6 +22,7 @@
 #include <kernel/waitq.h>
 #include <kernel/syscall.h>
 #include <kernel/mouse.h>
+#include <kernel/signal.h>
 
 static void shell_cmd_ls(void)
 {
@@ -1312,10 +1313,40 @@ static void shell_cmd_waitq(void)
     printf("  (no CPU wasted spinning while waiting for I/O)\r\n");
 }
 
+/* Parse a non-negative decimal number; advances *p.  -1 if none. */
+static int shell_parse_uint(const char **p)
+{
+    while (**p == ' ') (*p)++;
+    if (**p < '0' || **p > '9') return -1;
+    int v = 0;
+    while (**p >= '0' && **p <= '9') v = v * 10 + (*(*p)++ - '0');
+    return v;
+}
+
+/* kill <pid> [sig] -- post a signal (default SIGTERM).  ROADMAP3 17.0.1;
+ * mirrors cmd_kill in user/shell/main.c. */
+static void shell_cmd_kill(const char *args)
+{
+    int pid = shell_parse_uint(&args);
+    int sig = shell_parse_uint(&args);
+    if (pid < 0) {
+        printf("Usage: kill <pid> [signal]   (default 15 = SIGTERM; 2 = INT, 9 = KILL)\r\n");
+        return;
+    }
+    if (sig < 0) sig = SIGTERM;
+    process_t *t = process_find((uint32_t)pid);
+    if (!t || t->state == PROC_ZOMBIE || sig <= 0 || sig >= NSIG) {
+        printf("kill: no such process or bad signal: %d %d\r\n", pid, sig);
+        return;
+    }
+    signal_send(t, sig);
+}
+
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, cow, ps, ls,\r\n");
+        printf("          kill <pid> [sig]       - send a signal (default 15 TERM)\r\n");
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
         printf("          rm <file|dir>, fstest, pipetest, initrd, pci,\r\n");
         printf("          net, netsend, exec <file.elf>\r\n");
@@ -1376,6 +1407,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_cow();
     } else if (strcmp(cmd, "ps") == 0) {
         shell_cmd_ps();
+    } else if (strncmp(cmd, "kill", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) {
+        shell_cmd_kill(cmd + 4);
     } else if (strcmp(cmd, "ls") == 0) {
         shell_cmd_ls();
     } else if (strncmp(cmd, "cat ", 4) == 0) {
@@ -1466,6 +1499,25 @@ void shell_run(void) {
     while (1) {
         char c = keyboard_getchar();
 
+        /* Keyboard extras (ROADMAP3 17.0.1, kept in step with readline() in
+         * user/shell/main.c).  Programs run by this shell's exec execute
+         * without a process (exec_setjmp), so there is no foreground job
+         * for Ctrl-C to interrupt here -- it only abandons the line. */
+        if (c == 0x03) {                          /* Ctrl-C */
+            printf("^C\r\nquilon> ");
+            pos = 0;
+            continue;
+        }
+        if (c == 0x1b) {                          /* swallow escape sequence */
+            char n = keyboard_getchar();
+            if (n == '[') {
+                do { n = keyboard_getchar(); } while (n < 0x40 || n > 0x7e);
+            } else if (n == 'O') {
+                (void)keyboard_getchar();
+            }
+            continue;
+        }
+
         if (c == '\n') {
             line[pos] = '\0';
             printf("\r\n");
@@ -1475,7 +1527,7 @@ void shell_run(void) {
         } else if (c == '\b' && pos > 0) {
             pos--;
             printf("\b \b");
-        } else if (pos < 255) {
+        } else if (c >= 32 && pos < 255) {     /* ignore other controls */
             line[pos++] = c;
             printf("%c", c);
         }

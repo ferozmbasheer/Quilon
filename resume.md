@@ -3,7 +3,7 @@
 Read this first if you're picking up work on Quilon after a context reset. It is
 the practical "where things stand and how not to waste time" companion to
 [ROADMAP3.md](ROADMAP3.md) (the plan) and [ARCHITECTURE.md](ARCHITECTURE.md)
-(the system map). Last updated 2026-08.
+(the system map). Last updated 2026-11.
 
 ## What Quilon is
 
@@ -44,7 +44,12 @@ per-process fd tables + cwd, errno, boot-demo gating, single TCP connection.
 **Section 16 — More device drivers: 16.1 ATA Bus Master DMA and 16.2 ext2 are
 both DONE (ext2 read-only).** Next up is **ROADMAP3 §17 — porting** (17.1 Lua,
 17.2 a text editor, 17.3 TinyCC), or ext2 **write** support if the disk should
-become the primary read-write filesystem. The 15.x and 16.x details below are
+become the primary read-write filesystem. **Planned order (2026-11):** §17.0.1
+keyboard (shift/ctrl/arrows/Ctrl-C + `SYS_KILL`) — **done**, see the 17.0.1
+"as built" note in ROADMAP3 and `make kbdtest` → §18 desktop polish (idle
+damage-driven WM loop, richer events, resize/min/max, taskbar window list,
+widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
+newlib/PDCLib port) → 17.1–17.3. The 15.x and 16.x details below are
 kept as a record.
 
 ### 16.2 ext2 filesystem — DONE, read-only (2026-08)

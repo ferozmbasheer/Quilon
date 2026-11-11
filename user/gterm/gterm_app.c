@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <gfx.h>
+#include <signal.h>
 #include "gterm.h"
 #include "../wm/wm.h"
 
@@ -85,8 +86,15 @@ static void gterm_event(window_t *win, const wm_event_t *ev)
 {
     gterm_state_t *st = (gterm_state_t *)win->app_state;
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
-    if (ev->type == WM_EV_KEY && ev->ascii)
-        write(st->to_shell[1], &ev->ascii, 1);
+    if (ev->type != WM_EV_KEY || !ev->ascii) return;
+
+    /* Ctrl-C (ROADMAP3 17.0.1): the WM reads the keyboard on the shell's
+     * behalf, so the kernel can't route it -- ask it to SIGINT the shell's
+     * foreground job.  With no job running (shell at its prompt) the byte
+     * goes to the shell as input, which abandons the current line. */
+    if (ev->ascii == 0x03 && st->shell_pid > 0 && intr(st->shell_pid) == 1)
+        return;
+    write(st->to_shell[1], &ev->ascii, 1);
 }
 
 static void reap_queue_add(int pid);

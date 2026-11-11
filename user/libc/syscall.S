@@ -553,6 +553,51 @@ fsinfo:
     popl  %ebx
     ret
 
+/* -- Signals & foreground jobs (ROADMAP3 17.0.1) --------------------------- */
+
+/* kill(pid, sig) -> 0 or -1                                    SYS_KILL (54) */
+.global kill
+kill:
+    pushl %ebx
+    movl  $54,      %eax
+    movl  8(%esp),  %ebx    /* pid */
+    movl  12(%esp), %ecx    /* sig */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* _sys_signal(sig, disposition) -> old disposition or -1     SYS_SIGNAL (55) */
+/* Wrapped by signal() in signal.c.                                          */
+.global _sys_signal
+_sys_signal:
+    pushl %ebx
+    movl  $55,      %eax
+    movl  8(%esp),  %ebx    /* sig */
+    movl  12(%esp), %ecx    /* SIG_DFL (0) / SIG_IGN (1) */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* setfg(pid) -> 0 or -1; pid < 0 clears                       SYS_SETFG (56) */
+.global setfg
+setfg:
+    pushl %ebx
+    movl  $56,      %eax
+    movl  8(%esp),  %ebx    /* pid */
+    int   $0x80
+    popl  %ebx
+    ret
+
+/* intr(shell_pid) -> 1 SIGINT sent, 0 no fg job, -1 error      SYS_INTR (57) */
+.global intr
+intr:
+    pushl %ebx
+    movl  $57,      %eax
+    movl  8(%esp),  %ebx    /* shell pid */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

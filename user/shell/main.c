@@ -31,6 +31,7 @@
 #include <pthread.h>
 #include <gfx.h>
 #include <sys/socket.h>
+#include <signal.h>
 
 /* -- Terminal helpers --------------------------------------------------- */
 
@@ -40,11 +41,38 @@
  * Reads characters one-at-a-time via SYS_READ(FD_STDIN) until Enter
  * (\r or \n) is received or the buffer is full.  Supports backspace.
  *
+ * Keyboard extras (ROADMAP3 17.0.1, kept in step with kernel/kernel/shell.c):
+ *   - Ctrl-C (0x03) at the prompt abandons the line: prints ^C, returns 0.
+ *     (While a program runs, Ctrl-C never reaches us: it is a SIGINT for
+ *     the foreground job -- see cmd_exec.)
+ *   - Escape sequences (arrows, Home/End, F-keys, Alt+key) are swallowed
+ *     whole: echoing them would move the cursor, and there is no line
+ *     editing or history to use them for yet.
+ *
  * Returns the number of characters in buf (not counting the NUL terminator),
  * or -1 at end of input: stdin is a pipe whose writer closed (the terminal
  * window was closed) or a read error.  Retrying would spin forever -- an
  * orphaned shell burning 100% CPU after every closed terminal.
  */
+/* Consume the rest of an escape sequence whose ESC was just read:
+ * ESC [ params final  (CSI: arrows, Home/End, Delete, F5-F12),
+ * ESC O final         (SS3: F1-F4), or ESC <char> (Alt+key).
+ * Returns 0, or -1 at end of input. */
+static int skip_escape(void)
+{
+    char c;
+    if (read(STDIN_FILENO, &c, 1) <= 0) return -1;
+    if (c == '[') {
+        /* Parameter/intermediate bytes, then a final byte 0x40-0x7E. */
+        do {
+            if (read(STDIN_FILENO, &c, 1) <= 0) return -1;
+        } while (c < 0x40 || c > 0x7e);
+    } else if (c == 'O') {
+        if (read(STDIN_FILENO, &c, 1) <= 0) return -1;
+    }
+    return 0;
+}
+
 static int readline(char *buf, int size)
 {
     int  i = 0;
@@ -61,6 +89,15 @@ static int readline(char *buf, int size)
         if ((c == '\b' || c == 127) && i > 0) {  /* backspace */
             i--;
             write(STDOUT_FILENO, "\b \b", 3);
+            continue;
+        }
+        if (c == 0x03) {                         /* Ctrl-C: drop the line */
+            write(STDOUT_FILENO, "^C\r\n", 4);
+            i = 0;
+            break;
+        }
+        if (c == 0x1b) {                         /* escape sequence */
+            if (skip_escape() < 0) return -1;
             continue;
         }
         if (c < 32) continue;  /* ignore other control characters */
@@ -88,6 +125,7 @@ static void cmd_help(void)
     printf("  exec <file.elf>        - run an ELF program\r\n");
     printf("  pid                    - print shell PID\r\n");
     printf("  ps                     - list running processes\r\n");
+    printf("  kill <pid> [sig]       - send a signal (default 15 TERM; Ctrl-C = 2 INT)\r\n");
     printf("  ticks                  - raw PIT tick count\r\n");
     printf("  seconds                - uptime in whole seconds\r\n");
     printf("  clear / cls            - scroll screen\r\n");
@@ -176,8 +214,13 @@ static void cmd_exec(const char *path)
     }
     printf("exec: child PID=%d, waiting...\r\n", child_pid);
 
+    /* Make the child our foreground job so Ctrl-C (SIGINT) reaches it. */
+    setfg(child_pid);
     int exit_code = 0;
     wait(child_pid, &exit_code);
+    setfg(-1);
+    if (exit_code == -SIGINT)
+        printf("^C\r\n");
     printf("exec: '%s' exited (code %d)\r\n", path, exit_code);
 }
 
@@ -1269,6 +1312,26 @@ static void cmd_wm_demo(void)
     printf("=== done ===\r\n");
 }
 
+/* kill <pid> [sig] -- post a signal (default SIGTERM).  ROADMAP3 17.0.1. */
+static void cmd_kill(const char *args)
+{
+    if (!args || !*args) {
+        printf("Usage: kill <pid> [signal]   (default 15 = SIGTERM; 2 = INT, 9 = KILL)\r\n");
+        return;
+    }
+    int pid = atoi(args);
+    const char *p = args;
+    while (*p && *p != ' ') p++;
+    while (*p == ' ') p++;
+    int sig = *p ? atoi(p) : SIGTERM;
+    if (pid == getpid()) {
+        printf("kill: refusing to signal this shell (use 'exit')\r\n");
+        return;
+    }
+    if (kill(pid, sig) < 0)
+        printf("kill: no such process or bad signal: %d %d\r\n", pid, sig);
+}
+
 static void cmd_ticks(void)
 {
     printf("%u\r\n", getticks());
@@ -1337,6 +1400,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "seconds") == 0) cmd_seconds();
     else if (strcmp(cmd, "pid")    == 0) cmd_pid();
     else if (strcmp(cmd, "ps")     == 0) cmd_ps();
+    else if (strcmp(cmd, "kill")   == 0) cmd_kill(arg);
     else if (strcmp(cmd, "clear")  == 0) cmd_clear();
     else if (strcmp(cmd, "cls")    == 0) cmd_clear();
     else if (strcmp(cmd, "sbrk")     == 0) cmd_sbrk();
@@ -1388,6 +1452,13 @@ int main(void)
     printf("|  Running at CPL=3 via SYS_EXEC / process_t   |\r\n");
     printf("+----------------------------------------------+\r\n");
     printf("Type 'help' for a list of commands.\r\n\r\n");
+
+    /* Like any interactive Unix shell, ignore SIGINT: Ctrl-C is meant for
+     * the job we run, never for us.  Without this, Ctrl-C at a nested
+     * shell's prompt (exec shell.elf) killed that shell, since it is the
+     * outer shell's foreground job.  We then see the 0x03 byte instead and
+     * readline() drops the line.  Programs we exec start with SIG_DFL. */
+    signal(SIGINT, SIG_IGN);
 
     char line[128];
 

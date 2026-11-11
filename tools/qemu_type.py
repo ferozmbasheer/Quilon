@@ -12,16 +12,28 @@ then plays <script>.  Plain characters are typed with HMP `sendkey`; a literal
     {click}          left button press + release
     {wait:SECONDS}   sleep
     {until:TEXT}     wait (up to 60 s) until TEXT appears in the serial log
+    {key:NAME}       one raw HMP sendkey, e.g. {key:ctrl-c}, {key:left},
+                     {key:shift-a}, {key:f5}
 
 Used by tools/smoke_test.sh (SMOKE_KEYS), `make ktest` and `make wmtest`.
 
-Quilon's keyboard map has no shift, so only lowercase letters, digits and
-unshifted punctuation are typeable -- the same limit a human user has.
+Uppercase letters and shifted symbols are typed with shift- (the keyboard
+driver has handled Shift since ROADMAP3 17.0.1).  Characters that would
+collide with the script syntax -- { and } -- need {key:shift-bracket_left} /
+{key:shift-bracket_right}.
 """
 import re, socket, sys, time
 
 KEYS = {' ': 'spc', '.': 'dot', '/': 'slash', '-': 'minus', '=': 'equal',
-        ',': 'comma', ';': 'semicolon', '\n': 'ret'}
+        ',': 'comma', ';': 'semicolon', '\n': 'ret', "'": 'apostrophe',
+        '[': 'bracket_left', ']': 'bracket_right', '\\': 'backslash',
+        '`': 'grave_accent'}
+
+# Shifted characters (US layout) -> the unshifted key to press with shift.
+SHIFTED = {'!': '1', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6',
+           '&': '7', '*': '8', '(': '9', ')': '0', '_': 'minus',
+           '+': 'equal', ':': 'semicolon', '"': 'apostrophe', '<': 'comma',
+           '>': 'dot', '?': 'slash', '|': 'backslash', '~': 'grave_accent'}
 
 
 def log_has(log_path, text, start=0):
@@ -79,13 +91,20 @@ def main():
                 hmp('mouse_button 0', 0.2)
             elif name == 'wait':
                 time.sleep(float(arg))
+            elif name == 'key':
+                hmp('sendkey %s' % arg)
             elif name == 'until':
                 if not wait_for(log_path, arg, 60):
                     sys.exit("qemu_type: timed out waiting for %r" % arg)
             else:
                 sys.exit("qemu_type: unknown command %r" % tok)
             continue
-        key = KEYS.get(tok, tok)
+        if tok in SHIFTED:
+            key = 'shift-' + SHIFTED[tok]
+        elif tok.isupper():
+            key = 'shift-' + tok.lower()
+        else:
+            key = KEYS.get(tok, tok)
         if not (len(key) > 1 or tok.isalnum()):
             sys.exit("qemu_type: untypeable character %r" % tok)
         hmp('sendkey %s' % key)

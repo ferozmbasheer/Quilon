@@ -14,10 +14,10 @@
  *
  * Thread safety
  * -------------
- * IRQs may fire between reading pending_signals and clearing a bit.  The
- * bitmask operations are not atomic.  For a single-CPU kernel with IRQs
- * disabled during exception/syscall handlers this is safe.  An SMP kernel
- * would need compare-and-swap or interrupt masking.
+ * signal_send() runs from IRQ context (Ctrl-C in the keyboard handler) as
+ * well as from syscalls, so the pending bitmask is updated with atomic
+ * read-modify-write operations: a send can never be lost to a concurrent
+ * dispatch clearing a different bit.
  */
 
 #include <stdint.h>
@@ -37,7 +37,14 @@ void signal_send(struct process *proc, int signum)
     if (!proc || signum < 0 || signum >= NSIG)
         return;
 
-    proc->pending_signals |= (1u << (unsigned)signum);
+    /* An ignored signal is discarded at send time (POSIX semantics), so it
+     * never wakes the process or interrupts a blocking read.  SIGKILL can't
+     * be ignored. */
+    if (signum != SIGKILL && proc->signal_handlers[signum] == SIG_IGN)
+        return;
+
+    __atomic_fetch_or(&proc->pending_signals, 1u << (unsigned)signum,
+                      __ATOMIC_SEQ_CST);
 
 #ifdef __is_kernel
     /* If the process is sleeping in SYS_WAIT, wake it so signal_dispatch()
@@ -45,6 +52,27 @@ void signal_send(struct process *proc, int signum)
     if (proc->state == PROC_BLOCKED)
         proc->state = PROC_READY;
 #endif
+}
+
+/* -- signal_pending / signal_set_handler ---------------------------------- */
+
+int signal_pending(const struct process *proc)
+{
+    return proc && __atomic_load_n(&proc->pending_signals, __ATOMIC_SEQ_CST) != 0;
+}
+
+int signal_set_handler(struct process *proc, int signum, void (*handler)(int))
+{
+    if (!proc || signum <= 0 || signum >= NSIG || signum == SIGKILL)
+        return -1;
+    if (handler != SIG_DFL && handler != SIG_IGN)
+        return -1;                       /* user handlers: not delivered yet */
+
+    proc->signal_handlers[signum] = handler;
+    if (handler == SIG_IGN)
+        __atomic_fetch_and(&proc->pending_signals,
+                           ~(1u << (unsigned)signum), __ATOMIC_SEQ_CST);
+    return 0;
 }
 
 /* -- signal_dispatch ------------------------------------------------------- */
@@ -64,7 +92,8 @@ void signal_dispatch(void)
     if (signum >= NSIG) return;
 
     /* Clear the pending bit before dispatch so a re-entrant send is safe. */
-    current_process->pending_signals &= ~(1u << (unsigned)signum);
+    __atomic_fetch_and(&current_process->pending_signals,
+                       ~(1u << (unsigned)signum), __ATOMIC_SEQ_CST);
 
     void (*handler)(int) = current_process->signal_handlers[signum];
 

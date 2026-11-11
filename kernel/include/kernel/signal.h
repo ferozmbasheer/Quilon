@@ -6,7 +6,8 @@
  *
  * Delivery model
  * --------------
- * signal_send()    -- posts a signal to a process (sets a bit, wakes if sleeping).
+ * signal_send()    -- posts a signal to a process (sets a bit, wakes if sleeping);
+ *                     a signal the process ignores (SIG_IGN) is discarded.
  * signal_dispatch() -- checks pending_signals for current_process and acts:
  *                      SIG_DFL: terminate (PROC_ZOMBIE) and wake the parent.
  *                      SIG_IGN: clear the bit, do nothing.
@@ -37,8 +38,10 @@
 
 /* -- Signal numbers -------------------------------------------------------- */
 
+#define SIGINT       2      /* interrupt from the keyboard (Ctrl-C)            */
 #define SIGKILL      9      /* terminate unconditionally -- cannot be ignored  */
 #define SIGSEGV     11      /* invalid memory reference (page fault in ring 3)*/
+#define SIGTERM     15      /* polite termination request (kill's default)     */
 #define SIGCHLD     17      /* child stopped or terminated                    */
 
 /* -- Pseudo-handler constants ---------------------------------------------- */
@@ -75,6 +78,27 @@ struct process;
  * Safe to call from any kernel context (exception handler, IRQ handler, etc.).
  */
 void signal_send(struct process *proc, int signum);
+
+/*
+ * signal_pending -- 1 if proc has a signal awaiting delivery.
+ *
+ * Blocking kernel loops (keyboard read, pipe read/write, SYS_WAIT) check this
+ * after every wake-up and bail out, so the syscall returns and
+ * signal_dispatch() can act.  Ignored signals are never pending (signal_send
+ * discards them), so this never aborts a read for a signal that would be
+ * thrown away anyway.
+ */
+int signal_pending(const struct process *proc);
+
+/*
+ * signal_set_handler -- SYS_SIGNAL: set proc's disposition for signum.
+ *
+ * Only SIG_DFL and SIG_IGN are accepted (user handlers are not delivered
+ * yet, so accepting one would silently mean "terminate").  SIGKILL cannot be
+ * changed.  Setting SIG_IGN also discards an already-pending instance.
+ * Returns 0 on success, -1 on a bad signal number or handler.
+ */
+int signal_set_handler(struct process *proc, int signum, void (*handler)(int));
 
 /*
  * signal_dispatch -- deliver one pending signal to the current process.

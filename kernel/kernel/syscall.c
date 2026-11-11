@@ -397,11 +397,13 @@ void syscall_handler(syscall_regs_t *regs)
             if (current_process && current_process->stdin_fd >= 0) {
                 ret = (uint32_t)vfs_read(current_process->stdin_fd, buf, len);
             } else {
+                /* Interruptible: Ctrl-C / kill readies a process blocked
+                 * here, and it must return so signal_dispatch() runs. */
                 uint32_t n = 0;
-                while (n < len) {
-                    buf[n++] = keyboard_getchar();
-                }
-                ret = n;
+                char     c;
+                while (n < len && keyboard_getchar_intr(&c) == 0)
+                    buf[n++] = c;
+                ret = n ? n : (uint32_t)-1;
             }
         } else {
             ret = (uint32_t)vfs_read((int)regs->ebx, buf, len);
@@ -516,6 +518,10 @@ void syscall_handler(syscall_regs_t *regs)
             _child = process_find(child_pid);
             if (!_child) { ret = (uint32_t)-1; break; }
             if (_child->state == PROC_ZOMBIE) break;
+            /* A signal for the waiter itself (kill, or Ctrl-C reaching a
+             * process that is waiting on its own child): give up so the
+             * syscall returns and signal_dispatch() can act. */
+            if (signal_pending(current_process)) { _child = NULL; ret = (uint32_t)-1; break; }
             scheduler_yield();
         }
         current_process->state = PROC_RUNNING;
@@ -1746,6 +1752,110 @@ void syscall_handler(syscall_regs_t *regs)
         ret = 0;
 #endif
         break;
+
+    /* ------------------------------------------------------------------------
+     * SYS_KILL (54) -- kill(pid, sig)                    (ROADMAP3 17.0.1)
+     *   EBX = target PID, ECX = signal number (1..NSIG-1).
+     *   Returns 0 if the signal was posted, -1 for an unknown/dead PID or a
+     *   bad signal.  Quilon is single-user, so there is no permission check
+     *   beyond refusing zombies and empty slots.  An ignored signal is
+     *   discarded by signal_send (still returns 0, as on POSIX).
+     * ------------------------------------------------------------------------ */
+    case SYS_KILL: {
+#ifdef __is_kernel
+        process_t *t = process_find(regs->ebx);
+        int sig = (int)regs->ecx;
+        if (!t || t->state == PROC_ZOMBIE || sig <= 0 || sig >= NSIG) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        signal_send(t, sig);
+        ret = 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_SIGNAL (55) -- signal(sig, handler)            (ROADMAP3 17.0.1)
+     *   EBX = signal number, ECX = SIG_DFL (0) or SIG_IGN (1).
+ *   Returns the previous disposition (0 or 1), or -1.
+     *   User-function handlers are rejected (-1): delivery to ring 3 is not
+     *   implemented, and accepting one would silently mean "terminate".
+     *   The WM uses signal(SIGINT, SIG_IGN) so Ctrl-C reaches it as a 0x03
+     *   key, which it forwards to the focused terminal.
+     * ------------------------------------------------------------------------ */
+    case SYS_SIGNAL:
+#ifdef __is_kernel
+    {
+        /* Returns the previous disposition (0 = SIG_DFL, 1 = SIG_IGN), so
+         * libc's signal() can return the old handler as POSIX does. */
+        int sig = (int)regs->ebx;
+        void (*old)(int) = (current_process && sig > 0 && sig < NSIG)
+                           ? current_process->signal_handlers[sig] : SIG_DFL;
+        if (signal_set_handler(current_process, sig,
+                               (void (*)(int))(uintptr_t)regs->ecx) < 0)
+            ret = (uint32_t)-1;
+        else
+            ret = (old == SIG_IGN) ? 1u : 0u;
+    }
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+
+    /* ------------------------------------------------------------------------
+     * SYS_SETFG (56) -- setfg(pid)                        (ROADMAP3 17.0.1)
+     *   EBX = PID of one of the caller's children to make its foreground
+     *   job, or a negative value to clear it.  A shell calls this around
+     *   wait() so Ctrl-C reaches the program it is running.
+     * ------------------------------------------------------------------------ */
+    case SYS_SETFG: {
+#ifdef __is_kernel
+        if (!current_process) { ret = (uint32_t)-1; break; }
+        int pid = (int)regs->ebx;
+        if (pid < 0) { current_process->fg_child = -1; ret = 0; break; }
+        process_t *c = process_find((uint32_t)pid);
+        if (!c || c->parent_pid != current_process->pid) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        current_process->fg_child = pid;
+        ret = 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_INTR (57) -- intr(shell_pid)                    (ROADMAP3 17.0.1)
+     *   EBX = PID of a shell the caller owns (its child) or the caller itself.
+     *   Sends SIGINT to that shell's foreground job (process_intr_target).
+     *   Returns 1 if a signal was sent, 0 if there is no job to interrupt --
+     *   the caller (gterm) then passes the 0x03 byte to the shell as input,
+     *   so Ctrl-C at a prompt cancels the line -- or -1 on a bad PID.
+     *   This is the desktop's Ctrl-C: the WM, not the shell, reads the
+     *   keyboard, so the kernel can't route it from the IRQ.
+     * ------------------------------------------------------------------------ */
+    case SYS_INTR: {
+#ifdef __is_kernel
+        process_t *root = process_find(regs->ebx);
+        if (!root || !current_process ||
+            (root != current_process &&
+             root->parent_pid != current_process->pid)) {
+            ret = (uint32_t)-1;
+            break;
+        }
+        process_t *t = process_intr_target(root);
+        if (t) signal_send(t, SIGINT);
+        ret = t ? 1 : 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
 
     /* ------------------------------------------------------------------------
      * Unknown syscall
