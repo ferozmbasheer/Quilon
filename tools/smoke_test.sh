@@ -18,6 +18,9 @@
 #   SMOKE_TIMEOUT   seconds to let the VM run            (default 30)
 #   SMOKE_SENTINEL  success string to require in the log (default empty)
 #   FAIL_PATTERN    egrep pattern marking a crash        (default below)
+#   SMOKE_DISK      disk image to attach                 (default disk.img)
+#                   e.g. SMOKE_DISK=ext2.img to boot the ext2 image built by
+#                   `make -C user ext2disk` (section 16.2)
 #
 # Example (strong check — the kernel prints these milestone banners on boot):
 #   SMOKE_SENTINEL='=== Section 7'         make smoke   # reached user space
@@ -29,6 +32,7 @@ cd "$SCRIPT_DIR"
 
 SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-30}"
 SMOKE_SENTINEL="${SMOKE_SENTINEL:-}"
+SMOKE_DISK="${SMOKE_DISK:-disk.img}"
 FAIL_PATTERN="${FAIL_PATTERN:-PANIC|Kernel panic|Exception|Unhandled interrupt|Triple fault|General Protection}"
 
 # Build the ISO and user disk (reuses the existing script chain).
@@ -54,7 +58,7 @@ set +e
 timeout "${SMOKE_TIMEOUT}" "$QEMU" \
     -boot order=d \
     -cdrom quilon.iso \
-    -drive file=disk.img,format=raw,if=ide,index=1 \
+    -drive file="$SMOKE_DISK",format=raw,if=ide,index=1 \
     -device rtl8139,netdev=net0 \
     -netdev user,id=net0 \
     -smp 2 \

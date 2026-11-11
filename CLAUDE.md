@@ -11,6 +11,8 @@ make          # build kernel + libc (needs i686-elf cross toolchain)
 make test     # host unit-test suite (host gcc only) — run on every change
 make run      # boot under QEMU (GUI)
 make smoke    # headless QEMU boot smoke test
+make disk     # rebuild the FAT16 disk.img
+make ext2disk # rebuild ext2.img (needs host mke2fs)
 make clean
 ```
 
@@ -55,12 +57,18 @@ bare `make disk` runs a stale kernel — this wasted real debugging time.
 
 ## Roadmap / progress
 
-Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 14
-(graphical desktop, stable);** next is Section 15 (BSD socket API — the kernel
-TCP/IP stack in `net.c` exists but isn't exposed to user space yet). The WM was
-reworked from CLONE_VM threads to a **single-threaded event loop** (apps =
-callbacks) — see `resume.md` and the "WM architecture" / "thread concurrency"
-project memories.
+Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 16**
+(graphical desktop stable; BSD sockets + DNS + wget; ATA Bus Master DMA; ext2
+read-only, booting off an ext2 disk); next is Section 17 (porting Lua, a text
+editor, TinyCC). The WM was reworked from CLONE_VM threads to a
+**single-threaded event loop** (apps = callbacks) — see `resume.md` and the
+"WM architecture" / "thread concurrency" project memories.
+
+Two filesystems are mounted through the same VFS: the kernel probes **ext2**
+first and falls back to **FAT16**. `make disk` builds the FAT16 `disk.img`;
+`make ext2disk` builds `ext2.img` (needs host `mke2fs`).
+`VFS_NAME_MAX` (kernel) and `DIRENT_NAME_MAX` (user libc) are a shared ABI and
+must stay equal.
 
 A longer-form project memory lives under
 `.claude/projects/.../memory/` (indexed by `MEMORY.md`). **`resume.md`** at the

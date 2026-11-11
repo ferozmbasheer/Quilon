@@ -585,6 +585,22 @@ static void test_remove_then_create_reuses_slot(void)
  * main
  * =========================================================================== */
 
+/*
+ * fsinfo (section 16.2) -- FAT16 reports clusters as its allocation unit.
+ * The test image is 10 sectors of 512 bytes, 1 sector per cluster.
+ */
+static void test_fsinfo(void)
+{
+    setup_write_fs();
+
+    vfs_fsinfo_t fi;
+    ASSERT_EQ(fat16_vfs_ops.fsinfo(&g_fs, &fi), 0, "fat16 fsinfo succeeds");
+    ASSERT_STR_EQ(fi.type, "FAT16", "fsinfo reports the FAT16 type");
+    ASSERT_EQ(fi.block_size, 512u, "a 1-sector cluster is 512 bytes");
+    ASSERT_EQ(fi.total_blocks, 10u, "10-sector image is 10 clusters");
+    ASSERT_EQ(fi.name_max, 12u, "FAT16 reports the 8.3 name limit");
+}
+
 int main(void)
 {
     build_image();
@@ -635,6 +651,8 @@ int main(void)
     RUN_SUITE(test_remove_nonexistent_fails);
     RUN_SUITE(test_remove_no_write_support);
     RUN_SUITE(test_remove_then_create_reuses_slot);
+
+    RUN_SUITE(test_fsinfo);
 
     TEST_SUMMARY();
 }

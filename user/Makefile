@@ -12,11 +12,13 @@
 # Targets
 # ───────
 #   make            — build libc + all user programs
-#   make disk       — build + write every ELF into $(DISK)
+#   make disk       — build + write every ELF into $(DISK)      (FAT16)
+#   make ext2disk   — build + write every ELF into $(EXT2_DISK) (ext2, needs mke2fs)
 #   make clean      — remove all build artefacts (including libc/)
 #
 # Variables
-#   DISK   path to the disk image  (default: ../disk.img)
+#   DISK       path to the FAT16 disk image  (default: ../disk.img)
+#   EXT2_DISK  path to the ext2 disk image   (default: ../ext2.img)
 
 CC = i686-elf-gcc
 
@@ -28,7 +30,15 @@ LIBGFX_DIR = libgfx
 LIBGFX_A   = $(LIBGFX_DIR)/libgfx.a
 
 # Flags for compiling user programs.
+#
+# -MMD -MP writes a .d file next to each .o listing the headers it included,
+# so editing a libc header (dirent.h, sys/stat.h, …) rebuilds the programs
+# that use it.  Without this a struct whose layout the kernel also knows —
+# dirent_t is the sharp example — could silently go out of sync with the
+# kernel after a header change, producing garbage at runtime from a build
+# that looked clean.
 CFLAGS  = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
+          -MMD -MP \
           -I$(LIBC_DIR)/include -I$(LIBGFX_DIR)/include
 
 # Flags for the final link step.
@@ -50,7 +60,7 @@ ASM_ELFS = hello.elf
 # Disk image path (override: make disk DISK=/path/to/disk.img)
 DISK ?= ../disk.img
 
-.PHONY: all clean libc libgfx disk
+.PHONY: all clean libc libgfx disk ext2disk
 
 all: libc libgfx $(ASM_ELFS) $(PROG_ELFS)
 
@@ -84,6 +94,14 @@ $(foreach d,$(PROG_DIRS),$(eval $(call PROG_link,$(d))))
 disk: all
 	python3 ../tools/make_disk.py $(DISK) $(ASM_ELFS) $(PROG_ELFS)
 
+# ext2 image with the same contents (section 16.2).  Needs mke2fs on the host.
+# The kernel probes ext2 before FAT16, so booting with this image attached
+# instead of disk.img exercises the ext2 driver.
+EXT2_DISK ?= ../ext2.img
+
+ext2disk: all
+	python3 ../tools/make_ext2_disk.py $(EXT2_DISK) $(ASM_ELFS) $(PROG_ELFS)
+
 # ── WM: bundles the compositor + all graphical apps into one ELF ─────────────
 # Apps are clone(CLONE_VM) threads; no IPC needed — they share WM heap.
 
@@ -116,10 +134,18 @@ WM_OBJS = wm/main.o wm/wm_compositor.o \
 wm/wm.elf: $(CRT0_O) $(WM_OBJS) $(LIBGFX_A) $(LIBC_A) link.ld
 	$(CC) $(LDFLAGS) -o $@ $(CRT0_O) $(WM_OBJS) $(LDLIBS)
 
-# ── Clean ─────────────────────────────────────────────────────────────────────
 PROG_OBJS := $(foreach d,$(PROG_DIRS),$(d)/main.o)
+
+# ── Header dependencies ───────────────────────────────────────────────────────
+# Pull in the .d files written by -MMD (missing ones are ignored on a clean
+# tree, hence the leading '-').
+DEPS := $(PROG_OBJS:.o=.d) $(WM_OBJS:.o=.d)
+-include $(DEPS)
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
 
 clean:
 	$(MAKE) -C $(LIBC_DIR) clean
 	$(MAKE) -C $(LIBGFX_DIR) clean
-	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) $(WM_OBJS)
+	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) $(WM_OBJS) \
+	      $(PROG_OBJS:.o=.d) $(WM_OBJS:.o=.d)

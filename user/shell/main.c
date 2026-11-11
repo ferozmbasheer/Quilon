@@ -108,6 +108,7 @@ static void cmd_help(void)
     printf("  psf                    - PSF2 font loader info    (section 11.2)\r\n");
     printf("  stat <file>            - show file/dir metadata   (section 12.1)\r\n");
     printf("  pwd                    - print working directory   (section 12.1)\r\n");
+    printf("  fs                     - show mounted filesystem     (section 16.2)\r\n");
     printf("  cd <path>              - change working directory  (section 12.1)\r\n");
     printf("  mkdir <dir>            - create directory          (section 12.1)\r\n");
     printf("  rename <old> <new>     - rename file or directory  (section 12.1)\r\n");
@@ -996,6 +997,28 @@ static void cmd_smp(void)
     printf("(kernel SMP state visible via 'smp' in the ring-0 shell)\r\n");
 }
 
+/* -- Section 16.2: mounted filesystem ------------------------------------- */
+
+/* `fs` -- report which filesystem is mounted and its geometry.
+ * The kernel probes ext2 before FAT16, so this says which one won. */
+static void cmd_fs(void)
+{
+    fsinfo_t fi;
+    if (fsinfo(&fi) != 0) {
+        printf("fs: no filesystem mounted (or driver cannot identify itself)\r\n");
+        return;
+    }
+    printf("  filesystem   %s\r\n", fi.type);
+    printf("  block size   %u bytes\r\n", fi.block_size);
+    if (fi.total_blocks)
+        printf("  volume       %u blocks (%u KiB)\r\n", fi.total_blocks,
+               (unsigned int)(((unsigned long long)fi.total_blocks
+                               * fi.block_size) / 1024u));
+    else
+        printf("  volume       size not reported by this driver\r\n");
+    printf("  name limit   %u chars\r\n", fi.name_max);
+}
+
 /* -- Section 12.1: File Metadata & Directory Operations -------------------- */
 
 static void cmd_stat(const char *path)
@@ -1333,6 +1356,7 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "psf")      == 0) cmd_psf();
     else if (strcmp(cmd, "stat")   == 0) cmd_stat(arg);
     else if (strcmp(cmd, "pwd")    == 0) cmd_pwd();
+    else if (strcmp(cmd, "fs")     == 0) cmd_fs();
     else if (strcmp(cmd, "cd")     == 0) cmd_cd(arg);
     else if (strcmp(cmd, "mkdir")  == 0) cmd_mkdir_dir(arg);
     else if (strcmp(cmd, "rename") == 0) cmd_rename_file(arg);

@@ -34,6 +34,7 @@ typedef struct {
     uint8_t  num_fats;
     uint16_t root_entry_count;
     uint16_t sectors_per_fat;
+    uint32_t total_sectors;   /* volume size in sectors (section 16.2 fsinfo) */
 
     /* Derived LBA start addresses of key regions */
     uint32_t fat_lba;       /* first sector of the FAT                */

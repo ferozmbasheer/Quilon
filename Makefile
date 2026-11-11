@@ -18,7 +18,7 @@
 
 HOST ?= $(shell ./default-host.sh)
 
-.PHONY: all build headers iso disk run smoke test clean check-toolchain
+.PHONY: all build headers iso disk ext2disk run smoke test clean check-toolchain
 
 all: build
 
@@ -42,6 +42,12 @@ iso: check-toolchain
 
 disk: check-toolchain
 	@./create_disk.sh
+
+# ext2 image with the same user programs (section 16.2).  Needs host mke2fs.
+# The kernel probes ext2 before FAT16, so booting with ext2.img attached in
+# place of disk.img exercises the ext2 driver.
+ext2disk: check-toolchain
+	@$(MAKE) -C user ext2disk
 
 run: check-toolchain
 	@./qemu.sh

@@ -19,6 +19,7 @@
 #include <kernel/ata_dma.h>
 #include <kernel/vfs.h>
 #include <kernel/fat16.h>
+#include <kernel/ext2.h>
 #include <kernel/elf.h>
 #include <kernel/process.h>
 #include <kernel/signal.h>
@@ -48,6 +49,39 @@ static int ata_sector_write(void *ctx, uint32_t lba, const void *buf)
 }
 
 static fat16_ctx_t fs_ctx;
+static ext2_ctx_t  ext2_fs_ctx;
+
+/*
+ * mount_disk -- mount the filesystem on `drive`, preferring ext2 (section 16.2)
+ * and falling back to FAT16.
+ *
+ * ext2 is probed first because its superblock (magic 0xEF53 at byte 1024) is a
+ * far stronger signal than FAT16's 0x55AA boot signature, which many non-FAT
+ * volumes also carry.  Returns the name of the filesystem mounted, or NULL if
+ * the drive holds neither.
+ */
+static const char *mount_disk(int drive)
+{
+	ext2_fs_ctx.sector_read  = ata_sector_read;
+	ext2_fs_ctx.sector_write = ata_sector_write;
+	ext2_fs_ctx.ctx          = (void *)(uintptr_t)drive;
+
+	if (ext2_probe(&ext2_fs_ctx) && ext2_mount(&ext2_fs_ctx) == 0) {
+		vfs_mount(&ext2_vfs_ops, &ext2_fs_ctx);
+		return "ext2";
+	}
+
+	fs_ctx.sector_read  = ata_sector_read;
+	fs_ctx.sector_write = ata_sector_write;
+	fs_ctx.ctx          = (void *)(uintptr_t)drive;
+
+	if (fat16_mount(&fs_ctx) == 0) {
+		vfs_mount(&fat16_vfs_ops, &fs_ctx);
+		return "FAT16";
+	}
+
+	return (const char *)0;
+}
 
 void kernel_main(void) {
 	serial_initialize();
@@ -236,26 +270,34 @@ void kernel_main(void) {
 	int drives_found = ata_initialize();
 	printf("ata: %d drive(s) detected\r\n", drives_found);
 
-	/* Try master first, then slave  - mount whichever has a valid FAT16 volume. */
-	int fs_drive = -1;
-	if (ata_drive_present(ATA_MASTER))      fs_drive = ATA_MASTER;
-	else if (ata_drive_present(ATA_SLAVE))  fs_drive = ATA_SLAVE;
+	/* Try master first, then slave  - mount the first drive carrying a
+	 * filesystem we recognise (ext2 or FAT16).
+	 *
+	 * The loop guard is a local flag, NOT vfs_mounted(): an initrd may
+	 * already be mounted at this point, and mounting a real disk over it is
+	 * exactly what we want.  */
+	int  probe_drives[2] = { ATA_MASTER, ATA_SLAVE };
+	int  any_drive       = 0;
+	int  disk_mounted    = 0;
 
-	if (fs_drive >= 0) {
-		const char *drive_name = (fs_drive == ATA_MASTER) ? "master" : "slave";
-		fs_ctx.sector_read  = ata_sector_read;
-		fs_ctx.sector_write = ata_sector_write;
-		fs_ctx.ctx          = (void *)(uintptr_t)fs_drive;
+	for (int i = 0; i < 2 && !disk_mounted; i++) {
+		int drive = probe_drives[i];
+		if (!ata_drive_present(drive)) continue;
+		any_drive = 1;
 
-		if (fat16_mount(&fs_ctx) == 0) {
-			vfs_mount(&fat16_vfs_ops, &fs_ctx);
-			printf("fs: FAT16 mounted on primary %s\r\n", drive_name);
-		} else {
-			printf("fs: primary %s is not a FAT16 volume\r\n", drive_name);
-		}
-	} else {
-		printf("fs: no disk detected  - filesystem unavailable\r\n");
+		const char *drive_name = (drive == ATA_MASTER) ? "master" : "slave";
+		const char *fs_name    = mount_disk(drive);
+
+		if (fs_name) {
+			disk_mounted = 1;
+			printf("fs: %s mounted on primary %s\r\n", fs_name, drive_name);
+		} else
+			printf("fs: primary %s holds no recognised filesystem\r\n",
+			       drive_name);
 	}
+
+	if (!any_drive)
+		printf("fs: no disk detected  - filesystem unavailable\r\n");
 
 	/* -- ELF loader  - scan for executable files (section 4.12) ---------------
 	 * Walk the root directory and report any .ELF files found.
@@ -979,6 +1021,50 @@ void kernel_main(void) {
 	       SYS_MOUSE_READ);
 	printf("mouse: use 'mouse' at the shell prompt to read position\r\n");
 	printf("=== Section 13 ready ===\r\n\r\n");
+
+	/* -- Section 16.2: ext2 filesystem --------------------------------------
+	 * Report the mounted filesystem, then demonstrate the two things ext2
+	 * gives us that FAT16 could not: descending into a subdirectory, and a
+	 * filename longer than 8.3.  Both probes are skipped silently when the
+	 * mounted volume is FAT16 (or has no /SUB), so a FAT16 boot stays quiet.
+	 * ------------------------------------------------------------------------ */
+	printf("\r\n=== Section 16.2: ext2 Filesystem ===\r\n");
+	printf("fs: SYS_FSINFO=%d  ('fs' at the shell prompt)\r\n", SYS_FSINFO);
+	{
+		vfs_fsinfo_t fi;
+		if (vfs_fsinfo(&fi) == 0) {
+			printf("fs: %s, %d-byte blocks", fi.type, (int)fi.block_size);
+			if (fi.total_blocks)
+				printf(", %d blocks (%d KiB)", (int)fi.total_blocks,
+				       (int)(((uint64_t)fi.total_blocks * fi.block_size) / 1024u));
+			printf("\r\n");
+			printf("fs: readdir name limit %d chars\r\n", (int)fi.name_max);
+		} else {
+			printf("fs: no filesystem mounted\r\n");
+		}
+
+		/* Nested lookup -- FAT16 never descended into a subdirectory. */
+		vfs_stat_t st;
+		if (vfs_stat("/SUB/NESTED.TXT", &st) == 0) {
+			printf("fs: lookup /SUB/NESTED.TXT -> %d bytes "
+			       "(real directory traversal)\r\n", (int)st.size);
+		}
+
+		/* A name FAT16's 8.3 format could not have stored. */
+		vfs_dirent_t de;
+		uint32_t     di = 0;
+		while (vfs_readdir(di, &de) == 0) {
+			uint32_t n = 0;
+			while (de.name[n]) n++;
+			if (n > 12) {
+				printf("fs: long name %s (%d chars) - "
+				       "FAT16 8.3 could not store this\r\n", de.name, (int)n);
+				break;
+			}
+			di++;
+		}
+	}
+	printf("=== Section 16.2 ready ===\r\n\r\n");
 
 	printf("\r\n=== Section 7: User Space ===\r\n");
 	printf("user space: SYS_READDIR=%d  (ring-3 ls)\r\n", SYS_READDIR);

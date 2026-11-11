@@ -839,7 +839,7 @@ void syscall_handler(syscall_regs_t *regs)
      * SYS_READDIR (12)
      *   EBX = index -- zero-based directory entry index.
      *   ECX = pointer to a user-space struct compatible with vfs_dirent_t:
-     *         { char name[13]; uint32_t size; uint8_t type; }
+     *         { char name[VFS_NAME_MAX+1]; uint32_t size; uint8_t type; }
      *   Returns: 0 on success, -1 at end-of-directory or error.
      *
      * Enables ring-3 programs to enumerate the root directory without access
@@ -1691,6 +1691,30 @@ void syscall_handler(syscall_regs_t *regs)
             ret = (uint32_t)-1; break;
         }
         ret = (copyout(regs->ecx, &ip, sizeof ip) == 0) ? 0 : (uint32_t)-1;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_FSINFO (52) -- section 16.2
+     *   EBX = pointer to a user-space struct compatible with vfs_fsinfo_t:
+     *         { char type[8]; uint32_t block_size, total_blocks, name_max; }
+     *   Returns: 0 on success, -1 if nothing is mounted or the driver cannot
+     *            identify itself.
+     *
+     * Lets the ring-3 shell's `fs` command report which filesystem is mounted
+     * (ext2 or FAT16) without any knowledge of kernel VFS internals.
+     * ------------------------------------------------------------------------ */
+    case SYS_FSINFO: {
+#ifdef __is_kernel
+        if (!uap_ok(regs->ebx, sizeof(vfs_fsinfo_t), 1)) {
+            ret = (uint32_t)-1; break;
+        }
+        vfs_fsinfo_t info;
+        if (vfs_fsinfo(&info) != 0) { ret = (uint32_t)-1; break; }
+        ret = (copyout(regs->ebx, &info, sizeof info) == 0) ? 0 : (uint32_t)-1;
 #else
         ret = (uint32_t)-1;
 #endif

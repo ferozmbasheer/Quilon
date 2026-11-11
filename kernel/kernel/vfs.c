@@ -34,6 +34,81 @@ static void *mounted_ctx = (void *)0;
 
 static char vfs_cwd[VFS_PATH_MAX] = "/";
 
+/* -- Path resolution ------------------------------------------------------
+ *
+ * Every path handed to a driver is first turned into a normalised absolute
+ * path: relative paths are joined onto the working directory, and "." and
+ * ".." are folded away.  Before ext2 (section 16.2) this did not matter --
+ * FAT16 has only a root directory, so every path was effectively absolute --
+ * but with real subdirectories `cd sub` followed by `cat file.txt` has to
+ * find /sub/file.txt.
+ *
+ * The invariant that makes this cheap: vfs_cwd is always already normalised
+ * and absolute, so a relative path only has to be appended to it.
+ */
+
+/* Drop the last component of `out`, leaving at least "/". */
+static void path_pop(char *out, uint32_t *len)
+{
+    while (*len > 1 && out[*len - 1] != '/') (*len)--;
+    if (*len > 1) (*len)--;   /* also drop the separating '/' */
+}
+
+/* Append one component.  Returns -1 if it would not fit. */
+static int path_push(char *out, uint32_t *len, const char *comp,
+                     uint32_t clen, uint32_t outlen)
+{
+    uint32_t need = clen + (*len > 1 ? 1u : 0u);
+    if (*len + need + 1 > outlen) return -1;
+
+    if (*len > 1) out[(*len)++] = '/';
+    for (uint32_t i = 0; i < clen; i++) out[(*len)++] = comp[i];
+    return 0;
+}
+
+/*
+ * vfs_normalize -- resolve `path` against the CWD into `out`.
+ *
+ * Writes a normalised absolute path ("/", "/a", "/a/b" -- never a trailing
+ * slash, never "." or ".." components).  Returns 0 on success, -1 if the
+ * result would not fit in `outlen`.
+ */
+static int vfs_normalize(const char *path, char *out, uint32_t outlen)
+{
+    if (!path || outlen < 2) return -1;
+
+    uint32_t len = 0;
+    out[len++] = '/';
+
+    /* A relative path starts from the (already normalised) CWD. */
+    if (path[0] != '/') {
+        for (uint32_t i = 1; vfs_cwd[i]; i++) {
+            if (len + 1 >= outlen) return -1;
+            out[len++] = vfs_cwd[i];
+        }
+    }
+
+    const char *p = path;
+    while (*p) {
+        while (*p == '/') p++;
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        uint32_t clen = (uint32_t)(p - start);
+        if (clen == 0) continue;
+
+        if (clen == 1 && start[0] == '.')
+            continue;                                  /* "." -- no-op */
+        if (clen == 2 && start[0] == '.' && start[1] == '.') {
+            path_pop(out, &len);                       /* ".." -- go up */
+            continue;
+        }
+        if (path_push(out, &len, start, clen, outlen) < 0) return -1;
+    }
+
+    out[len] = '\0';
+    return 0;
+}
+
 /* -- File descriptor table ------------------------------------------------ */
 
 static vfs_node_t fd_table[VFS_MAX_FDS];
@@ -78,8 +153,11 @@ int vfs_open(const char *path)
     }
     if (idx < 0) return -1;   /* fd table full */
 
+    char abs[VFS_PATH_MAX];
+    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
+
     vfs_node_t node = {0};   /* zero all fields including is_pipe */
-    if (mounted_ops->open(mounted_ctx, path, &node) < 0)
+    if (mounted_ops->open(mounted_ctx, abs, &node) < 0)
         return -1;
 
     node.in_use = 1;
@@ -206,14 +284,20 @@ int vfs_create(const char *path)
 {
     if (!vfs_mounted() || !path) return -1;
     if (!mounted_ops->create) return -1;
-    return mounted_ops->create(mounted_ctx, path);
+
+    char abs[VFS_PATH_MAX];
+    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
+    return mounted_ops->create(mounted_ctx, abs);
 }
 
 int vfs_remove(const char *path)
 {
     if (!vfs_mounted() || !path) return -1;
     if (!mounted_ops->remove) return -1;
-    return mounted_ops->remove(mounted_ctx, path);
+
+    char abs[VFS_PATH_MAX];
+    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
+    return mounted_ops->remove(mounted_ctx, abs);
 }
 
 int vfs_readdir(uint32_t index, vfs_dirent_t *out)
@@ -269,42 +353,61 @@ int vfs_stat(const char *path, vfs_stat_t *out)
 {
     if (!vfs_mounted() || !path || !out) return -1;
     if (!mounted_ops->stat) return -1;
-    return mounted_ops->stat(mounted_ctx, path, out);
+
+    char abs[VFS_PATH_MAX];
+    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
+    return mounted_ops->stat(mounted_ctx, abs, out);
 }
 
 int vfs_mkdir(const char *path)
 {
     if (!vfs_mounted() || !path) return -1;
     if (!mounted_ops->mkdir) return -1;
-    return mounted_ops->mkdir(mounted_ctx, path);
+
+    char abs[VFS_PATH_MAX];
+    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
+    return mounted_ops->mkdir(mounted_ctx, abs);
 }
 
 int vfs_rename(const char *oldpath, const char *newpath)
 {
     if (!vfs_mounted() || !oldpath || !newpath) return -1;
     if (!mounted_ops->rename) return -1;
-    return mounted_ops->rename(mounted_ctx, oldpath, newpath);
+
+    char oldabs[VFS_PATH_MAX], newabs[VFS_PATH_MAX];
+    if (vfs_normalize(oldpath, oldabs, sizeof oldabs) < 0) return -1;
+    if (vfs_normalize(newpath, newabs, sizeof newabs) < 0) return -1;
+    return mounted_ops->rename(mounted_ctx, oldabs, newabs);
+}
+
+int vfs_fsinfo(vfs_fsinfo_t *out)
+{
+    if (!vfs_mounted() || !out) return -1;
+    if (!mounted_ops->fsinfo) return -1;
+    return mounted_ops->fsinfo(mounted_ctx, out);
 }
 
 int vfs_chdir(const char *path)
 {
     if (!path) return -1;
 
-    if (path[0] == '/' && path[1] == '\0') {
-        vfs_cwd[0] = '/'; vfs_cwd[1] = '\0';
-        return 0;
-    }
+    /* Resolve first, so `cd sub`, `cd ..` and `cd /a/../b` all end up as a
+     * clean absolute path -- vfs_normalize relies on vfs_cwd already being
+     * one, and getcwd should report one. */
+    char abs[VFS_PATH_MAX];
+    if (vfs_normalize(path, abs, sizeof abs) < 0) return -1;
 
-    /* Validate the directory exists if the driver supports stat. */
-    if (vfs_mounted() && mounted_ops->stat) {
+    /* Validate the directory exists if the driver supports stat.
+     * "/" always exists and need not be probed. */
+    if (abs[1] != '\0' && vfs_mounted() && mounted_ops->stat) {
         vfs_stat_t st;
-        if (mounted_ops->stat(mounted_ctx, path, &st) != 0) return -1;
+        if (mounted_ops->stat(mounted_ctx, abs, &st) != 0) return -1;
         if (st.type != VFS_TYPE_DIR) return -1;
     }
 
     uint32_t i = 0;
-    while (i < VFS_PATH_MAX - 1 && path[i]) {
-        vfs_cwd[i] = path[i];
+    while (i < VFS_PATH_MAX - 1 && abs[i]) {
+        vfs_cwd[i] = abs[i];
         i++;
     }
     vfs_cwd[i] = '\0';

@@ -10,8 +10,9 @@
 CC = i686-elf-gcc
 AR = i686-elf-ar
 
+# -MMD -MP emits .d header-dependency files (see the -include below).
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
-         -Iinclude -I../libc/include
+         -MMD -MP -Iinclude -I../libc/include
 
 .PHONY: all clean
 
@@ -23,5 +24,8 @@ libgfx.a: gfx.o
 gfx.o: gfx.c include/gfx.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Rebuild gfx.o when any header it includes changes.
+-include gfx.d
+
 clean:
-	rm -f *.o libgfx.a
+	rm -f *.o *.d libgfx.a

@@ -189,4 +189,19 @@ typedef struct {
  * Returns the number of entries written, or -1 on error.  */
 int proc_list(proc_info_t *buf, int max);
 
+/* -- Filesystem info (section 16.2) ----------------------------------------- */
+
+/* fsinfo_t -- filled by fsinfo() (SYS_FSINFO).
+ * Layout must match vfs_fsinfo_t in kernel/include/kernel/vfs.h exactly;
+ * type[] matches VFS_FSNAME_MAX.  total_blocks is 0 when unknown. */
+typedef struct {
+    char         type[8];       /* "ext2", "FAT16", "initrd" (NUL-terminated) */
+    unsigned int block_size;    /* bytes per allocation unit                  */
+    unsigned int total_blocks;  /* volume size in those units, 0 = unknown    */
+    unsigned int name_max;      /* longest name readdir can report            */
+} fsinfo_t;
+
+/* Report the mounted filesystem.  Returns 0 on success, -1 if none. */
+int fsinfo(fsinfo_t *out);
+
 #endif /* _UNISTD_H */

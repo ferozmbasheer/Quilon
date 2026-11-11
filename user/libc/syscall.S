@@ -519,6 +519,18 @@ dns_resolve:
     popl  %ebx
     ret
 
+/* -- fsinfo(out) -> int ----------------------------------------------------- */
+/* SYS_FSINFO (52), section 16.2.  Fills *out with the mounted filesystem's    */
+/* type and geometry.  Returns 0 on success, -1 if nothing is mounted.         */
+.global fsinfo
+fsinfo:
+    pushl %ebx
+    movl  $52,     %eax    /* SYS_FSINFO */
+    movl  8(%esp), %ebx    /* out (fsinfo_t *) */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

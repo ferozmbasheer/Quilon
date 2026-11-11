@@ -788,7 +788,80 @@ static void test_chdir_to_directory(void)
 
     char buf[64];
     vfs_getcwd(buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "TESTDIR", "CWD updated to TESTDIR");
+    /* The CWD is stored normalised and absolute (section 16.2): a relative
+     * `cd TESTDIR` from "/" becomes "/TESTDIR", not "TESTDIR". */
+    ASSERT_STR_EQ(buf, "/TESTDIR", "CWD updated to /TESTDIR");
+
+    vfs_chdir("/");   /* reset for other tests */
+}
+
+/*
+ * vfs_fsinfo (section 16.2) -- the op is optional, so a driver that does not
+ * implement it must make vfs_fsinfo fail rather than return junk.
+ */
+static void test_fsinfo_unsupported(void)
+{
+    vfs_mount(&mock_ops, (void *)0);   /* mock_ops has no .fsinfo */
+    vfs_fsinfo_t fi;
+    ASSERT_EQ(vfs_fsinfo(&fi), -1, "vfs_fsinfo fails when the driver has none");
+
+    vfs_mount((const vfs_ops_t *)0, (void *)0);
+    ASSERT_EQ(vfs_fsinfo(&fi), -1, "vfs_fsinfo fails when nothing is mounted");
+
+    vfs_mount(&mock_full_ops, (void *)0);   /* re-mount for later suites */
+}
+
+/*
+ * Path normalisation (section 16.2)
+ *
+ * Paths handed to the driver are resolved against the CWD and folded: "."
+ * and ".." disappear, duplicate slashes collapse, and the result is always
+ * absolute.  This is what lets `cd sub` + `cat file.txt` reach
+ * /sub/file.txt once a filesystem has real subdirectories.
+ */
+static void test_path_normalisation(void)
+{
+    vfs_mount(&mock_full_ops, (void *)0);
+    vfs_chdir("/");
+
+    char buf[64];
+
+    /* ".." from the root stays at the root rather than escaping it. */
+    ASSERT_EQ(vfs_chdir("/.."), 0, "chdir /.. succeeds");
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "/", "\"..\" at the root stays at the root");
+
+    ASSERT_EQ(vfs_chdir("/TESTDIR/"), 0, "a trailing slash is accepted");
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "/TESTDIR", "a trailing slash is dropped");
+
+    ASSERT_EQ(vfs_chdir("."), 0, "chdir . succeeds");
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "/TESTDIR", "\".\" leaves the CWD unchanged");
+
+    ASSERT_EQ(vfs_chdir(".."), 0, "chdir .. succeeds");
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "/", "\"..\" returns to the parent");
+
+    ASSERT_EQ(vfs_chdir("//TESTDIR//"), 0, "repeated slashes are accepted");
+    vfs_getcwd(buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "/TESTDIR", "repeated slashes collapse");
+
+    /* A relative open from a non-root CWD is resolved against it: the mock
+     * has no /TESTDIR/README.TXT, so this must fail even though the file
+     * exists at the root. */
+    ASSERT_EQ(vfs_open("README.TXT"), -1,
+              "a relative open resolves against the CWD, not the root");
+
+    /* An absolute path ignores the CWD entirely. */
+    int fd = vfs_open("/README.TXT");
+    ASSERT(fd >= VFS_FD_BASE, "an absolute open ignores the CWD");
+    vfs_close(fd);
+
+    /* ".." inside a path is folded before the driver sees it. */
+    fd = vfs_open("../README.TXT");
+    ASSERT(fd >= VFS_FD_BASE, "\"..\" in a relative path reaches the root");
+    vfs_close(fd);
 
     vfs_chdir("/");   /* reset for other tests */
 }
@@ -910,6 +983,8 @@ int main(void)
     RUN_SUITE(test_getcwd_initial);
     RUN_SUITE(test_chdir_root_always_succeeds);
     RUN_SUITE(test_chdir_to_directory);
+    RUN_SUITE(test_path_normalisation);
+    RUN_SUITE(test_fsinfo_unsupported);
     RUN_SUITE(test_chdir_to_file_fails);
     RUN_SUITE(test_chdir_to_unknown_path_fails);
     RUN_SUITE(test_getcwd_null_buf);

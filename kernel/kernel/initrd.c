@@ -80,6 +80,25 @@ static void initrd_close(void *ctx, vfs_node_t *node)
     (void)ctx; (void)node;   /* nothing to release -- data lives in the image */
 }
 
+/* initrd_fsinfo -- identify the RAM disk (section 16.2).  The initrd has no
+ * block structure: files are contiguous byte ranges in the image, so
+ * block_size is 1 byte and total_blocks is the image size in bytes. */
+static int initrd_fsinfo(void *ctx, vfs_fsinfo_t *out)
+{
+    initrd_ctx_t *rd = (initrd_ctx_t *)ctx;
+    if (!rd || !out) return -1;
+
+    const char *name = "initrd";
+    uint32_t    i    = 0;
+    while (name[i] && i < VFS_FSNAME_MAX - 1) { out->type[i] = name[i]; i++; }
+    out->type[i] = '\0';
+
+    out->block_size   = 1;
+    out->total_blocks = rd->image_size;
+    out->name_max     = VFS_NAME_MAX;
+    return 0;
+}
+
 const vfs_ops_t initrd_vfs_ops = {
     .open    = initrd_open,
     .read    = initrd_read,
@@ -88,6 +107,7 @@ const vfs_ops_t initrd_vfs_ops = {
     .close   = initrd_close,
     .create  = NULL,    /* read-only filesystem */
     .remove  = NULL,    /* read-only filesystem */
+    .fsinfo  = initrd_fsinfo,
 };
 
 /* -- initrd_mount ------------------------------------------------------------ */

@@ -5,7 +5,20 @@
 
 /* -- Constants ------------------------------------------------------------ */
 
-#define VFS_NAME_MAX   12   /* 8.3 name: 8 chars + '.' + 3 chars + NUL */
+/*
+ * VFS_NAME_MAX -- longest directory entry name the VFS reports.
+ *
+ * Was 12 (FAT16's 8.3 name).  Raised for ext2 (section 16.2), whose names run
+ * to 255 characters -- 63 covers every realistic name without making
+ * vfs_dirent_t too big to sit on a kernel stack or be copied out to user
+ * space on every readdir.  Longer names are truncated by the driver, not
+ * hidden.
+ *
+ * Changing this changes a user-space ABI: DIRENT_NAME_MAX in
+ * user/libc/include/dirent.h must be kept identical, because SYS_READDIR
+ * writes a vfs_dirent_t straight into a user buffer.
+ */
+#define VFS_NAME_MAX   63
 #define VFS_PATH_MAX  128   /* maximum path length including NUL        */
 #define VFS_MAX_FDS    32   /* maximum simultaneously open files (global table).
                              * Each graphical terminal holds 4 (two pipes) for
@@ -33,6 +46,25 @@ typedef struct {
     uint32_t size;   /* file size in bytes (0 for directories) */
     uint8_t  type;   /* VFS_TYPE_FILE or VFS_TYPE_DIR          */
 } vfs_stat_t;
+
+/* Longest filesystem name string reported by vfs_fsinfo, including the NUL. */
+#define VFS_FSNAME_MAX  8
+
+/*
+ * vfs_fsinfo_t -- which filesystem is mounted and its basic geometry
+ * (section 16.2).
+ *
+ * Layout must match the user-space fsinfo_t in user/libc/include/unistd.h
+ * exactly, because SYS_FSINFO writes this struct to a user-space pointer.
+ *
+ * `total_blocks` is 0 when the driver cannot report a volume size.
+ */
+typedef struct {
+    char     type[VFS_FSNAME_MAX];  /* "ext2", "FAT16", "initrd" (NUL-term) */
+    uint32_t block_size;            /* bytes per allocation unit            */
+    uint32_t total_blocks;          /* volume size in those units, 0 = n/a  */
+    uint32_t name_max;              /* longest name readdir can report      */
+} vfs_fsinfo_t;
 
 /* -- Types ---------------------------------------------------------------- */
 
@@ -73,7 +105,7 @@ typedef struct {
  * vfs_dirent_t -- a directory entry as returned by vfs_readdir().
  */
 typedef struct {
-    char     name[VFS_NAME_MAX + 1];  /* NUL-terminated 8.3 name, e.g. "FOO.TXT" */
+    char     name[VFS_NAME_MAX + 1];  /* NUL-terminated name, e.g. "FOO.TXT"    */
     uint32_t size;                    /* file size in bytes                       */
     uint8_t  type;                    /* VFS_TYPE_FILE or VFS_TYPE_DIR            */
 } vfs_dirent_t;
@@ -114,6 +146,9 @@ typedef struct {
     int  (*stat)   (void *ctx, const char *path, vfs_stat_t *out);
     int  (*mkdir)  (void *ctx, const char *path);
     int  (*rename) (void *ctx, const char *oldpath, const char *newpath);
+    /* Section 16.2 -- report the filesystem type and geometry.
+     * NULL = driver does not identify itself (vfs_fsinfo then fails). */
+    int  (*fsinfo) (void *ctx, vfs_fsinfo_t *out);
 } vfs_ops_t;
 
 /* -- Public API ----------------------------------------------------------- */
@@ -261,6 +296,14 @@ int  vfs_chdir(const char *path);
  * Returns 0 on success, -1 if buf is NULL or len is 0.
  */
 int  vfs_getcwd(char *buf, uint32_t len);
+
+/*
+ * vfs_fsinfo -- report the mounted filesystem's type and geometry.
+ *
+ * Returns 0 on success, -1 if nothing is mounted or the driver has no
+ * fsinfo support.  Backs the `fs` shell command and SYS_FSINFO.
+ */
+int  vfs_fsinfo(vfs_fsinfo_t *out);
 
 /*
  * vfs_pipe -- create an anonymous pipe and return two file descriptors.

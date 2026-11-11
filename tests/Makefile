@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm $(BINDIR)/test_ata_dma
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm $(BINDIR)/test_ata_dma $(BINDIR)/test_ext2
 
 .PHONY: all build run clean help
 
@@ -162,6 +162,20 @@ $(BINDIR)/test_fat16: test_fat16.c framework.h \
                       $(LIBC_STRING)
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
 	    test_fat16.c ../kernel/kernel/fat16.c \
+	    $(LIBC_STRING)
+
+# ext2 tests
+# ext2.c is pure C (no asm, no hardware) and reaches the disk only through
+# the ext2_ctx_t.sector_read callback, which the test backs with a RAM image.
+# vfs.c IS linked here: the tests exercise ext2_vfs_ops through the real VFS
+# (vfs_open/read/lseek/stat/readdir/chdir) as well as calling the driver
+# directly.  memset comes from LIBC_STRING.
+$(BINDIR)/test_ext2: test_ext2.c framework.h \
+                     ../kernel/kernel/ext2.c \
+                     ../kernel/kernel/vfs.c \
+                     $(LIBC_STRING)
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ \
+	    test_ext2.c ../kernel/kernel/ext2.c ../kernel/kernel/vfs.c \
 	    $(LIBC_STRING)
 
 # ELF loader tests

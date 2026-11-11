@@ -21,8 +21,9 @@ AR = i686-elf-ar
 #   -fno-pie       : no position-independent code (ELF loaded at 0x400000)
 #   -fno-stack-protector : no __stack_chk_fail symbol needed
 #   -O2            : optimise
+#   -MMD -MP       : emit .d header-dependency files (see the -include below)
 CFLAGS = -m32 -ffreestanding -fno-pie -fno-stack-protector -O2 -Wall \
-         -Iinclude
+         -MMD -MP -Iinclude
 
 SRCS   = string.c stdio.c stdlib.c pthread.c
 OBJS   = string.o stdio.o stdlib.o syscall.o pthread.o
@@ -52,5 +53,9 @@ syscall.o: syscall.S
 pthread.o: pthread.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# Rebuild a .o when any header it includes changes (e.g. include/dirent.h,
+# whose layout the kernel also depends on).
+-include $(OBJS:.o=.d) crt0.d
+
 clean:
-	rm -f *.o libc.a
+	rm -f *.o *.d libc.a

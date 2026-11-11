@@ -42,6 +42,7 @@ kernel/signal.o \
 kernel/vfs.o \
 kernel/pipe.o \
 kernel/fat16.o \
+kernel/ext2.o \
 kernel/elf.o \
 kernel/initrd.o \
 kernel/vma.o \

@@ -972,6 +972,34 @@ static void fat16_close(void *ctx, vfs_node_t *node)
 
 /* -- VFS operations table -------------------------------------------------- */
 
+/*
+ * fat16_fsinfo -- report the filesystem type and geometry (section 16.2).
+ *
+ * The reported "block" is a cluster, FAT16's allocation unit, so the numbers
+ * mean the same thing as the ext2 driver's blocks.
+ */
+static int fat16_fsinfo(void *ctx, vfs_fsinfo_t *out)
+{
+    fat16_ctx_t *fs = (fat16_ctx_t *)ctx;
+    if (!fs || !out) return -1;
+
+    const char *name = "FAT16";
+    uint32_t    i    = 0;
+    while (name[i] && i < VFS_FSNAME_MAX - 1) { out->type[i] = name[i]; i++; }
+    out->type[i] = '\0';
+
+    uint32_t cluster_bytes =
+        (uint32_t)fs->bytes_per_sector * fs->sectors_per_cluster;
+
+    out->block_size   = cluster_bytes;
+    out->total_blocks = (cluster_bytes && fs->sectors_per_cluster)
+                          ? fs->total_sectors / fs->sectors_per_cluster
+                          : 0;
+    /* FAT16 8.3 names are always short, whatever the VFS limit allows. */
+    out->name_max     = 12;
+    return 0;
+}
+
 const vfs_ops_t fat16_vfs_ops = {
     .open    = fat16_open,
     .read    = fat16_read,
@@ -983,6 +1011,7 @@ const vfs_ops_t fat16_vfs_ops = {
     .stat    = fat16_stat,
     .mkdir   = fat16_mkdir,
     .rename  = fat16_rename,
+    .fsinfo  = fat16_fsinfo,
 };
 
 /* -- Public API ------------------------------------------------------------ */
@@ -1006,6 +1035,12 @@ int fat16_mount(fat16_ctx_t *fs)
     fs->num_fats            = bpb->num_fats;
     fs->root_entry_count    = bpb->root_entry_count;
     fs->sectors_per_fat     = bpb->sectors_per_fat;
+
+    /* Volume size: total_sectors_16 is zero on volumes above 65535 sectors,
+     * where the 32-bit field carries it instead (section 16.2, for fsinfo). */
+    fs->total_sectors       = bpb->total_sectors_16
+                                ? (uint32_t)bpb->total_sectors_16
+                                : bpb->total_sectors_32;
 
     /* Derive key LBA addresses */
     fs->fat_lba      = fs->reserved_sectors;

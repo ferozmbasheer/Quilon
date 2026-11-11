@@ -964,6 +964,27 @@ static void shell_cmd_stat(const char *path)
            (int)st.size);
 }
 
+/* -- Section 16.2: mounted filesystem -------------------------------------- */
+
+/* `fs` -- report which filesystem is mounted and its geometry.
+ * The kernel probes ext2 before FAT16, so this says which one won. */
+static void shell_cmd_fs(void)
+{
+    vfs_fsinfo_t fi;
+    if (vfs_fsinfo(&fi) != 0) {
+        printf("fs: no filesystem mounted (or driver cannot identify itself)\r\n");
+        return;
+    }
+    printf("  filesystem   %s\r\n", fi.type);
+    printf("  block size   %d bytes\r\n", (int)fi.block_size);
+    if (fi.total_blocks)
+        printf("  volume       %d blocks (%d KiB)\r\n", (int)fi.total_blocks,
+               (int)(((uint64_t)fi.total_blocks * fi.block_size) / 1024u));
+    else
+        printf("  volume       size not reported by this driver\r\n");
+    printf("  name limit   %d chars\r\n", (int)fi.name_max);
+}
+
 static void shell_cmd_pwd(void)
 {
     char buf[VFS_PATH_MAX];
@@ -1302,6 +1323,7 @@ static void shell_execute(const char *cmd) {
         printf("          psf                    - PSF2 font loader demo  (section 11.2)\r\n");
         printf("          stat <file>            - file metadata (section 12.1)\r\n");
         printf("          pwd                    - print working directory (section 12.1)\r\n");
+        printf("          fs                     - show mounted filesystem (section 16.2)\r\n");
         printf("          cd <path>              - change directory        (section 12.1)\r\n");
         printf("          mkdir <dir>            - create directory        (section 12.1)\r\n");
         printf("          rename <old> <new>     - rename file/dir         (section 12.1)\r\n");
@@ -1403,6 +1425,8 @@ static void shell_execute(const char *cmd) {
         shell_cmd_stat(cmd + 5);
     } else if (strcmp(cmd, "pwd") == 0) {
         shell_cmd_pwd();
+    } else if (strcmp(cmd, "fs") == 0) {
+        shell_cmd_fs();
     } else if (strncmp(cmd, "cd ", 3) == 0) {
         shell_cmd_cd(cmd + 3);
     } else if (strncmp(cmd, "mkdir ", 6) == 0) {
