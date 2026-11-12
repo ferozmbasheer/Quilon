@@ -251,6 +251,17 @@ int vfs_readable(int fd)
     return avail;
 }
 
+int vfs_hung_up(int fd)
+{
+    int idx = fd_to_idx(fd);
+    if (idx < 0) return 0;
+    vfs_node_t *node = &fd_table[idx];
+#ifdef __is_kernel
+    if (node->is_pipe) return pipe_hung_up((int)node->pipe_idx);
+#endif
+    return 0;
+}
+
 int vfs_read(int fd, void *buf, uint32_t len)
 {
     int idx = fd_to_idx(fd);

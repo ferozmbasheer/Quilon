@@ -25,6 +25,25 @@ static void pipes_reset(void)
         pipe_pool[i].in_use = 0;
 }
 
+/* pipe_hung_up: EOF without blocking -- writers gone AND drained (18.x). */
+static void test_hung_up(void)
+{
+    pipes_reset();
+    int idx = pipe_alloc();
+    ASSERT(idx >= 0, "alloc");
+    ASSERT_EQ(pipe_hung_up(idx), 0, "open pipe is not hung up");
+    uint8_t b[4] = { 'a', 'b', 0, 0 };
+    pipe_write(idx, b, 2);
+    pipe_close_write(idx);
+    ASSERT_EQ(pipe_hung_up(idx), 0, "writer gone but bytes left: not yet");
+    pipe_read(idx, b, 4);
+    ASSERT_EQ(pipe_hung_up(idx), 1, "writer gone and drained: hung up");
+    ASSERT_EQ(pipe_hung_up(-1), 0, "bad index -> 0");
+    ASSERT_EQ(pipe_hung_up(PIPE_MAX), 0, "out of range -> 0");
+    pipe_close_read(idx);
+    ASSERT_EQ(pipe_hung_up(idx), 0, "freed slot -> 0");
+}
+
 /* ===========================================================================
  * 1. pipe_alloc
  * =========================================================================== */
@@ -429,6 +448,8 @@ int main(void)
     /* vfs_pipe integration */
     RUN_SUITE(test_vfs_pipe_null_fds);
     RUN_SUITE(test_vfs_pipe_returns_minus1_in_host);
+
+    RUN_SUITE(test_hung_up);
 
     /* SYS_PIPE constant */
     RUN_SUITE(test_sys_pipe_constant);

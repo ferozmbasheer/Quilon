@@ -214,6 +214,13 @@ int  vfs_read(int fd, void *buf, uint32_t len);
  */
 int  vfs_readable(int fd);
 
+/*
+ * vfs_hung_up -- 1 if fd is a pipe whose writers have all closed and which
+ * is drained (read() returns EOF without blocking), else 0.  SYS_WAIT_INPUT
+ * reports such an fd as ready, as poll() does.
+ */
+int  vfs_hung_up(int fd);
+
 /* vfs_close -- release a file descriptor.  Returns 0 or -1. */
 int  vfs_close(int fd);
 

@@ -14,6 +14,9 @@ make smoke    # headless QEMU boot smoke test
 make ktest    # headless in-OS kernel regression tests (user/ktest) — run on kernel changes
 make wmtest   # headless desktop test: open/close terminals via the mouse
 make kbdtest  # headless keyboard test: shift, arrows, Ctrl-C (text + desktop)
+make termtest # headless: `exit` in a terminal window closes it (nested shell doesn't)
+make eventtest # headless 18.2 events: fast click, Alt-Tab, Alt-F4, wheel present
+make powertest # headless: shell `poweroff` and the desktop Power button stop QEMU
 make disk     # rebuild the FAT16 disk.img
 make ext2disk # rebuild ext2.img (needs host mke2fs)
 make clean
@@ -64,12 +67,14 @@ Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 16**
 (graphical desktop stable; BSD sockets + DNS + wget; ATA Bus Master DMA; ext2
 read-only, booting off an ext2 disk); next is Section 17 (porting Lua, a text
 editor, TinyCC), starting with the new 17.0 prerequisites (17.0.1 keyboard + Ctrl-C is done)
-and interleaved with Section 18 (desktop polish; 18.1 idle, damage-driven WM loop is done). The WM was reworked from CLONE_VM threads to a
+and interleaved with Section 18 (desktop polish; 18.1 idle, damage-driven WM loop
+and 18.2 richer input events are done; next 18.3 window operations). The WM was reworked from CLONE_VM threads to a
 **single-threaded event loop** (apps = callbacks) — see `resume.md` and the
 "WM architecture" / "thread concurrency" project memories.
 
-A pre-§17 stability review is tracked in [REVIEW.md](REVIEW.md) (items A–I
-fixed; J, an intermittent post-exit hang, open; per-process fd tables/cwd, errno and a few others still open). Keep its
+A pre-§17 stability review is tracked in [REVIEW.md](REVIEW.md) (items A–J
+fixed -- J was `context_switch` not saving EFLAGS; per-process fd tables/cwd,
+errno and a few others still open). Keep its
 statuses current when touching those areas, and add a `user/ktest` check
 (shown to fail without the fix) for any new kernel bug fix.
 

@@ -41,9 +41,15 @@ static int     mouse_x       = 0;
 static int     mouse_y       = 0;
 static uint8_t mouse_buttons = 0;
 
-static uint8_t  packet[3];
-static uint8_t  packet_cycle = 0;   /* which byte of the 3-byte packet */
+static uint8_t  packet[4];
+static uint8_t  packet_cycle = 0;   /* which byte of the packet          */
+static uint8_t  packet_size  = 3;   /* 4 with an IntelliMouse wheel      */
 static volatile uint32_t mouse_seq;   /* complete packets received (18.1) */
+
+/* Latched since the last SYS_MOUSE_READ (ROADMAP3 18.2).  Written by the
+ * IRQ, read+cleared by mouse_take_events with IRQs off. */
+static volatile uint8_t mouse_pressed, mouse_released;
+static volatile int     mouse_wheel;
 
 /*
  * Saved pixels under the cursor in the shadow buffer (BGRX, 32 bpp).
@@ -98,6 +104,23 @@ static inline void mouse_send(uint8_t cmd)
     ps2_send_cmd(0xD4u);   /* route next byte to auxiliary port */
     ps2_send_data(cmd);
     ps2_read_data();        /* discard ACK (0xFA) */
+}
+
+/* IntelliMouse knock (ROADMAP3 18.2): sample rate 200, 100, 80, then read the
+ * device ID.  A wheel mouse answers 3 (or 4) and sends 4-byte packets from
+ * now on; a plain mouse stays at ID 0 and 3-byte packets. */
+static void mouse_enable_wheel(void)
+{
+    static const uint8_t knock[3] = { 200u, 100u, 80u };
+    for (int i = 0; i < 3; i++) {
+        mouse_send(0xF3u);          /* set sample rate */
+        mouse_send(knock[i]);
+    }
+    mouse_send(0xF2u);              /* get device ID (ACK, then the ID) */
+    uint8_t id = ps2_read_data();
+    packet_size = (id == MOUSE_ID_WHEEL || id == 4u) ? 4 : 3;
+    mouse_send(0xF3u);              /* back to the default 100 samples/s */
+    mouse_send(100u);
 }
 
 /* -- Cursor rendering ---------------------------------------------------- */
@@ -229,6 +252,15 @@ static void mouse_cursor_redraw(void)
 
 void mouse_initialize(void)
 {
+    /* The command/reply exchange below is polled.  With interrupts on, the
+     * IRQ12 handler (enabled in step 2) raced the poll for the reply bytes:
+     * ps2_wait_output() timed out, the poll read garbage, and the handler
+     * fed the replies -- an ACK, 0xFA, has the packet-start bit set -- into
+     * the packet assembler, producing a phantom packet at boot (and a
+     * possibly wrong device ID).  Mask IRQs for the whole exchange. */
+    uint32_t irq_flags;
+    asm volatile("pushf\n\tpop %0\n\tcli" : "=r"(irq_flags) :: "memory");
+
     /* 1. Enable the auxiliary PS/2 port. */
     ps2_send_cmd(0xA8u);
 
@@ -240,8 +272,10 @@ void mouse_initialize(void)
     ps2_send_cmd(0x60u);          /* prepare to write command byte */
     ps2_send_data(cmd_byte);
 
-    /* 3. Set mouse defaults (0xF6) then enable data reporting (0xF4). */
+    /* 3. Set mouse defaults (0xF6), try to switch on the scroll wheel, then
+     *    enable data reporting (0xF4). */
     mouse_send(0xF6u);   /* set defaults */
+    mouse_enable_wheel();
     mouse_send(0xF4u);   /* enable reporting */
 
     /* 4. Initialise position to centre of screen (if VBE active). */
@@ -255,6 +289,12 @@ void mouse_initialize(void)
     cursor_drawn  = 0;
     cursor_prev_x = mouse_x;
     cursor_prev_y = mouse_y;
+
+    /* Drop anything the exchange left behind, then let IRQ12 in. */
+    while (inb(PS2_CMD) & 0x01u) (void)inb(PS2_DATA);
+    mouse_pressed = mouse_released = 0;
+    mouse_wheel   = 0;
+    asm volatile("push %0\n\tpopf" :: "r"(irq_flags) : "memory", "cc");
 
     /* Erase cursor before the scroll memmove; repaint it immediately after. */
     vbe_set_scroll_hook(mouse_cursor_invalidate);
@@ -275,8 +315,8 @@ void mouse_irq_handler(void)
 
     packet[packet_cycle++] = byte;
 
-    if (packet_cycle < 3)
-        return;   /* accumulate the full 3-byte packet */
+    if (packet_cycle < packet_size)
+        return;   /* accumulate the full 3- or 4-byte packet */
 
     packet_cycle = 0;
 
@@ -295,7 +335,13 @@ void mouse_irq_handler(void)
         dy = (packet[0] & MOUSE_Y_SIGN) ? 256 : -255;
     else
         dy = mouse_packet_dy(packet);
-    mouse_buttons = packet[0] & (MOUSE_BTN_LEFT | MOUSE_BTN_RIGHT | MOUSE_BTN_MIDDLE);
+    uint8_t nb = packet[0] & (MOUSE_BTN_LEFT | MOUSE_BTN_RIGHT | MOUSE_BTN_MIDDLE);
+    uint8_t pr = mouse_pressed, rl = mouse_released;
+    mouse_button_edges(mouse_buttons, nb, &pr, &rl);
+    mouse_pressed  = pr;
+    mouse_released = rl;
+    mouse_buttons  = nb;
+    if (packet_size == 4) mouse_wheel += mouse_packet_dz(packet[3]);
 
     /* Clamp cursor to screen bounds. */
     if (vbe_active()) {
@@ -315,6 +361,19 @@ void mouse_irq_handler(void)
 }
 
 uint32_t mouse_get_seq(void)    { return mouse_seq; }
+int      mouse_has_wheel(void)  { return packet_size == 4; }
+
+void mouse_take_events(uint8_t *pressed, uint8_t *released, int *wheel)
+{
+    uint32_t flags;
+    asm volatile("pushf\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
+    *pressed  = mouse_pressed;
+    *released = mouse_released;
+    *wheel    = mouse_wheel;
+    mouse_pressed = mouse_released = 0;
+    mouse_wheel   = 0;
+    asm volatile("push %0\n\tpopf" :: "r"(flags) : "memory", "cc");
+}
 int     mouse_get_x(void)       { return mouse_x; }
 int     mouse_get_y(void)       { return mouse_y; }
 uint8_t mouse_get_buttons(void) { return mouse_buttons; }

@@ -21,7 +21,7 @@
 
 HOST ?= $(shell ./default-host.sh)
 
-.PHONY: all build headers iso disk ext2disk run smoke ktest wmtest kbdtest test clean check-toolchain
+.PHONY: all build headers iso disk ext2disk run smoke ktest wmtest kbdtest powertest termtest eventtest test clean check-toolchain
 
 all: build
 
@@ -91,6 +91,42 @@ wmtest: check-toolchain
 	@SMOKE_KEYS='startx\n{until:[wm] screen}{wait:2}$(WM_CYCLE)$(WM_CYCLE)$(WM_CYCLE)' \
 	    SMOKE_SENTINEL='exited (code 0)' SMOKE_SENTINEL_COUNT=3 \
 	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
+
+# `exit` in a terminal window closes the window -- but only the terminal's own
+# shell: open a Terminal, click into it, `exec shell.elf` + `exit` (the nested
+# shell returns to its parent; the window must stay), run hello.elf in it to
+# prove that, then `exit` the terminal's shell.  Three "exited (code 0)" lines
+# (nested shell, hello, terminal shell) and the WM's close line are required.
+TERM_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:300,300}{click}{wait:1}exec shell.elf\n{wait:3}exit\n{wait:2}exec hello.elf\n{wait:3}exit\n
+termtest: check-toolchain
+	@SMOKE_KEYS='$(TERM_KEYS)' SMOKE_SENTINEL="[wm] closed 'Terminal'" \
+	    SMOKE_ALSO='exited (code 0)' SMOKE_ALSO_COUNT=3 \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
+
+# Richer input events (ROADMAP3 18.2): open a Terminal, then a Clock (on top
+# of it).  FAST-click the Terminal (press+release quicker than a WM loop
+# iteration -- only the kernel's latched button edges catch it), which raises
+# and focuses it; Alt-Tab then cycles focus to the backmost window, now the
+# Clock; Alt-F4 closes the focused window.  So the Clock must close and the
+# Terminal must not.  (A lost click leaves the Terminal backmost, so Alt-Tab
+# picks it and Alt-F4 closes the Terminal instead; a missing Alt-Tab or
+# Alt-F4 closes nothing.)  The boot log must show the wheel was negotiated.
+EVENT_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:3}{mouse:-3000,-3000}{mouse:165,786}{click}{wait:2}{mouse:-3000,-3000}{mouse:100,300}{fastclick}{wait:1}{key:alt-tab}{wait:1}{key:alt-f4}{wait:3}
+eventtest: check-toolchain
+	@SMOKE_KEYS='$(EVENT_KEYS)' SMOKE_SENTINEL="[wm] closed 'Clock'" \
+	    FAIL_PATTERN="PANIC|Kernel panic|Exception|Triple fault|General Protection|closed 'Terminal'" \
+	    SMOKE_ALSO='scroll wheel enabled' \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
+
+# Power off (shell `poweroff`, desktop Power button): QEMU must exit on its own.
+# Desktop: Power button at (1240,786); the dialog's "Power off" button at
+# (580,420) -- both on the 1280x800 screen (wm.h WM_POWER_* layout).
+POWER_WM_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:1240,786}{click}{wait:2}{mouse:-3000,-3000}{mouse:580,420}{click}
+powertest: check-toolchain
+	@SMOKE_KEYS='poweroff\n' SMOKE_SENTINEL='powering off' SMOKE_EXPECT_EXIT=1 \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-60} ./tools/smoke_test.sh
+	@SMOKE_KEYS='$(POWER_WM_KEYS)' SMOKE_SENTINEL='powering off' SMOKE_EXPECT_EXIT=1 \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-60} ./tools/smoke_test.sh
 
 # Host unit tests — deliberately NOT gated on the cross toolchain.
 test:

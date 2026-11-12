@@ -12,8 +12,12 @@
  * Each iteration (ROADMAP3 18.1 -- the loop sleeps when nothing happens):
  *   0. wait_input(): sleep until the keyboard, the mouse, a watched fd (a
  *      terminal's shell pipe) has input, or the next timed app tick is due
- *   1. read the mouse                       -> raise/focus/drag/close
- *   2. drain the keyboard                   -> deliver key to focused window
+ *   1. read the mouse                       -> raise/focus/drag/close,
+ *                                              taskbar apps + Power button;
+ *                                              per-button press/release, drag
+ *                                              motion and wheel to apps (18.2)
+ *   2. drain + decode the keyboard          -> Alt-Tab / Alt-F4, else a key
+ *                                              event to the focused window
  *   3. tick the windows that are due        -> clock updates, pipe draining
  *   4. destroy windows that requested close (want_close)
  *   5. recomposite + flush ONLY the damaged screen rects (cursor, moved or
@@ -36,6 +40,7 @@ void gterm_open(window_t *win);
 void clock_open(window_t *win);
 void filebr_open(window_t *win);
 void textview_open(window_t *win);
+void power_dialog_open(window_t *win);
 void gterm_reap_shells(void);   /* reap shells of closed terminals */
 int  gterm_reap_pending(void);  /* 1 while a closed terminal's shell is unreaped */
 
@@ -64,6 +69,11 @@ static wm_state_t  g_wm;
 static canvas_t   *g_screen;
 static int         g_sw, g_sh;   /* screen dimensions */
 static wm_damage_t g_damage;     /* screen rects to repaint this frame (18.1) */
+
+static int         g_poweroff;   /* set by the power dialog: off after flush */
+static int         g_power_win;  /* id of the open power dialog, 0 = none   */
+
+void wm_request_poweroff(void) { g_poweroff = 1; }
 
 /* Mark a window's whole on-screen footprint (chrome + content) damaged. */
 static void damage_window(const window_t *w)
@@ -141,23 +151,30 @@ void wm_open_textview(const char *path)
     textview_open(win);
 }
 
-/* ── Deliver a key event to the focused window ───────────────────────────── */
+/* ── Power button: open (or bring forward) the confirmation dialog ───────── */
 
-static void deliver_key(char c)
+static void wm_open_power_dialog(void)
 {
-    int i;
-    for (i = 0; i < WM_MAX_WINDOWS; i++) {
-        window_t *w = &g_wm.windows[i];
-        if (w->id != 0 && w->focused && w->on_event) {
-            wm_event_t ev;
-            ev.type    = WM_EV_KEY;
-            ev.ascii   = c;
-            ev.x = ev.y = 0;
-            ev.buttons = 0;
-            w->on_event(w, &ev);
-            return;
-        }
+    window_t *w = g_power_win ? wm_find_window(&g_wm, g_power_win) : (window_t *)0;
+    if (w) {                                  /* already open: raise + focus */
+        damage_window(focused_window());
+        int slot = wm_find_idx(&g_wm, w->id);
+        wm_raise(&g_wm, slot);
+        wm_focus(&g_wm, slot);
+        damage_window(w);
+        return;
     }
+    int x = (g_sw - WM_POWER_DLG_W) / 2;
+    int y = (g_sh - WM_POWER_DLG_H) / 2;
+    int id = wm_create_window(&g_wm, "Power", x, y, WM_POWER_DLG_W, WM_POWER_DLG_H);
+    if (id < 0) return;
+    w = wm_find_window(&g_wm, id);
+    if (!w) return;
+    w->backbuf = canvas_create(WM_POWER_DLG_W, WM_POWER_DLG_H);
+    if (!w->backbuf) { wm_destroy_window(&g_wm, id); return; }
+    damage_window(focused_window());          /* old focus loses its title */
+    power_dialog_open(w);
+    g_power_win = id;
 }
 
 /* Ask a window to close: notify the app (so it can flush/stop), then mark it
@@ -165,12 +182,136 @@ static void deliver_key(char c)
 static void request_close(window_t *w)
 {
     if (w->on_event) {
-        wm_event_t ev;
-        ev.type = WM_EV_CLOSE;
-        ev.ascii = 0; ev.x = ev.y = ev.buttons = 0;
+        wm_event_t ev = wm_event_make(WM_EV_CLOSE);
         w->on_event(w, &ev);
     }
     w->want_close = 1;
+}
+
+/* ── Keyboard (ROADMAP3 18.2) ─────────────────────────────────────────────
+ * The kernel hands us a byte stream (kbd_xlate); wm_key_decode turns it into
+ * keys.  WM shortcuts are taken here; everything else goes to the focused
+ * window as a WM_EV_KEY carrying keycode, mods, ascii and the raw bytes. */
+
+static void handle_key(const wm_key_t *k)
+{
+    window_t *f = focused_window();
+
+    if (k->keycode == WM_KEY_TAB && k->mods == WM_MOD_ALT) {   /* Alt-Tab */
+        damage_window(f);
+        int slot = wm_cycle_focus(&g_wm);
+        if (slot >= 0) damage_window(&g_wm.windows[slot]);
+        return;
+    }
+    if (k->keycode == WM_KEY_F1 + 3 && (k->mods & WM_MOD_ALT)) {  /* Alt-F4 */
+        if (f) request_close(f);
+        return;
+    }
+
+    if (!f || !f->on_event) return;
+    wm_event_t ev = wm_event_make(WM_EV_KEY);
+    ev.keycode = k->keycode;
+    ev.mods    = k->mods;
+    ev.ascii   = k->ascii;
+    for (int i = 0; i < k->seq_len; i++) ev.seq[i] = k->seq[i];
+    ev.seq_len = k->seq_len;
+    f->on_event(f, &ev);
+}
+
+/* Drain everything the keyboard has and decode it.  A key's bytes are queued
+ * by one keyboard IRQ, so they are never split between two drains -- except
+ * at our buffer's edge, which is why a full buffer only decodes up to the
+ * last WM_KEY_SEQ_MAX bytes and keeps the rest for the next read. */
+static void drain_keyboard(void)
+{
+    static char kb[64];
+    int kn = 0;
+    for (;;) {
+        int got = read_nonblock(STDIN_FILENO, kb + kn, (int)sizeof kb - kn);
+        if (got > 0) kn += got;
+        int more = (got > 0 && kn == (int)sizeof kb);
+        int off  = 0;
+        while (off < kn && (!more || kn - off >= WM_KEY_SEQ_MAX)) {
+            wm_key_t k;
+            off += wm_key_decode(kb + off, kn - off, &k);
+            handle_key(&k);
+        }
+        for (int i = off; i < kn; i++) kb[i - off] = kb[i];
+        kn -= off;
+        if (!more) break;
+    }
+}
+
+/* ── Mouse (ROADMAP3 18.2) ────────────────────────────────────────────────
+ * A press inside a window's content is delivered to that window and
+ * "captures" the mouse: motion while any button is held, and the release,
+ * go to the same window even if the cursor has left it (drag-select). */
+
+static int g_capture;            /* id of the window holding the mouse, 0 */
+
+static void send_mouse(window_t *w, wm_ev_type_t type, int mx, int my,
+                       uint8_t button, uint8_t buttons)
+{
+    if (!w || !w->on_event || w->want_close) return;
+    wm_event_t ev = wm_event_make(type);
+    ev.x       = mx - w->bounds.x;
+    ev.y       = my - w->bounds.y;
+    ev.button  = button;
+    ev.buttons = buttons;
+    w->on_event(w, &ev);
+}
+
+static void mouse_press(int mx, int my, uint8_t button, uint8_t buttons,
+                        const char **labels)
+{
+    (void)labels;
+    if (my >= g_sh - TASKBAR_H) {
+        if (button != MOUSE_BTN_LEFT) return;
+        int idx = wm_taskbar_app_hit(mx, my, g_sw, g_sh, TASKBAR_H,
+                                     G_NOAPPS, TASKBAR_BTN_W);
+        if (idx >= 0)
+            wm_launch(idx);             /* new window is dirty -> damaged */
+        else if (wm_rect_contains(wm_taskbar_power_rect(g_sw, g_sh, TASKBAR_H),
+                                  mx, my))
+            wm_open_power_dialog();
+        return;
+    }
+
+    int hit = wm_hittest(&g_wm, mx, my);
+    if (hit < 0) return;
+    window_t *w = &g_wm.windows[hit];
+    if (button == MOUSE_BTN_LEFT && wm_in_close_btn(w, mx, my)) {
+        request_close(w);
+        return;
+    }
+
+    /* Raise + focus: the old focus loses its active titlebar and the hit
+     * window may come to the front. */
+    damage_window(focused_window());
+    damage_window(w);
+    if (button == MOUSE_BTN_LEFT) {
+        wm_handle_mouse_down(&g_wm, mx, my, buttons);   /* + titlebar drag */
+    } else {
+        wm_raise(&g_wm, hit);
+        wm_focus(&g_wm, hit);
+    }
+
+    /* Content clicks go to the app (titlebar clicks are the WM's). */
+    if (wm_in_content(w, mx, my)) {
+        if (!g_capture) g_capture = w->id;
+        if (g_capture == w->id)
+            send_mouse(w, WM_EV_MOUSE_BTN, mx, my, button, buttons);
+    }
+}
+
+static void mouse_release(int mx, int my, uint8_t button, uint8_t buttons)
+{
+    if (button == MOUSE_BTN_LEFT) wm_handle_mouse_up(&g_wm);
+    if (g_capture) {
+        send_mouse(wm_find_window(&g_wm, g_capture), WM_EV_MOUSE_UP,
+                   mx, my, button, buttons);
+        if (buttons == 0) g_capture = 0;
+    }
 }
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
@@ -248,64 +389,62 @@ int main(void)
         mouse_event_t me;
         mouse_read(&me);
 
-        int moved   = (me.x != prev.x || me.y != prev.y);
-        int pressed = (me.buttons && !prev.buttons);
-        int release = (!me.buttons && prev.buttons);
-
+        int moved = (me.x != prev.x || me.y != prev.y);
         if (moved) {
             /* The cursor leaves its old spot and appears at the new one. */
             wm_damage_add(&g_damage, wm_cursor_rect(prev.x, prev.y));
             wm_damage_add(&g_damage, wm_cursor_rect(me.x, me.y));
         }
 
-        if (pressed) {
-            if (me.y >= g_sh - TASKBAR_H) {
-                int idx = me.x / TASKBAR_BTN_W;
-                if (idx >= 0 && idx < G_NOAPPS)
-                    wm_launch(idx);     /* new window is dirty -> damaged */
+        /* Every button transition since the last read, in order -- the
+         * kernel latches edges, so a click quicker than one loop iteration
+         * still arrives as a press and a release. */
+        wm_btn_edge_t edges[WM_BTN_EDGES_MAX];
+        int ne = wm_button_edges(prev.buttons, me.buttons,
+                                 me.pressed, me.released, edges);
+        uint8_t bstate = prev.buttons;
+        for (int e = 0; e < ne; e++) {
+            if (edges[e].down) {
+                bstate |= edges[e].button;
+                mouse_press(me.x, me.y, edges[e].button, bstate, labels);
             } else {
-                int hit = wm_hittest(&g_wm, me.x, me.y);
-                if (hit >= 0) {
-                    window_t *w = &g_wm.windows[hit];
-                    if (wm_in_close_btn(w, me.x, me.y)) {
-                        request_close(w);
-                    } else {
-                        /* Raise + focus: the old focus loses its active
-                         * titlebar and the hit window may come to the front. */
-                        damage_window(focused_window());
-                        damage_window(w);
-                        wm_handle_mouse_down(&g_wm, me.x, me.y, me.buttons);
-                        /* Deliver in-content clicks to the app, with the
-                         * cursor expressed relative to the content origin.
-                         * (Titlebar clicks start a drag and aren't forwarded.) */
-                        if (wm_in_content(w, me.x, me.y) && w->on_event) {
-                            wm_event_t ev;
-                            ev.type    = WM_EV_MOUSE_BTN;
-                            ev.x       = me.x - w->bounds.x;
-                            ev.y       = me.y - w->bounds.y;
-                            ev.buttons = me.buttons;
-                            ev.ascii   = 0;
-                            w->on_event(w, &ev);
-                        }
-                    }
-                }
+                bstate &= (uint8_t)~edges[e].button;
+                mouse_release(me.x, me.y, edges[e].button, bstate);
             }
-        } else if (release) {
-            wm_handle_mouse_up(&g_wm);
         }
+
         if (moved) {
             /* A drag repaints where the window was and where it now is. */
             window_t *dw = wm_find_window(&g_wm, g_wm.drag_win_id);
             damage_window(dw);
             wm_handle_mouse_move(&g_wm, me.x, me.y);
             damage_window(dw);
+            /* Motion with a button held goes to the window that got the
+             * press (drag-select); plain hovering is not reported. */
+            if (g_capture && bstate)
+                send_mouse(wm_find_window(&g_wm, g_capture), WM_EV_MOUSE_MOVE,
+                           me.x, me.y, 0, bstate);
+        }
+
+        /* Wheel: to the window under the cursor. */
+        if (me.wheel) {
+            int hit = wm_hittest(&g_wm, me.x, me.y);
+            if (hit >= 0) {
+                window_t *w = &g_wm.windows[hit];
+                if (w->on_event) {
+                    wm_event_t ev = wm_event_make(WM_EV_SCROLL);
+                    ev.x       = me.x - w->bounds.x;
+                    ev.y       = me.y - w->bounds.y;
+                    ev.buttons = me.buttons;
+                    ev.wheel   = me.wheel;
+                    w->on_event(w, &ev);
+                }
+            }
         }
         prev = me;
 
         /* -- Keyboard (non-blocking) --------------------------------------- */
-        char c;
-        while (read_nonblock(STDIN_FILENO, &c, 1) == 1)
-            deliver_key(c);
+        drain_keyboard();
 
         /* -- Tick the windows that are due --------------------------------- */
         for (i = 0; i < WM_MAX_WINDOWS; i++) {
@@ -329,6 +468,9 @@ int main(void)
         for (i = 0; i < WM_MAX_WINDOWS; i++) {
             window_t *w = &g_wm.windows[i];
             if (w->id != 0 && w->want_close) {
+                if (w->id == g_power_win) g_power_win = 0;
+                if (w->id == g_capture)   g_capture = 0;
+                printf("[wm] closed '%s' (win id=%d)\r\n", w->title, w->id);
                 damage_window(w);
                 wm_destroy_window(&g_wm, w->id);
                 /* Focus may have passed to the new frontmost window. */
@@ -361,6 +503,9 @@ int main(void)
         for (i = 0; i < g_damage.n; i++)
             gfx_flush_rect(g_damage.r[i]);
         g_damage.n = 0;
+
+        /* The power dialog's "Powering off..." frame is now on screen. */
+        if (g_poweroff) poweroff();
     }
 
     return 0;

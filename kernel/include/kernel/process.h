@@ -240,6 +240,33 @@ process_t *process_find(uint32_t pid);
 process_t *process_group_leader(process_t *p);
 
 /*
+ * Initial context_switch() frame (boot.S).  context_switch saves, from high
+ * to low address: [ret][ebp][ebx][esi][edi][eflags], and kernel_esp points
+ * at the eflags word.  EFLAGS is part of the frame (REVIEW.md J): without it
+ * a process that yielded inside a syscall with IF=1 could be resumed from
+ * the timer IRQ with IF=0, and its next idle wait spun with interrupts off
+ * forever.  A new context starts with IF=0 (0x002, bit 1 is reserved-1);
+ * its trampoline irets into ring 3, which loads the user's own EFLAGS.
+ *
+ * ctx_frame_build pushes the frame below `top` and returns the new
+ * kernel_esp.  Pure C, host-tested.
+ */
+#define CTX_FRAME_WORDS  6u
+#define CTX_EFLAGS_INIT  0x002u
+
+static inline uint32_t *ctx_frame_build(uint32_t *top, uint32_t ret_addr)
+{
+    uint32_t *sp = top;
+    *(--sp) = ret_addr;          /* ret target (trampoline)  */
+    *(--sp) = 0u;                /* ebp */
+    *(--sp) = 0u;                /* ebx */
+    *(--sp) = 0u;                /* esi */
+    *(--sp) = 0u;                /* edi */
+    *(--sp) = CTX_EFLAGS_INIT;   /* eflags -- kernel_esp points here */
+    return sp;
+}
+
+/*
  * process_pick_next -- round-robin scheduler helper.
  *
  * Scans the process table for the next PROC_READY slot after

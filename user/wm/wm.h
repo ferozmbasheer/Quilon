@@ -85,21 +85,58 @@
 
 /* ── Event types (WM → app) ────────────────────────────────────────────── */
 
+#include "wm_keys.h"
+
+/*
+ * ROADMAP3 18.2 -- richer events.  Mouse x/y are relative to the window's
+ * content origin (and may lie outside it during a drag).
+ *
+ *   WM_EV_KEY        keycode + mods + ascii, decoded by the WM from the
+ *                    kernel's byte stream (wm_keys.h); seq/seq_len hold the
+ *                    raw bytes (a terminal forwards those to its shell).
+ *   WM_EV_MOUSE_BTN  a button went DOWN inside the content.  `button` is the
+ *                    one that changed, `buttons` the state after it.
+ *   WM_EV_MOUSE_UP   that button went up again -- delivered to the window
+ *                    that got the press, wherever the cursor is now.
+ *   WM_EV_MOUSE_MOVE motion while a button pressed in this window is held
+ *                    (drag-select).  Not sent for plain hovering.
+ *   WM_EV_SCROLL     mouse wheel over the window: `wheel` notches,
+ *                    > 0 = towards the user (scroll down), < 0 = up.
+ *   WM_EV_CLOSE      the window's close box (or Alt-F4).
+ */
 typedef enum {
     WM_EV_NONE       = 0,
     WM_EV_KEY        = 1,
     WM_EV_MOUSE_MOVE = 2,
     WM_EV_MOUSE_BTN  = 3,
     WM_EV_CLOSE      = 4,
+    WM_EV_MOUSE_UP   = 5,
+    WM_EV_SCROLL     = 6,
 } wm_ev_type_t;
 
 typedef struct {
     wm_ev_type_t type;
     int          x;
     int          y;
-    uint8_t      buttons;
-    char         ascii;
+    uint8_t      buttons;     /* MOUSE_BTN_* state (after this event)     */
+    uint8_t      button;      /* MOUSE_BTN / MOUSE_UP: the button changed */
+    char         ascii;       /* KEY: the character, 0 for special keys  */
+    uint8_t      mods;        /* KEY: WM_MOD_* (wm_keys.h)                */
+    int          keycode;     /* KEY: WM_KEY_* or the (lower-case) char   */
+    int          wheel;       /* SCROLL: notches                          */
+    char         seq[WM_KEY_SEQ_MAX];   /* KEY: raw bytes                 */
+    int          seq_len;
 } wm_event_t;
+
+/* A zeroed event of the given type (every field defined). */
+static inline wm_event_t wm_event_make(wm_ev_type_t type)
+{
+    wm_event_t ev;
+    unsigned char *p = (unsigned char *)&ev;
+    for (unsigned i = 0; i < sizeof ev; i++) p[i] = 0;
+    ev.type = type;
+    return ev;
+}
 
 /* ── Window descriptor ─────────────────────────────────────────────────── */
 
@@ -417,6 +454,53 @@ static inline void wm_focus(wm_state_t *s, int slot)
         s->windows[i].focused = (i == slot && s->windows[i].id != 0) ? 1 : 0;
 }
 
+/*
+ * wm_cycle_focus -- Alt-Tab (ROADMAP3 18.2): raise and focus the BACKMOST
+ * window.  Repeating it visits every window in turn (the old front window
+ * moves back one place each time).  Returns the newly focused slot, or -1
+ * with no windows.
+ */
+static inline int wm_cycle_focus(wm_state_t *s)
+{
+    if (s->num_windows <= 0) return -1;
+    int slot = s->z_order[0];
+    wm_raise(s, slot);
+    wm_focus(s, slot);
+    return slot;
+}
+
+/*
+ * wm_button_edges -- the button transitions since the last mouse sample, in
+ * the order they happened.  `prev`/`now` are the button states at the last
+ * and this sample; `pressed`/`released` are the edges the kernel latched in
+ * between (so a click shorter than one WM iteration is not lost).  Writes up
+ * to 3 transitions per button to out[] (buttons in MOUSE_BTN order) and
+ * returns how many.
+ */
+typedef struct { uint8_t button; uint8_t down; } wm_btn_edge_t;
+#define WM_BTN_EDGES_MAX 9
+
+static inline int wm_button_edges(uint8_t prev, uint8_t now, uint8_t pressed,
+                                  uint8_t released, wm_btn_edge_t *out)
+{
+    static const uint8_t bits[3] = { 0x01, 0x02, 0x04 };  /* L, R, M */
+    int n = 0;
+    for (int i = 0; i < 3; i++) {
+        uint8_t b = bits[i];
+        int state = (prev & b) != 0, want = (now & b) != 0;
+        int p = (pressed & b) != 0, r = (released & b) != 0;
+        /* Replay the latched edges from the previous state. */
+        if (!state && p)  { out[n++] = (wm_btn_edge_t){ b, 1 }; state = 1; p = 0; }
+        if (state && r)   { out[n++] = (wm_btn_edge_t){ b, 0 }; state = 0; r = 0; }
+        if (!state && (p || (pressed & b)) && want) {
+            out[n++] = (wm_btn_edge_t){ b, 1 }; state = 1;  /* press again */
+        }
+        /* Whatever was missed, end in the sampled state. */
+        if (state != want) out[n++] = (wm_btn_edge_t){ b, (uint8_t)want };
+    }
+    return n;
+}
+
 /* ── Mouse event handling ──────────────────────────────────────────────── */
 
 /*
@@ -643,6 +727,75 @@ static inline int wm_next_timeout_ms(const wm_state_t *s, uint32_t now,
     return best;
 }
 
+/* ── Scrolling a list view (textview, Files) -- ROADMAP3 18.2 ─────────────
+ * New first-visible row after moving `delta` rows, for a list of `total`
+ * rows shown `rows` at a time: never past the end, never below 0. */
+#define WM_WHEEL_ROWS 3          /* rows per wheel notch */
+
+static inline int wm_scroll_clamp(int scroll, int delta, int total, int rows)
+{
+    int max = total - rows;
+    if (max < 0) max = 0;
+    scroll += delta;
+    if (scroll > max) scroll = max;
+    if (scroll < 0)   scroll = 0;
+    return scroll;
+}
+
+/* ── Taskbar Power button + power-off dialog layout ───────────────────────
+ * The Power button sits at the right end of the taskbar; clicking it opens a
+ * small confirmation dialog with two buttons.  Pure geometry, host-tested. */
+
+#define WM_POWER_BTN_W     72
+#define WM_POWER_LABEL     "Power"
+#define WM_POWER_DLG_W    264      /* dialog content size */
+#define WM_POWER_DLG_H     88
+#define WM_DLG_BTN_W       96
+#define WM_DLG_BTN_H       24
+#define WM_DLG_BTN_GAP     16
+
+/* The Power button's screen rect (inset like the app buttons). */
+static inline rect_t wm_taskbar_power_rect(int sw, int sh, int taskbar_h)
+{
+    rect_t r = { sw - WM_POWER_BTN_W + 2, sh - taskbar_h + 3,
+                 WM_POWER_BTN_W - 4, taskbar_h - 6 };
+    return r;
+}
+
+/* Index of the taskbar app button under (mx, my), or -1.  App buttons are
+ * btn_w wide from the left edge; a button hidden under the Power button
+ * (very narrow screens) doesn't count. */
+static inline int wm_taskbar_app_hit(int mx, int my, int sw, int sh,
+                                     int taskbar_h, int napps, int btn_w)
+{
+    if (my < sh - taskbar_h || my >= sh || mx < 0 || btn_w <= 0) return -1;
+    int idx = mx / btn_w;
+    if (idx >= napps) return -1;
+    if ((idx + 1) * btn_w > sw - WM_POWER_BTN_W) return -1;
+    return idx;
+}
+
+/* Dialog buttons, in content coordinates: 0 = "Power off", 1 = "Cancel",
+ * side by side and centred along the bottom of a cw x ch content area. */
+#define WM_DLG_BTN_OK      0
+#define WM_DLG_BTN_CANCEL  1
+static inline rect_t wm_dialog_btn_rect(int which, int cw, int ch)
+{
+    int total = 2 * WM_DLG_BTN_W + WM_DLG_BTN_GAP;
+    int x0 = (cw - total) / 2;
+    rect_t r = { x0 + which * (WM_DLG_BTN_W + WM_DLG_BTN_GAP),
+                 ch - WM_DLG_BTN_H - 12, WM_DLG_BTN_W, WM_DLG_BTN_H };
+    return r;
+}
+
+/* Which dialog button content point (x, y) is on, or -1. */
+static inline int wm_dialog_btn_hit(int x, int y, int cw, int ch)
+{
+    for (int b = 0; b < 2; b++)
+        if (wm_rect_contains(wm_dialog_btn_rect(b, cw, ch), x, y)) return b;
+    return -1;
+}
+
 /* ── Compositor declarations ────────────────────────────────────────────── */
 
 void wm_composite(wm_state_t *s, canvas_t *screen);
@@ -651,8 +804,15 @@ void wm_composite(wm_state_t *s, canvas_t *screen);
  * ROADMAP3 18.1. */
 void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip);
 void wm_draw_cursor(canvas_t *screen, int mx, int my);
+/* App buttons from the left, and the Power button at the right end. */
 void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
                      const char **labels, int nlabels, int btn_w);
+/* A raised, labelled button (taskbar and dialog buttons share the look). */
+void wm_draw_button(canvas_t *c, rect_t r, const char *label);
+
+/* Ask the WM loop to power the machine off after the current frame is on
+ * screen (the power dialog's "Power off").  Defined in main.c. */
+void wm_request_poweroff(void);
 
 /* Launch a text viewer window for the given file path. */
 void wm_open_textview(const char *path);

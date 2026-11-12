@@ -42,11 +42,13 @@
 
 #include <stddef.h>
 #include <stdlib.h>   /* malloc / free from host libc */
+#include <string.h>
 #include "framework.h"
 
 /* Include gfx.h via the include path supplied in the Makefile rule. */
 #include <gfx.h>
 #include "../user/wm/wm.h"
+#include "../user/wm/wm_keys.h"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -886,6 +888,248 @@ static void test_tick_scheduling(void)
     ASSERT_EQ(wm_next_timeout_ms(&s, 0, 100), -1, "destroyed window not scheduled");
 }
 
+/* -- Taskbar Power button + power dialog geometry -------------------------- */
+
+static void test_power_button_layout(void)
+{
+    const int sw = 800, sh = 600, th = 28, bw = 110;
+    rect_t p = wm_taskbar_power_rect(sw, sh, th);
+    ASSERT(p.x + p.w <= sw && p.x >= sw - WM_POWER_BTN_W,
+           "Power button sits at the right end of the taskbar");
+    ASSERT(p.y >= sh - th && p.y + p.h <= sh, "Power button inside the taskbar");
+
+    ASSERT_EQ(wm_taskbar_app_hit(5, sh - 10, sw, sh, th, 3, bw), 0, "first app");
+    ASSERT_EQ(wm_taskbar_app_hit(2 * bw + 1, sh - 10, sw, sh, th, 3, bw), 2,
+              "third app");
+    ASSERT_EQ(wm_taskbar_app_hit(3 * bw + 1, sh - 10, sw, sh, th, 3, bw), -1,
+              "past the last app: nothing");
+    ASSERT_EQ(wm_taskbar_app_hit(5, sh - th - 1, sw, sh, th, 3, bw), -1,
+              "above the taskbar: nothing");
+    ASSERT_EQ(wm_taskbar_app_hit(p.x + 1, p.y + 1, sw, sh, th, 3, bw), -1,
+              "the Power button is not an app button");
+    ASSERT(wm_rect_contains(p, p.x + 1, p.y + 1), "Power button hit");
+
+    /* A screen so narrow the Power button overlaps app buttons: the covered
+     * ones are not clickable (and not drawn), so a click never does both. */
+    int narrow = 3 * bw;
+    rect_t pn = wm_taskbar_power_rect(narrow, sh, th);
+    ASSERT_EQ(wm_taskbar_app_hit(pn.x + 1, sh - 10, narrow, sh, th, 3, bw), -1,
+              "app button under the Power button doesn't fire");
+}
+
+static void test_power_dialog_buttons(void)
+{
+    const int cw = WM_POWER_DLG_W, ch = WM_POWER_DLG_H;
+    rect_t ok = wm_dialog_btn_rect(WM_DLG_BTN_OK, cw, ch);
+    rect_t ca = wm_dialog_btn_rect(WM_DLG_BTN_CANCEL, cw, ch);
+    ASSERT(ok.x >= 0 && ca.x + ca.w <= cw, "both buttons fit horizontally");
+    ASSERT(ok.y >= 0 && ok.y + ok.h <= ch, "buttons fit vertically");
+    ASSERT(!wm_rect_intersects(ok, ca), "buttons don't overlap");
+    ASSERT(ok.x < ca.x, "Power off is left of Cancel");
+    ASSERT_EQ(wm_dialog_btn_hit(ok.x + 1, ok.y + 1, cw, ch), WM_DLG_BTN_OK,
+              "hit Power off");
+    ASSERT_EQ(wm_dialog_btn_hit(ca.x + ca.w - 1, ca.y + ca.h - 1, cw, ch),
+              WM_DLG_BTN_CANCEL, "hit Cancel (bottom-right pixel)");
+    ASSERT_EQ(wm_dialog_btn_hit(ok.x + ok.w + 1, ok.y + 1, cw, ch), -1,
+              "the gap between the buttons hits nothing");
+    ASSERT_EQ(wm_dialog_btn_hit(2, 2, cw, ch), -1, "message area hits nothing");
+}
+
+/* -- Key decoding (ROADMAP3 18.2, wm_keys.h) ------------------------------- */
+
+/* Decode the whole string s; returns the number of keys, filling ks[]. */
+static int decode_all(const char *s, int n, wm_key_t *ks, int max)
+{
+    int nk = 0;
+    while (n > 0 && nk < max) {
+        int used = wm_key_decode(s, n, &ks[nk++]);
+        if (used <= 0) break;
+        s += used; n -= used;
+    }
+    return nk;
+}
+
+static void test_key_plain_and_control(void)
+{
+    wm_key_t k;
+    ASSERT_EQ(wm_key_decode("a", 1, &k), 1, "plain: 1 byte");
+    ASSERT(k.keycode == 'a' && k.mods == 0 && k.ascii == 'a', "plain a");
+    wm_key_decode("Q", 1, &k);
+    ASSERT(k.keycode == 'q' && k.mods == WM_MOD_SHIFT && k.ascii == 'Q',
+           "upper case -> letter + Shift, ascii kept");
+    wm_key_decode("\x03", 1, &k);
+    ASSERT(k.keycode == 'c' && k.mods == WM_MOD_CTRL && k.ascii == 0x03,
+           "Ctrl-C -> 'c' + Ctrl, ascii 0x03");
+    wm_key_decode("\n", 1, &k);
+    ASSERT_EQ(k.keycode, WM_KEY_ENTER, "newline is Enter");
+    wm_key_decode("\r", 1, &k);
+    ASSERT_EQ(k.keycode, WM_KEY_ENTER, "CR is Enter");
+    wm_key_decode("\t", 1, &k);
+    ASSERT(k.keycode == WM_KEY_TAB && k.mods == 0, "Tab is not Ctrl-I");
+    wm_key_decode("\b", 1, &k);
+    ASSERT_EQ(k.keycode, WM_KEY_BACKSPACE, "backspace");
+    wm_key_decode("\x7f", 1, &k);
+    ASSERT_EQ(k.keycode, WM_KEY_BACKSPACE, "DEL is backspace too");
+    wm_key_decode("\x1c", 1, &k);
+    ASSERT(k.keycode == '\\' && k.mods == WM_MOD_CTRL, "Ctrl-backslash");
+    ASSERT_EQ(wm_key_decode("", 0, &k), 0, "empty buffer consumes nothing");
+}
+
+static void test_key_escape_sequences(void)
+{
+    static const struct { const char *s; int code; } cases[] = {
+        { "\x1b[A", WM_KEY_UP },     { "\x1b[B", WM_KEY_DOWN },
+        { "\x1b[C", WM_KEY_RIGHT },  { "\x1b[D", WM_KEY_LEFT },
+        { "\x1b[H", WM_KEY_HOME },   { "\x1b[F", WM_KEY_END },
+        { "\x1b[2~", WM_KEY_INSERT },{ "\x1b[3~", WM_KEY_DELETE },
+        { "\x1b[5~", WM_KEY_PGUP },  { "\x1b[6~", WM_KEY_PGDN },
+        { "\x1bOP", WM_KEY_F1 },     { "\x1bOS", WM_KEY_F1 + 3 },
+        { "\x1b[15~", WM_KEY_F1 + 4 }, { "\x1b[21~", WM_KEY_F1 + 9 },
+        { "\x1b[23~", WM_KEY_F1 + 10 },{ "\x1b[24~", WM_KEY_F12 },
+    };
+    for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        wm_key_t k;
+        int len = (int)strlen(cases[i].s);
+        int used = wm_key_decode(cases[i].s, len, &k);
+        ASSERT_EQ(used, len, "whole sequence consumed");
+        ASSERT_EQ(k.keycode, cases[i].code, "sequence -> keycode");
+        ASSERT(k.mods == 0 && k.ascii == 0, "no mods, no ascii");
+        ASSERT(k.seq_len == len && memcmp(k.seq, cases[i].s, len) == 0,
+               "raw bytes kept for the terminal");
+    }
+}
+
+static void test_key_modifiers(void)
+{
+    wm_key_t k;
+    wm_key_decode("\x1b[1;2A", 6, &k);
+    ASSERT(k.keycode == WM_KEY_UP && k.mods == WM_MOD_SHIFT, "Shift-Up");
+    wm_key_decode("\x1b[1;5D", 6, &k);
+    ASSERT(k.keycode == WM_KEY_LEFT && k.mods == WM_MOD_CTRL, "Ctrl-Left");
+    wm_key_decode("\x1b[1;3S", 6, &k);
+    ASSERT(k.keycode == WM_KEY_F1 + 3 && k.mods == WM_MOD_ALT, "Alt-F4");
+    wm_key_decode("\x1b[5;8~", 6, &k);
+    ASSERT(k.keycode == WM_KEY_PGUP &&
+           k.mods == (WM_MOD_SHIFT | WM_MOD_ALT | WM_MOD_CTRL),
+           "Ctrl-Alt-Shift-PgUp");
+    ASSERT_EQ(k.seq_len, 6, "modified sequence kept whole");
+
+    wm_key_decode("\x1b\t", 2, &k);
+    ASSERT(k.keycode == WM_KEY_TAB && k.mods == WM_MOD_ALT, "Alt-Tab");
+    wm_key_decode("\x1bx", 2, &k);
+    ASSERT(k.keycode == 'x' && k.mods == WM_MOD_ALT && k.ascii == 'x', "Alt-x");
+    wm_key_decode("\x1b\x1bOS", 4, &k);
+    ASSERT(k.keycode == WM_KEY_F1 + 3 && k.mods == WM_MOD_ALT && k.seq_len == 4,
+           "ESC-prefixed sequence = Alt + that key");
+    wm_key_decode("\x1b", 1, &k);
+    ASSERT(k.keycode == WM_KEY_ESC && k.mods == 0, "lone ESC is the Esc key");
+    wm_key_decode("\x1b\x1b", 2, &k);
+    ASSERT(k.keycode == WM_KEY_ESC && k.mods == WM_MOD_ALT, "Alt-Esc");
+
+    ASSERT_EQ(wm_key_mods_from_param(1), 0, "m=1: no modifiers");
+    ASSERT_EQ(wm_key_mods_from_param(9), 0, "out of range: none");
+}
+
+static void test_key_stream(void)
+{
+    wm_key_t ks[8];
+    const char s[] = "a\x1b[Ab\x1b[3~\x03";
+    int nk = decode_all(s, (int)sizeof s - 1, ks, 8);
+    ASSERT_EQ(nk, 5, "five keys in the stream");
+    ASSERT(ks[0].keycode == 'a' && ks[1].keycode == WM_KEY_UP &&
+           ks[2].keycode == 'b' && ks[3].keycode == WM_KEY_DELETE &&
+           ks[4].keycode == 'c' && ks[4].mods == WM_MOD_CTRL,
+           "stream decodes in order");
+
+    /* Malformed / truncated sequences never stall or overrun. */
+    wm_key_t k;
+    ASSERT_EQ(wm_key_decode("\x1b[", 2, &k), 1, "truncated CSI: Esc alone");
+    ASSERT_EQ(k.keycode, WM_KEY_ESC, "... reported as Esc");
+    ASSERT_EQ(wm_key_decode("\x1b[1;2", 5, &k), 1, "no final byte: Esc");
+    ASSERT_EQ(wm_key_decode("\x1b[\x01", 3, &k), 1, "junk in CSI: Esc");
+    ASSERT_EQ(wm_key_decode("\x1b[99~", 5, &k), 5, "unknown ~ number consumed");
+    ASSERT_EQ(k.keycode, WM_KEY_UNKNOWN, "... as an unknown key");
+    ASSERT_EQ(wm_key_decode("\x1b[123456789A", 12, &k), 1,
+              "over-long CSI is not read past WM_KEY_SEQ_MAX");
+
+    /* Every byte value alone decodes to exactly one byte. */
+    int ok = 1;
+    for (int b = 1; b < 256; b++) {
+        char c = (char)b;
+        if (wm_key_decode(&c, 1, &k) != 1 || k.seq_len != 1) ok = 0;
+    }
+    ASSERT(ok, "any single byte decodes as one key");
+}
+
+/* -- Mouse button edges + Alt-Tab (ROADMAP3 18.2) --------------------------- */
+
+static void test_button_edges(void)
+{
+    wm_btn_edge_t e[WM_BTN_EDGES_MAX];
+    ASSERT_EQ(wm_button_edges(0, 0, 0, 0, e), 0, "nothing happened");
+    ASSERT_EQ(wm_button_edges(1, 1, 0, 0, e), 0, "held: no edge");
+
+    int n = wm_button_edges(0, 1, 1, 0, e);
+    ASSERT(n == 1 && e[0].button == 1 && e[0].down == 1, "left press");
+    n = wm_button_edges(1, 0, 0, 1, e);
+    ASSERT(n == 1 && e[0].button == 1 && e[0].down == 0, "left release");
+
+    /* A click shorter than one WM iteration: both edges latched, the level
+     * sample sees "up" both times.  The old WM lost these clicks. */
+    n = wm_button_edges(0, 0, 1, 1, e);
+    ASSERT(n == 2 && e[0].down == 1 && e[1].down == 0, "fast click: down, up");
+
+    /* Released and pressed again while sampled down both times. */
+    n = wm_button_edges(1, 1, 1, 1, e);
+    ASSERT(n == 2 && e[0].down == 0 && e[1].down == 1, "re-press: up, down");
+
+    /* Double click inside one sample: down, up, down. */
+    n = wm_button_edges(0, 1, 1, 1, e);
+    ASSERT(n == 3 && e[0].down == 1 && e[1].down == 0 && e[2].down == 1,
+           "down, up, down");
+
+    /* Per-button: right pressed while left released. */
+    n = wm_button_edges(1, 2, 2, 1, e);
+    ASSERT(n == 2, "two buttons changed");
+    ASSERT(e[0].button == 1 && e[0].down == 0, "left up");
+    ASSERT(e[1].button == 2 && e[1].down == 1, "right down");
+
+    /* No latches (old kernel) still yields the level change. */
+    n = wm_button_edges(0, 4, 0, 0, e);
+    ASSERT(n == 1 && e[0].button == 4 && e[0].down == 1, "middle from level");
+
+    /* Bound. */
+    ASSERT(wm_button_edges(0, 7, 7, 7, e) <= WM_BTN_EDGES_MAX, "bounded");
+}
+
+static void test_cycle_focus(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 600);
+    ASSERT_EQ(wm_cycle_focus(&s), -1, "no windows: nothing to focus");
+
+    int a = wm_create_window(&s, "A", 10, 30, 100, 80);
+    int b = wm_create_window(&s, "B", 20, 40, 100, 80);
+    int c = wm_create_window(&s, "C", 30, 50, 100, 80);
+    int sa = wm_find_idx(&s, a), sb = wm_find_idx(&s, b), sc = wm_find_idx(&s, c);
+    wm_focus(&s, sc);                       /* C front + focused: A B C */
+
+    int seen_a = 0, seen_b = 0, seen_c = 0;
+    for (int i = 0; i < 3; i++) {
+        int slot = wm_cycle_focus(&s);
+        ASSERT_EQ(s.z_order[s.num_windows - 1], slot, "cycled window is in front");
+        ASSERT(s.windows[slot].focused, "and focused");
+        int nfocused = 0;
+        for (int k = 0; k < WM_MAX_WINDOWS; k++) nfocused += s.windows[k].focused;
+        ASSERT_EQ(nfocused, 1, "exactly one focused window");
+        if (slot == sa) seen_a = 1;
+        if (slot == sb) seen_b = 1;
+        if (slot == sc) seen_c = 1;
+    }
+    ASSERT(seen_a && seen_b && seen_c, "three Alt-Tabs visit all three windows");
+    ASSERT_EQ(s.windows[sc].focused, 1, "and come back to where we started");
+}
+
 int main(void)
 {
     RUN_SUITE(test_geometry_rect_contains);
@@ -931,6 +1175,14 @@ int main(void)
     RUN_SUITE(test_damage_invariants_random);
     RUN_SUITE(test_composite_rect_matches_full);
     RUN_SUITE(test_tick_scheduling);
+    RUN_SUITE(test_power_button_layout);
+    RUN_SUITE(test_power_dialog_buttons);
+    RUN_SUITE(test_key_plain_and_control);
+    RUN_SUITE(test_key_escape_sequences);
+    RUN_SUITE(test_key_modifiers);
+    RUN_SUITE(test_key_stream);
+    RUN_SUITE(test_button_edges);
+    RUN_SUITE(test_cycle_focus);
 
     TEST_SUMMARY();
 }

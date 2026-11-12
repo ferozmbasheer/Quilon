@@ -122,10 +122,13 @@ clock/clock_app.o: clock/clock_app.c wm/wm.h
 filebr/filebr_app.o: filebr/filebr_app.c wm/wm.h
 	$(CC) $(WM_CFLAGS) -c -o $@ filebr/filebr_app.c
 
+wm/power_app.o: wm/power_app.c wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ wm/power_app.c
+
 textview/textview_app.o: textview/textview_app.c wm/wm.h
 	$(CC) $(WM_CFLAGS) -c -o $@ textview/textview_app.c
 
-WM_OBJS = wm/main.o wm/wm_compositor.o \
+WM_OBJS = wm/main.o wm/wm_compositor.o wm/power_app.o \
           gterm/gterm_app.o \
           clock/clock_app.o \
           filebr/filebr_app.o \

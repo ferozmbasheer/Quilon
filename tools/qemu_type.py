@@ -10,6 +10,9 @@ then plays <script>.  Plain characters are typed with HMP `sendkey`; a literal
     {mouse:DX,DY}    relative mouse move (a big negative move pins the cursor
                      to the top-left corner, since the kernel clamps it)
     {click}          left button press + release
+    {rclick}         right button press + release
+    {fastclick}      left press + release with no pause between them
+    {wheel:N}        N scroll-wheel notches (+ = down, - = up)
     {down} / {up}    left button press / release alone (drag = down, mouse, up)
     {dump:FILE}      QEMU screendump of the display to FILE (PPM)
     {wait:SECONDS}   sleep
@@ -88,8 +91,24 @@ def main():
                     dx -= sx
                     dy -= sy
                 time.sleep(0.2)
+            elif name == 'wheel':
+                # One notch per step; + = towards the user (scroll down).
+                # HMP's dz is the other way round: dz > 0 is wheel UP
+                # (QEMU sends it as a negative PS/2 Z).
+                n = int(arg)
+                for _ in range(abs(n)):
+                    hmp('mouse_move 0 0 %d' % (-1 if n > 0 else 1), 0.05)
+                time.sleep(0.2)
             elif name == 'click':
                 hmp('mouse_button 1', 0.2)
+                hmp('mouse_button 0', 0.2)
+            elif name == 'rclick':
+                hmp('mouse_button 2', 0.2)
+                hmp('mouse_button 0', 0.2)
+            elif name == 'fastclick':
+                # Press + release with no pause: shorter than one WM loop
+                # iteration, so only the kernel's latched edges see it.
+                hmp('mouse_button 1', 0)
                 hmp('mouse_button 0', 0.2)
             elif name == 'down':
                 hmp('mouse_button 1', 0.2)

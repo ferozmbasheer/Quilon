@@ -32,7 +32,7 @@ typedef struct {
     int     to_shell[2];     /* [0]=shell stdin (read), [1]=we write keys      */
     int     from_shell[2];   /* [0]=we read output,     [1]=shell stdout (write)*/
     int     shell_pid;
-    int     exited;          /* 1 once "[shell exited]" has been shown          */
+    int     exited;          /* 1 once the shell has exited (window closing)    */
 } gterm_state_t;
 
 /* ── Renderer ────────────────────────────────────────────────────────────── */
@@ -73,8 +73,8 @@ static void gterm_tick(window_t *win)
     /* Drain what is there (up to a bound) and render once, rather than
      * re-rendering every 256 bytes.  Anything left keeps the pipe readable,
      * so the WM ticks us again straight away.  read_nonblock reports 0 both
-     * for "empty" and for EOF; wait_input only wakes for real bytes, so a
-     * dead shell just leaves the terminal idle. */
+     * for "empty" and for EOF; wait_input also wakes us at EOF (a hung-up
+     * pipe counts as ready), which is how we learn the shell has exited. */
     char ibuf[256];
     int got = 0;
     for (int i = 0; i < GTERM_DRAIN_MAX; i++) {
@@ -86,6 +86,20 @@ static void gterm_tick(window_t *win)
     if (got) {
         gterm_render(&st->term, win->backbuf, 1);
         win->dirty = 1;
+        return;
+    }
+
+    /* Woken with nothing to read: the pipe is at EOF, i.e. our shell -- the
+     * only owner of the write end -- has exited (`exit` at the terminal's
+     * top-level prompt; a nested shell's `exit` just returns to its parent
+     * and never closes the pipe).  Reap it and close the window.  The shell
+     * closes its pipe ends a moment before it becomes a zombie; if we catch
+     * it in between, wait_nohang() says "still running" and the hung-up
+     * pipe wakes us again at once. */
+    if (st->shell_pid > 0 && wait_nohang(st->shell_pid, (int *)0) != 1) {
+        st->shell_pid = -1;               /* reaped: nothing to queue */
+        st->exited    = 1;
+        win->want_close = 1;
     }
 }
 
@@ -93,15 +107,19 @@ static void gterm_event(window_t *win, const wm_event_t *ev)
 {
     gterm_state_t *st = (gterm_state_t *)win->app_state;
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
-    if (ev->type != WM_EV_KEY || !ev->ascii) return;
+    if (ev->type != WM_EV_KEY || ev->seq_len <= 0) return;
 
     /* Ctrl-C (ROADMAP3 17.0.1): the WM reads the keyboard on the shell's
      * behalf, so the kernel can't route it -- ask it to SIGINT the shell's
      * foreground job.  With no job running (shell at its prompt) the byte
      * goes to the shell as input, which abandons the current line. */
-    if (ev->ascii == 0x03 && st->shell_pid > 0 && intr(st->shell_pid) == 1)
+    if (ev->seq_len == 1 && ev->ascii == 0x03 && st->shell_pid > 0 &&
+        intr(st->shell_pid) == 1)
         return;
-    write(st->to_shell[1], &ev->ascii, 1);
+    /* The shell reads a terminal byte stream: forward exactly the bytes the
+     * key arrived as (arrows, Alt-x, F-keys are escape sequences), not the
+     * WM's decoded keycode.  ROADMAP3 18.2. */
+    write(st->to_shell[1], ev->seq, (unsigned)ev->seq_len);
 }
 
 static void reap_queue_add(int pid);

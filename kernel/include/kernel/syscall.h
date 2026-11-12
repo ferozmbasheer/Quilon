@@ -75,6 +75,9 @@
 #define SYS_WAIT_INPUT 58 /* wait_input(timeout_ms, const int *fds, nfds) -> ready mask */
 #define SYS_GFX_FLUSH_RECT 59 /* gfx_flush_rect(x, y, w, h) -> 0; flush only that band */
 
+/* Power (shell `poweroff`, desktop Power button) */
+#define SYS_POWEROFF   60 /* poweroff() -> never returns                              */
+
 /* SYS_WAIT_INPUT result bits (0 = timed out or interrupted by a signal).
  * Keep in sync with user/libc/include/unistd.h. */
 #define WAIT_INPUT_KBD      0x001u          /* fd 0 has input (kbd or pipe) */
@@ -99,6 +102,11 @@ typedef struct {
     int     x;        /* absolute cursor x in pixels */
     int     y;        /* absolute cursor y in pixels */
     uint8_t buttons;  /* bitmask: bit 0 = left, bit 1 = right, bit 2 = middle */
+    uint8_t pressed;  /* buttons that went DOWN since the last read (18.2) */
+    uint8_t released; /* buttons that went UP since the last read   (18.2) */
+    uint8_t _pad;
+    int     wheel;    /* wheel notches since the last read, + = towards the
+                       * user (scroll down); 0 without a wheel mouse (18.2) */
 } mouse_event_t;
 
 /* proc_info_t -- one entry filled by SYS_PS.  Mirrors user/libc/include/unistd.h;

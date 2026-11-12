@@ -23,6 +23,7 @@
 #include <kernel/syscall.h>
 #include <kernel/mouse.h>
 #include <kernel/signal.h>
+#include <kernel/power.h>
 
 static void shell_cmd_ls(void)
 {
@@ -1344,7 +1345,7 @@ static void shell_cmd_kill(const char *args)
 
 static void shell_execute(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
-        printf("Commands: help, clear, cls, halt, ticks, seconds,\r\n");
+        printf("Commands: help, clear, cls, halt, poweroff, ticks, seconds,\r\n");
         printf("          ring3, syscall, sbrk, fork, cow, ps, ls,\r\n");
         printf("          kill <pid> [sig]       - send a signal (default 15 TERM)\r\n");
         printf("          cat <file>, touch <file>, write <file> <data>,\r\n");
@@ -1372,6 +1373,9 @@ static void shell_execute(const char *cmd) {
         printf("\033[2J\033[H");
     } else if (strcmp(cmd, "cls") == 0) {
         printf("\033[2J\033[H");
+    } else if (strcmp(cmd, "poweroff") == 0) {
+        printf("Powering off.\r\n");
+        power_off();
     } else if (strcmp(cmd, "halt") == 0) {
         printf("Halting.\r\n");
         asm volatile("cli; hlt");

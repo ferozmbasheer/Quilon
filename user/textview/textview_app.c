@@ -1,7 +1,8 @@
 /*
  * Quilon OS -- Text Viewer app (section 14.4, single-threaded WM)
  *
- * Reads a file path from win->title and displays its contents.  d/u scroll.
+ * Reads a file path from win->title and displays its contents.  Scroll with
+ * the arrows, Page Up/Down, Home/End, d/u, or the mouse wheel.
  * Implemented as non-blocking WM callbacks (on_event); per-window state
  * (the loaded lines + scroll position) lives in win->app_state.
  */
@@ -27,13 +28,18 @@ static int tv_read_file(const char *path, char lines[][MAX_LINE_LEN], int max)
     int fd = open(path);
     if (fd < 0) return 0;
 
-    int n = 0, pos = 0;
+    int n = 0, pos = 0, prev_cr = 0;
     char buf[512];
     int bytes;
     while (n < max && (bytes = read(fd, buf, (int)sizeof(buf))) > 0) {
         int i;
         for (i = 0; i < bytes && n < max; i++) {
             char c = buf[i];
+            /* CRLF ends ONE line: it used to show a blank line after
+             * every line of the (CRLF) files on the disk. */
+            int skip = (c == '\n' && prev_cr);
+            prev_cr = (c == '\r');
+            if (skip) continue;
             if (c == '\n' || c == '\r') {
                 lines[n][pos] = '\0';
                 n++;
@@ -64,10 +70,26 @@ static void tv_event(window_t *win, const wm_event_t *ev)
 {
     tv_state_t *st = (tv_state_t *)win->app_state;
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
-    if (ev->type != WM_EV_KEY) return;
 
-    if (ev->ascii == 'd' && st->scroll + st->rows < st->nlines) st->scroll++;
-    if (ev->ascii == 'u' && st->scroll > 0)                     st->scroll--;
+    int delta = 0;
+    if (ev->type == WM_EV_SCROLL) {
+        delta = ev->wheel * WM_WHEEL_ROWS;
+    } else if (ev->type == WM_EV_KEY) {
+        switch (ev->keycode) {
+        case 'd': case WM_KEY_DOWN: delta = 1;            break;
+        case 'u': case WM_KEY_UP:   delta = -1;           break;
+        case WM_KEY_PGDN:           delta = st->rows - 1; break;
+        case WM_KEY_PGUP:           delta = -(st->rows - 1); break;
+        case WM_KEY_HOME:           delta = -st->nlines;  break;
+        case WM_KEY_END:            delta = st->nlines;   break;
+        default: return;
+        }
+    } else {
+        return;
+    }
+    int ns = wm_scroll_clamp(st->scroll, delta, st->nlines, st->rows);
+    if (ns == st->scroll) return;
+    st->scroll = ns;
     tv_render(win);
 }
 

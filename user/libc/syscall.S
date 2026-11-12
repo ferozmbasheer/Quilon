@@ -612,6 +612,15 @@ wait_input:
     popl  %ebx
     ret
 
+/* -- Power ----------------------------------------------------------------- */
+
+/* poweroff() -> never returns                                  SYS_POWEROFF (60) */
+.global poweroff
+poweroff:
+    movl  $60, %eax
+    int   $0x80
+1:  jmp   1b                /* unreachable */
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

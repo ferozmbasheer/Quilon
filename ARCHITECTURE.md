@@ -114,7 +114,12 @@ convention is documented in [BUILD.md](BUILD.md); user-side stubs are in
 Desktop (ROADMAP3 18.1): `SYS_WAIT_INPUT` (58, sleep on the shared `input_wq`
 until kbd/mouse/fds are ready or a timeout -- PCB `wake_tick`, expired from
 `pit_tick`) and `SYS_GFX_FLUSH_RECT` (59). `waitq_sleep` halts the CPU when
-nothing else is runnable instead of spinning.
+nothing else is runnable instead of spinning. A pipe at EOF counts as ready
+for `SYS_WAIT_INPUT` (poll-style hang-up). `SYS_POWEROFF` (60) switches the
+machine off (`arch/i386/power.c`). `SYS_MOUSE_READ` also returns the button
+edges and wheel notches latched since the last read (ROADMAP3 18.2).
+`context_switch` saves EFLAGS with the callee-saved registers (REVIEW.md J);
+build initial frames with `ctx_frame_build()`.
 
 ## Filesystem
 
@@ -142,7 +147,12 @@ design that was deeply race-prone).
   cursor-last + flush. Since ROADMAP3 18.1 the loop **sleeps** in
   `wait_input()` (`SYS_WAIT_INPUT`) until keyboard/mouse input, a window's
   `wait_fd` (terminal pipe) has data, or its `tick_ms` is due, and repaints +
-  flushes (`SYS_GFX_FLUSH_RECT`) only a list of damage rects.
+  flushes (`SYS_GFX_FLUSH_RECT`) only a list of damage rects. Since 18.2 the
+  keyboard bytes are decoded (`wm_keys.h`) into key events with keycode,
+  modifiers and the raw sequence; mouse events are per button (press /
+  release / held-motion, captured by the window that got the press) plus
+  `WM_EV_SCROLL`; Alt-Tab and Alt-F4 are WM shortcuts. The taskbar has a
+  Power button (confirm dialog in `power_app.c`).
 - Apps (`gterm`, `clock`, `filebr`, `textview`) are launched via `*_open(win)`
   entry points that install callbacks and allocate `app_state`. The terminal
   drains its shell's stdout pipe in `on_tick` (non-blocking) and spawns the

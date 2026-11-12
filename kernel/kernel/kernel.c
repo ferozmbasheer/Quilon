@@ -1015,6 +1015,8 @@ void kernel_main(void) {
 	printf("\r\n=== Section 13: PS/2 Mouse Driver ===\r\n");
 	mouse_initialize();
 	printf("mouse: PS/2 auxiliary port enabled\r\n");
+	printf("mouse: %s\r\n", mouse_has_wheel() ? "scroll wheel enabled (IntelliMouse, 4-byte packets)"
+	                                     : "no scroll wheel (3-byte packets)");
 	printf("mouse: data reporting active  (IRQ12 / vector 44)\r\n");
 	printf("mouse: cursor at (%d, %d)\r\n", mouse_get_x(), mouse_get_y());
 	printf("mouse: SYS_MOUSE_READ=%d  (ring-3 position query)\r\n",

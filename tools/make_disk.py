@@ -9,8 +9,8 @@ Each ELF_FILE is added to the disk using its uppercased basename as the
 FAT16 8.3 filename (e.g. shell/shell.elf → SHELL.ELF).  Missing files are
 skipped with a warning.
 
-Three fixed text files (README.TXT, GREET.TXT, NUMBERS.TXT) are always
-written first.
+Four fixed text files (README.TXT, GREET.TXT, NUMBERS.TXT, SCROLL.TXT) are
+always written first.
 
 This script is called by:
     user/Makefile  — disk target (first-class workflow)
@@ -80,6 +80,12 @@ def name_to_83(filename):
         base, ext = upper, ''
     return base[:8].ljust(8), ext[:3].ljust(3)
 
+# A long file for the text viewer: scrolling with the wheel, arrows,
+# Page Up/Down and Home/End (ROADMAP3 18.2).
+SCROLL_TXT = b"".join(
+    b"Line %03d -- scroll with the mouse wheel, arrows, PgUp/PgDn, Home/End\r\n" % i
+    for i in range(1, 101))
+
 # ── Fixed text files ──────────────────────────────────────────────────────────
 files = [
     ("README  ", "TXT",
@@ -94,6 +100,8 @@ files = [
 
     ("NUMBERS ", "TXT",
      b"one two three four five six seven eight nine ten\r\n"),
+
+    ("SCROLL  ", "TXT", SCROLL_TXT),
 ]
 
 # ── ELF binaries ─────────────────────────────────────────────────────────────

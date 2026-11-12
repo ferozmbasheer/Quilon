@@ -13,6 +13,7 @@
  *   exec <file.elf>   - launch an ELF program as a child process and wait
  *   pid               - print the shell's own PID (SYS_GETPID)
  *   exit              - exit the shell (SYS_EXIT 0)
+ *   poweroff          - switch the machine off (SYS_POWEROFF)
  *
  * Differences from the kernel ring-0 shell
  * -----------------------------------------
@@ -126,6 +127,7 @@ static void cmd_help(void)
     printf("  pid                    - print shell PID\r\n");
     printf("  ps                     - list running processes\r\n");
     printf("  kill <pid> [sig]       - send a signal (default 15 TERM; Ctrl-C = 2 INT)\r\n");
+    printf("  poweroff               - switch the machine off\r\n");
     printf("  ticks                  - raw PIT tick count\r\n");
     printf("  seconds                - uptime in whole seconds\r\n");
     printf("  clear / cls            - scroll screen\r\n");
@@ -1433,6 +1435,10 @@ static void dispatch(char *line)
     else if (strcmp(cmd, "wm-demo") == 0) cmd_wm_demo();
     else if (strcmp(cmd, "startx") == 0) cmd_exec("/wm.elf");
     else if (strcmp(cmd, "wget")   == 0) cmd_exec("/wget.elf");
+    else if (strcmp(cmd, "poweroff") == 0) {
+        printf("Powering off.\r\n");
+        poweroff();
+    }
     else if (strcmp(cmd, "exit")   == 0) {
         printf("Bye.\r\n");
         exit(0);

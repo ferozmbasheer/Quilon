@@ -1,8 +1,9 @@
 /*
  * Quilon OS -- File Browser app (section 14.4, single-threaded WM)
  *
- * Scrollable directory listing.  j/k move the selection; Enter navigates into
- * directories or opens a file in a textview.  Implemented as non-blocking WM
+ * Scrollable directory listing.  Up/Down (or j/k), Page Up/Down and Home/End
+ * move the selection; Enter or clicking the selected row navigates into a
+ * directory or opens a file in a textview; the mouse wheel scrolls.  Implemented as non-blocking WM
  * callbacks (on_event for keys/close); per-window state in win->app_state.
  */
 
@@ -103,7 +104,19 @@ static void fb_event(window_t *win, const wm_event_t *ev)
 
     /* Mouse click: select the clicked row; a click on the already-selected
      * row activates it (navigate into a dir / open a file). */
+    if (ev->type == WM_EV_SCROLL) {
+        int ns = wm_scroll_clamp(st->scroll, ev->wheel * WM_WHEEL_ROWS,
+                                 st->n, st->rows);
+        if (ns != st->scroll) {
+            st->scroll = ns;
+            fb_render(win->backbuf, st);
+            win->dirty = 1;
+        }
+        return;
+    }
+
     if (ev->type == WM_EV_MOUSE_BTN) {
+        if (ev->button != MOUSE_BTN_LEFT) return;
         int row = st->scroll + ev->y / LIST_ITEM_H;
         if (row >= 0 && row < st->n) {
             if (row == st->selected) {
@@ -119,15 +132,23 @@ static void fb_event(window_t *win, const wm_event_t *ev)
 
     if (ev->type != WM_EV_KEY) return;
 
-    char c = ev->ascii;
-    if (c == 'j' && st->selected < st->n - 1) st->selected++;
-    if (c == 'k' && st->selected > 0)         st->selected--;
-    if (st->selected < st->scroll)            st->scroll = st->selected;
+    int move = 0;
+    switch (ev->keycode) {
+    case 'j': case WM_KEY_DOWN: move = 1;             break;
+    case 'k': case WM_KEY_UP:   move = -1;            break;
+    case WM_KEY_PGDN:           move = st->rows - 1;  break;
+    case WM_KEY_PGUP:           move = -(st->rows - 1); break;
+    case WM_KEY_HOME:           move = -st->n;        break;
+    case WM_KEY_END:            move = st->n;         break;
+    case WM_KEY_ENTER:          fb_activate(st);      break;
+    default: return;
+    }
+    st->selected += move;
+    if (st->selected > st->n - 1) st->selected = st->n - 1;
+    if (st->selected < 0)         st->selected = 0;
+    if (st->selected < st->scroll) st->scroll = st->selected;
     if (st->selected >= st->scroll + st->rows)
         st->scroll = st->selected - st->rows + 1;
-
-    if (c == '\r' || c == '\n')
-        fb_activate(st);
 
     fb_render(win->backbuf, st);
     win->dirty = 1;

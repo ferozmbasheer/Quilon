@@ -242,6 +242,31 @@ static void test_overflow_bits_detectable(void)
  * Runner
  * ---------------------------------------------------------------------- */
 
+/* ROADMAP3 18.2: IntelliMouse wheel byte and latched button edges. */
+static void test_wheel_dz(void)
+{
+    ASSERT_EQ(mouse_packet_dz(0x00), 0, "no wheel motion");
+    ASSERT_EQ(mouse_packet_dz(0x01), 1, "one notch down (towards the user)");
+    ASSERT_EQ(mouse_packet_dz(0x0F), -1, "one notch up");
+    ASSERT_EQ(mouse_packet_dz(0x08), -8, "most negative nibble");
+    ASSERT_EQ(mouse_packet_dz(0x07), 7, "most positive nibble");
+    ASSERT_EQ(mouse_packet_dz(0xF1), 1, "ID-4 button bits in the high nibble ignored");
+}
+
+static void test_button_edge_latch(void)
+{
+    uint8_t p = 0, r = 0;
+    mouse_button_edges(0x00, 0x01, &p, &r);
+    ASSERT(p == 0x01 && r == 0x00, "left down latched");
+    mouse_button_edges(0x01, 0x00, &p, &r);
+    ASSERT(p == 0x01 && r == 0x01, "then up: both edges kept until read");
+    mouse_button_edges(0x00, 0x06, &p, &r);
+    ASSERT(p == 0x07 && r == 0x01, "right + middle down accumulate");
+    p = r = 0;
+    mouse_button_edges(0x03, 0x03, &p, &r);
+    ASSERT(p == 0 && r == 0, "held buttons are not edges");
+}
+
 int main(void)
 {
     RUN_SUITE(test_dx_positive);
@@ -278,6 +303,8 @@ int main(void)
 
     RUN_SUITE(test_cursor_dimensions);
     RUN_SUITE(test_overflow_bits_detectable);
+    RUN_SUITE(test_wheel_dz);
+    RUN_SUITE(test_button_edge_latch);
 
     TEST_SUMMARY();
 }

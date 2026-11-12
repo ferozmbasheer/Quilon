@@ -87,6 +87,31 @@ static int emit_str(const char *s, char *out)
     return n;
 }
 
+/*
+ * A navigation/function key pressed with Shift, Alt or Ctrl: rewrite its
+ * plain sequence into the xterm parameter form (ROADMAP3 18.2), so the
+ * modifier is not lost -- Alt-F4 used to arrive as a bare F4.
+ *   ESC [ X   / ESC O X  ->  ESC [ 1 ; m X
+ *   ESC [ n ~            ->  ESC [ n ; m ~
+ * m = 1 + Shift(1) + Alt(2) + Ctrl(4).  Longest: ESC[24;8~ = 7 bytes.
+ */
+static int emit_modified(const char *seq, int m, char *out)
+{
+    int n = 0, len = 0;
+    while (seq[len]) len++;
+    out[n++] = 0x1B;
+    out[n++] = '[';
+    if (seq[len - 1] == '~') {
+        for (int i = 2; i < len - 1; i++) out[n++] = seq[i];   /* n */
+    } else {
+        out[n++] = '1';
+    }
+    out[n++] = ';';
+    out[n++] = (char)('0' + m);
+    out[n++] = seq[len - 1];                                   /* final */
+    return n;
+}
+
 void kbd_state_init(kbd_state_t *st)
 {
     st->shift_l = st->shift_r = 0;
@@ -142,6 +167,9 @@ int kbd_translate(kbd_state_t *st, uint8_t scancode, char *out)
     if (seq) {
         /* Unprefixed 0x4A '-' and 0x4E '+' fall through below; keypad 0x37
          * '*' is not in special_seq either. */
+        int m = 1 + ((st->shift_l || st->shift_r) ? 1 : 0) + (alt ? 2 : 0) +
+                ((st->ctrl_l || st->ctrl_r) ? 4 : 0);
+        if (m > 1) return emit_modified(seq, m, out);
         return emit_str(seq, out);
     }
 

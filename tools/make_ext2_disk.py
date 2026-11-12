@@ -47,6 +47,12 @@ if shutil.which("mke2fs") is None:
           file=sys.stderr)
     sys.exit(1)
 
+# A long file for the text viewer: scrolling with the wheel, arrows,
+# Page Up/Down and Home/End (ROADMAP3 18.2).
+SCROLL_TXT = b"".join(
+    b"Line %03d -- scroll with the mouse wheel, arrows, PgUp/PgDn, Home/End\r\n" % i
+    for i in range(1, 101))
+
 # ── Fixed text files (same content as the FAT16 image) ───────────────────────
 FIXED = [
     ("README.TXT",
@@ -61,6 +67,8 @@ FIXED = [
 
     ("NUMBERS.TXT",
      b"one two three four five six seven eight nine ten\r\n"),
+
+    ("SCROLL.TXT", SCROLL_TXT),
 
     # ext2-only: a name FAT16's 8.3 format could not store.
     ("LONGFILENAME.TXT",

@@ -66,7 +66,7 @@ build) real programs inside Quilon.
 
 **Order of work (2026-11):** 17.0.1 (keyboard, ✓ done) first — it unblocks typing
 code, Ctrl-C, and arrow keys for both the ports and the desktop. Then
-Section 18 (desktop polish; 18.1 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
+Section 18 (desktop polish; 18.1 + 18.2 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
 
 ---
 
@@ -113,7 +113,9 @@ the new 17.0 prerequisites — interleaved with Section 18, desktop polish.)*
 | ext2 filesystem (16.2) | `ext2.c` | ✓ Complete — **read-only**; probed before FAT16; `fs` command + `SYS_FSINFO` |
 | Keyboard + Ctrl-C (17.0.1) | `kbd_xlate.c`, `keyboard.c`, `signal.c`, `process.c` | ✓ Complete — shift/caps/ctrl/alt, arrows as VT100 escapes, Ctrl-C → SIGINT to the foreground job; `kill`/`signal`/`setfg`/`intr` |
 | Idle desktop (18.1) | `syscall.c` (`SYS_WAIT_INPUT`, `SYS_GFX_FLUSH_RECT`), `waitq.c`, `user/wm/` | ✓ Complete — WM sleeps until input/ticks, repaints + flushes only damage rects; idle desktop 100% → ~4% host CPU |
-| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (26 checks) + `make wmtest` (desktop) + `make kbdtest` (keyboard) |
+| Richer input events (18.2) | `user/wm/wm_keys.h`, `user/wm/main.c`, `mouse.c`, `kbd_xlate.c` | ✓ Complete — keycode + mods, press/release/drag per button, scroll wheel, Alt-Tab / Alt-F4 |
+| Power off | `arch/i386/power.c`, `SYS_POWEROFF` (60), `user/wm/power_app.c` | ✓ `poweroff` in both shells + a taskbar Power button with a confirm dialog (emulator PM ports; no ACPI table parsing yet) |
+| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (27 checks) + `wmtest` (desktop) + `kbdtest` (keyboard) + `termtest` + `powertest` + `eventtest` |
 
 ---
 
@@ -1782,7 +1784,55 @@ measure CPU idle in `ps` before/after; `make wmtest` must still pass.
 
 ### 18.2 Richer Input Events for Apps
 
-**Today:** `wm_event_t` carries only `ascii`; apps get `WM_EV_MOUSE_BTN` on
+> **✓ Done (2026-11).** As built:
+> - **Keys.** `user/wm/wm_keys.h` (`wm_key_decode`, pure) turns the kernel's
+>   byte stream into `{keycode, mods, ascii, seq}`: printable/control bytes,
+>   ESC-prefixed Alt, CSI/SS3 sequences, and the **xterm parameter forms**
+>   `ESC[1;<m>A`, `ESC[<n>;<m>~` -- which `kbd_xlate` now emits for
+>   special keys with Shift/Alt/Ctrl held (before, the modifier was dropped:
+>   Alt-F4 arrived as a bare F4).  m = 1 + Shift 1 + Alt 2 + Ctrl 4; the
+>   longest, `ESC[24;8~`, fits `KBD_SEQ_MAX`.  The WM drains the keyboard in
+>   one go (a key's sequence comes from one IRQ, so it is never split; a full
+>   buffer keeps its last `WM_KEY_SEQ_MAX` bytes for the next read).
+>   `wm_event_t` gained `keycode`, `mods`, `seq[]/seq_len`, `button`,
+>   `wheel`; `wm_event_make()` zero-fills it.  **gterm forwards `seq`**
+>   (arrows, Alt-x, F-keys reach the shell intact); textview and Files use
+>   keycodes (arrows, PgUp/PgDn, Home/End, Enter).
+> - **Mouse.** The kernel **latches button edges** (`pressed`/`released` in
+>   `mouse_event_t`, taken + cleared by `SYS_MOUSE_READ`), so a click shorter
+>   than one WM loop iteration is no longer lost; `wm_button_edges()` (pure)
+>   replays them in order.  Apps get `WM_EV_MOUSE_BTN` (press, any button,
+>   `button` = which), `WM_EV_MOUSE_UP`, and `WM_EV_MOUSE_MOVE` while a
+>   button is held -- all **captured** by the window that got the press,
+>   even outside it.  Only the left button drives WM chrome (drag, close,
+>   taskbar).  **Scroll wheel:** the IntelliMouse knock (rate 200/100/80 →
+>   ID 3, 4-byte packets, Z = low nibble) at init; `mouse_event_t.wheel`
+>   accumulates notches (+ = down); the WM sends `WM_EV_SCROLL` to the
+>   window under the cursor (textview + Files scroll 3 rows/notch via
+>   `wm_scroll_clamp`).  `mouse_event_t` grew from 12 to 16 bytes (a
+>   kernel↔user ABI pair in `syscall.h` / `unistd.h`).
+> - **Shortcuts:** Alt-Tab = `wm_cycle_focus()` (raise + focus the backmost
+>   window; repeating visits all); Alt-F4 closes the focused window.
+> - **Found on the way:** `mouse_initialize` ran its polled command/reply
+>   exchange with IRQs on, so IRQ12 could steal the replies (an ACK, 0xFA,
+>   has the packet-start bit) and assemble a phantom packet; with the longer
+>   wheel handshake it happened every boot (caught by `ktest`'s
+>   "kill() wakes a child asleep in wait_input()").  Now done with IRQs
+>   masked, draining leftovers.  Also: textview showed a blank line after
+>   every CRLF line; a 100-line `SCROLL.TXT` is on both disk images.
+> - *Tests:* `test_wm` (decoder: every sequence, modifiers, Alt forms,
+>   malformed/truncated input, every single byte; button-edge ordering incl.
+>   fast and double clicks; Alt-Tab cycling; scroll clamp), `test_kbd`
+>   (modified specials), `test_mouse` (`mouse_packet_dz`, edge latch); **`make
+>   eventtest`** (fast-click focuses, Alt-Tab cycles, Alt-F4 closes the right
+>   window -- shown to fail with the kernel's edge latching removed; boot log
+>   shows the wheel); wheel scrolling checked by screendump
+>   (`tools/qemu_type.py` gained `{wheel:N}`, `{rclick}`, `{fastclick}`).
+> - *Not done:* the 4-byte-packet mouse with 5 buttons (ID 4) is handled
+>   like ID 3; terminal drag-select (the events exist; gterm has no
+>   selection yet -- 18.5).
+
+**Before 18.2:** `wm_event_t` carries only `ascii`; apps get `WM_EV_MOUSE_BTN` on
 press only, with no release, motion, or which-button.
 
 - **Key events** gain a `keycode` and `mods` (shift/ctrl/alt) next to

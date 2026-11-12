@@ -37,9 +37,24 @@ terminals left shells spinning. Each fix has host tests plus an in-OS check:
 **`make ktest`** (user/ktest, typed into the VM via the QEMU monitor) and
 **`make wmtest`** (mouse-driven desktop test). Run both on kernel changes, on
 both images (`SMOKE_DISK=ext2.img make ktest`). Still open in REVIEW.md:
-per-process fd tables + cwd, errno, boot-demo gating, single TCP connection,
-and **J: an intermittent (~1/12) hang right after a child exits** in `ktest`
-(pre-existing; reproduced on the base commit).
+per-process fd tables + cwd, errno, boot-demo gating, single TCP connection.
+**J (the ~1/12 post-exit hang) is fixed (2026-11-11):** `context_switch` did
+not save EFLAGS, so a process resumed from the timer/an exception ran on with
+IF=0 and spun forever in its next idle wait -- now EFLAGS is part of the
+switch frame (`ctx_frame_build()` in process.h; every hand-built frame must
+use it) and the exit→wake-parent tail is IRQ-atomic.  Desktop/power tests:
+`make termtest`, `make eventtest`, `make powertest`.
+
+### Also done 2026-11-11 (outside the roadmap)
+- **Power off:** `poweroff` in both shells, `SYS_POWEROFF` (60) →
+  `kernel/arch/i386/power.c` (QEMU/Bochs/VirtualBox PM1a ports; real ACPI
+  table parsing is not done, so real hardware just halts with a message),
+  and a taskbar **Power** button (right end) that opens a confirm dialog
+  (`user/wm/power_app.c`).  `make powertest` checks both paths stop QEMU.
+- **`exit` closes its terminal window:** `wait_input()` now reports a pipe
+  at EOF as ready (poll()-style hang-up, `pipe_hung_up`/`vfs_hung_up`), and
+  gterm closes the window once `wait_nohang` reaps *its own* shell.  A nested
+  shell's `exit` doesn't own the pipe, so the window stays.  `make termtest`.
 
 ## Next milestone
 
@@ -51,8 +66,11 @@ keyboard (shift/ctrl/arrows/Ctrl-C + `SYS_KILL`) — **done**, see the 17.0.1
 "as built" note in ROADMAP3 and `make kbdtest` → §18 desktop polish (**18.1
 idle damage-driven WM loop — done**, see its "as built" note: `SYS_WAIT_INPUT`,
 `SYS_GFX_FLUSH_RECT`, damage rects, `waitq_sleep` halts; idle desktop 100% →
-~4% host CPU; next 18.2 richer events, then resize/min/max, taskbar window
-list, widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
+~4% host CPU; **18.2 richer events — done**: keycode/mods/raw-seq key events
+(`user/wm/wm_keys.h`), per-button press/release/drag with capture, latched
+kernel button edges, IntelliMouse wheel, Alt-Tab/Alt-F4; **next 18.3**
+resize/min/max/placement -- note new windows still need a click before they
+get focus -- then taskbar window list, widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
 newlib/PDCLib port) → 17.1–17.3. The 15.x and 16.x details below are
 kept as a record.
 

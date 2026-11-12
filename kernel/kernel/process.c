@@ -105,20 +105,21 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
          * Build the initial kernel stack frame for context_switch().
          *
          * context_switch(prev_esp_ptr, next_esp_val) pushes four callee-saved
-         * registers onto the stack, then saves the resulting ESP into
-         * *prev_esp_ptr.  When it restores, it loads next_esp_val into ESP
-         * and does: pop edi; pop esi; pop ebx; pop ebp; ret.
+         * registers and EFLAGS onto the stack, then saves the resulting ESP
+         * into *prev_esp_ptr.  When it restores, it loads next_esp_val into
+         * ESP and does: popf; pop edi; pop esi; pop ebx; pop ebp; ret.
          *
          * For a brand-new process, we pre-fill those five words at the top
          * of kernel_stack[] so that the ret lands in process_first_run.
          *
          * Layout (low address -> high address, stack grows downward):
          *
-         *   kernel_esp -> [edi=0][esi=0][ebx=0][ebp=0][ret=process_first_run]
-         *                  +0      +4     +8     +12    +16
+         *   kernel_esp -> [eflags][edi=0][esi=0][ebx=0][ebp=0][ret=process_first_run]
+         *                  +0      +4     +8     +12    +16    +20
          *
-         * After pop edi/esi/ebx/ebp, ret pops the return address and jumps
-         * to process_first_run, which calls process_launch().
+         * After popf + pop edi/esi/ebx/ebp, ret pops the return address and
+         * jumps to process_first_run, which calls process_launch().
+         * See ctx_frame_build() in process.h.
          */
         /* Guard + high-water pattern (REVIEW.md G): canary in the lowest
          * word, fill pattern everywhere else. */
@@ -126,16 +127,12 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
         uint32_t canary = KSTACK_CANARY;
         memcpy(p->kernel_stack, &canary, sizeof canary);
 
-        uint32_t *sp = (uint32_t *)(p->kernel_stack + sizeof(p->kernel_stack));
+        uint32_t *top = (uint32_t *)(p->kernel_stack + sizeof(p->kernel_stack));
 #ifdef __is_kernel
-        *(--sp) = (uint32_t)(uintptr_t)process_first_run;  /* ret address   */
+        uint32_t *sp = ctx_frame_build(top, (uint32_t)(uintptr_t)process_first_run);
 #else
-        *(--sp) = 0;   /* host build: trampoline not needed                  */
+        uint32_t *sp = ctx_frame_build(top, 0);  /* host: no trampoline */
 #endif
-        *(--sp) = 0;   /* saved ebp */
-        *(--sp) = 0;   /* saved ebx */
-        *(--sp) = 0;   /* saved esi */
-        *(--sp) = 0;   /* saved edi */
         p->kernel_esp = (uint32_t)(uintptr_t)sp;
 
         return p;
@@ -296,6 +293,22 @@ int process_console_interrupt(void)
 }
 #endif
 
+#ifdef __is_kernel
+static inline uint32_t exit_irq_off(void)
+{
+    uint32_t flags;
+    asm volatile("pushf\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
+    return flags;
+}
+static inline void exit_irq_restore(uint32_t flags)
+{
+    asm volatile("push %0\n\tpopf" :: "r"(flags) : "memory", "cc");
+}
+#else
+static inline uint32_t exit_irq_off(void) { return 0; }
+static inline void exit_irq_restore(uint32_t flags) { (void)flags; }
+#endif
+
 void process_mark_exited(process_t *p, int code)
 {
     if (!p) return;
@@ -324,6 +337,13 @@ void process_mark_exited(process_t *p, int code)
                (int)p->pid, (unsigned)used, (unsigned)PROCESS_KSTACK_SIZE);
 #endif
 
+    /* From here to the parent's wakeup must be atomic (REVIEW.md J).  Once
+     * we are a ZOMBIE the scheduler never runs us again, so a timer switch
+     * landing between "state = ZOMBIE" and "wake the parent" left the parent
+     * BLOCKED in wait() forever (and our live children un-orphaned).
+     * Syscalls run with IF=1 (int $0x80 is a trap gate), so mask IRQs. */
+    uint32_t irq = exit_irq_off();
+
     p->exit_code = code;
     p->state     = PROC_ZOMBIE;
 
@@ -342,6 +362,8 @@ void process_mark_exited(process_t *p, int code)
                                                   : NULL;
     if (parent && parent->state == PROC_BLOCKED)
         parent->state = PROC_READY;
+
+    exit_irq_restore(irq);
 }
 
 #ifdef __is_kernel
@@ -349,7 +371,11 @@ void process_exit(int code)
 {
     process_mark_exited(current_process, code);
     scheduler_yield();                  /* never resumes: we are a zombie */
-    for (;;) asm volatile("hlt");       /* nothing else runnable */
+    /* Nothing else runnable yet.  Idle with interrupts ON: we may have come
+     * here from IRQ context (a signal delivered at the timer, IF=0), and a
+     * bare hlt with IF=0 never wakes.  The next timer tick switches to
+     * whoever our exit (or anything else) made runnable. */
+    for (;;) asm volatile("sti; hlt" ::: "memory");
 }
 #else
 void process_exit(int code)

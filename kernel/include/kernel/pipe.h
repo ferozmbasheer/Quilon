@@ -75,6 +75,14 @@ int pipe_alloc(void);
 uint32_t pipe_bytes_available(int idx);
 
 /*
+ * pipe_hung_up -- 1 when every write end is closed and the buffer is empty,
+ * so a read returns EOF at once.  0 otherwise (or for a bad index).  Like
+ * POSIX poll()'s POLLHUP: lets a reader that sleeps in wait_input() notice
+ * that its writer has gone (a terminal's shell exiting).
+ */
+int pipe_hung_up(int idx);
+
+/*
  * pipe_space_available -- bytes that can still be written before the
  * buffer is full.
  *

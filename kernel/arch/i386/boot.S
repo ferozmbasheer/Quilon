@@ -304,8 +304,8 @@ exec_longjmp:
 /*
  * context_switch(prev_esp_ptr, next_esp_val)
  *
- * Saves callee-saved registers (edi, esi, ebx, ebp) plus the kernel stack
- * pointer into *prev_esp_ptr, then restores those registers from the frame
+ * Saves callee-saved registers (edi, esi, ebx, ebp) and EFLAGS, plus the
+ * kernel stack pointer into *prev_esp_ptr, then restores those registers from the frame
  * that starts at next_esp_val and returns into the new process's context.
  *
  * For an EXISTING process:  next_esp_val points to the frame saved the last
@@ -327,23 +327,32 @@ context_switch:
     push %ebx
     push %esi
     push %edi
+    pushf
     /*
-     * Stack layout after 4 pushes (offsets from current ESP):
-     *   + 0  edi
-     *   + 4  esi
-     *   + 8  ebx
-     *   +12  ebp
-     *   +16  return address (back into scheduler_tick / scheduler_yield)
-     *   +20  prev_esp_ptr
-     *   +24  next_esp_val
+     * EFLAGS is saved with the registers (REVIEW.md J): a process must resume
+     * with ITS interrupt flag, not the switcher's.  Without this, a process
+     * that yielded from a syscall (IF=1) and was resumed by the timer IRQ
+     * (IF=0) ran on with interrupts off -- and its next idle wait spun
+     * forever: the intermittent post-exit hang.
+     *
+     * Stack layout after the pushes (offsets from current ESP):
+     *   + 0  eflags
+     *   + 4  edi
+     *   + 8  esi
+     *   +12  ebx
+     *   +16  ebp
+     *   +20  return address (back into scheduler_tick / scheduler_yield)
+     *   +24  prev_esp_ptr
+     *   +28  next_esp_val
      */
-    mov  20(%esp), %eax          /* eax = prev_esp_ptr                   */
+    mov  24(%esp), %eax          /* eax = prev_esp_ptr                   */
     mov  %esp,    (%eax)         /* *prev_esp_ptr = current ESP (save)   */
-    mov  24(%esp), %esp          /* ESP = next_esp_val   (stack switch)  */
+    mov  28(%esp), %esp          /* ESP = next_esp_val   (stack switch)  */
     /*
      * We are now on the new process's kernel stack.
-     * Its layout must mirror what we just pushed above.
+     * Its layout must mirror what we just pushed above (ctx_frame_build).
      */
+    popf
     pop  %edi
     pop  %esi
     pop  %ebx

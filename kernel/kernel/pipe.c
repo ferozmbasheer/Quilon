@@ -64,6 +64,12 @@ uint32_t pipe_bytes_available(int idx)
     return (p->write_pos - p->read_pos + PIPE_BUF_SIZE) % PIPE_BUF_SIZE;
 }
 
+int pipe_hung_up(int idx)
+{
+    if (idx < 0 || idx >= PIPE_MAX || !pipe_pool[idx].in_use) return 0;
+    return pipe_pool[idx].writers <= 0 && pipe_bytes_available(idx) == 0;
+}
+
 uint32_t pipe_space_available(int idx)
 {
     /* Maximum usable capacity is PIPE_BUF_SIZE - 1 (full/empty distinction). */

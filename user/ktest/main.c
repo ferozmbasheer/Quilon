@@ -389,6 +389,47 @@ static void test_wait_survives_sibling_exit(void)
 }
 
 /*
+ * REVIEW.md J -- the intermittent hang right after a child exits.
+ *
+ * context_switch did not save EFLAGS, so a process resumed with whatever
+ * interrupt flag the switcher had.  A process dying in an exception or at
+ * the timer (IF=0) handed IF=0 to the parent it woke; the parent, asleep in
+ * wait() for a different child, then went round its wait loop with
+ * interrupts off -- and when nothing else was runnable it spun there
+ * forever, so the timer could never wake the child it was waiting for.
+ *
+ * Made deterministic: wait for a child that sleeps (in wait_input, so it is
+ * BLOCKED and needs the timer) while a sibling faults.  On the old kernel
+ * this hangs (no KTEST line -> the run fails).
+ */
+static int wait_code(int pid);
+
+static void test_wait_survives_sibling_fault(void)
+{
+    int sleeper = fork();
+    if (sleeper == 0) {
+        mouse_event_t me;
+        unsigned hz = gethz(), t0 = getticks();
+        while ((getticks() - t0) * 1000u / hz < 300) {
+            mouse_read(&me);            /* no stale mouse bit: really sleep */
+            wait_input(50, (const int *)0, 0);
+        }
+        exit(7);
+    }
+    int faulter = fork();
+    if (faulter == 0) {
+        sleep_ms(100);                  /* parent is blocked in wait() now */
+        *(volatile int *)0 = 1;         /* dies in the page-fault handler  */
+        exit(0);
+    }
+    int code = -1;
+    int r = (sleeper > 0) ? wait(sleeper, &code) : -1;
+    int fcode = wait_code(faulter);
+    report("wait() survives a sibling dying in an exception (J)",
+           r == 0 && code == 7 && fcode != 0 && fcode != 12345);
+}
+
+/*
  * ROADMAP3 17.0.1 -- signals reach a process wherever it is.
  *
  * Before: there was no kill() syscall, and signals were acted on only at
@@ -554,6 +595,7 @@ int main(void)
     test_kill_reaches_any_state();
     test_ctrl_c_foreground_job();
     test_wait_input();
+    test_wait_survives_sibling_fault();
 
     if (failures == 0) printf("KTEST: ALL PASS\r\n");
     else               printf("KTEST: %d FAILED\r\n", failures);

@@ -28,6 +28,12 @@
 #                   commands -- see tools/qemu_type.py.
 #   SMOKE_SENTINEL_COUNT  require the sentinel at least this many times
 #                   (default 1); `make wmtest` uses it to count shell exits.
+#   SMOKE_ALSO / SMOKE_ALSO_COUNT  a second string the log must contain at
+#                   least SMOKE_ALSO_COUNT (default 1) times, checked once the
+#                   sentinel has stopped the run -- `make termtest`.
+#   SMOKE_EXPECT_EXIT  1 = the VM must switch itself off (QEMU exits on its
+#                   own before the timeout) -- `make powertest`.  The sentinel
+#                   no longer stops the run early; it is still required.
 #
 # Example (strong check — the kernel prints these milestone banners on boot):
 #   SMOKE_SENTINEL='=== Section 7'         make smoke   # reached user space
@@ -44,6 +50,9 @@ SMOKE_SENTINEL="${SMOKE_SENTINEL-Type 'help' for a list of commands.}"
 SMOKE_DISK="${SMOKE_DISK:-disk.img}"
 SMOKE_KEYS="${SMOKE_KEYS:-}"
 SMOKE_SENTINEL_COUNT="${SMOKE_SENTINEL_COUNT:-1}"
+SMOKE_EXPECT_EXIT="${SMOKE_EXPECT_EXIT:-0}"
+SMOKE_ALSO="${SMOKE_ALSO:-}"
+SMOKE_ALSO_COUNT="${SMOKE_ALSO_COUNT:-1}"
 SMOKE_PROMPT="${SMOKE_PROMPT:-Type 'help' for a list of commands.}"
 FAIL_PATTERN="${FAIL_PATTERN:-PANIC|Kernel panic|Exception|Unhandled interrupt|Triple fault|General Protection}"
 
@@ -98,7 +107,7 @@ while kill -0 "$QEMU_PID" 2>/dev/null; do
     if grep -Eq "$FAIL_PATTERN" "$LOG" 2>/dev/null; then
         sleep 1; kill "$QEMU_PID" 2>/dev/null; break
     fi
-    if [ -n "$SMOKE_SENTINEL" ] &&
+    if [ "$SMOKE_EXPECT_EXIT" != 1 ] && [ -n "$SMOKE_SENTINEL" ] &&
        [ "$(grep -cF "$SMOKE_SENTINEL" "$LOG" 2>/dev/null || true)" -ge "$SMOKE_SENTINEL_COUNT" ]; then
         sleep 1; kill "$QEMU_PID" 2>/dev/null; break
     fi
@@ -114,6 +123,18 @@ echo "-----------------------------"
 
 if grep -Eq "$FAIL_PATTERN" "$LOG"; then
     fail "smoke: FAIL — crash marker found in serial log"
+fi
+
+# The VM had to power itself off: QEMU exits 0 on an ACPI shutdown, 124 if
+# `timeout` had to stop it.
+if [ "$SMOKE_EXPECT_EXIT" = 1 ] && [ "$qrc" != 0 ]; then
+    fail "smoke: FAIL — the VM did not power off (QEMU status $qrc)"
+fi
+
+if [ -n "$SMOKE_ALSO" ]; then
+    also=$(grep -cF "$SMOKE_ALSO" "$LOG" || true)
+    [ "$also" -ge "$SMOKE_ALSO_COUNT" ] ||
+        fail "smoke: FAIL — '$SMOKE_ALSO' found $also/$SMOKE_ALSO_COUNT times"
 fi
 
 if [ -n "$SMOKE_SENTINEL" ]; then

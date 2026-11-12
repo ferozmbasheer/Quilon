@@ -6,7 +6,7 @@
  * What is tested here (pure C, no x86 assembly):
  *   • process_init()       -- all slots become PROC_UNUSED, current_process = NULL
  *   • process_create()     -- allocates a slot, sets up PCB fields correctly
- *   • process_create()     -- builds the initial kernel_esp frame (5 words)
+ *   • process_create()     -- builds the initial kernel_esp frame (6 words)
  *   • process_create()     -- fills slots in order, returns NULL when full
  *   • process_find()       -- looks up by PID, handles out-of-range and UNUSED
  *   • process_pick_next()  -- round-robin PROC_READY selection
@@ -205,26 +205,45 @@ static void test_create_kernel_stack_frame_layout(void)
     ASSERT(p != NULL, "create: non-NULL");
 
     /*
-     * context_switch() pops: edi, esi, ebx, ebp, then ret.
+     * context_switch() pops: eflags, edi, esi, ebx, ebp, then ret.
      * process_create() pushes (from high address downward):
      *   [top - 4]   ret_addr (process_first_run, or 0 in host build)
      *   [top - 8]   ebp = 0
      *   [top - 12]  ebx = 0
      *   [top - 16]  esi = 0
-     *   [top - 20]  edi = 0  ← kernel_esp points here on 32-bit target
+     *   [top - 20]  edi = 0
+     *   [top - 24]  eflags = CTX_EFLAGS_INIT  <- kernel_esp (REVIEW.md J)
      *
      * We access via kernel_stack[] directly (avoids uint32_t truncation of
      * the 64-bit host pointer that would result from casting kernel_esp).
      */
-    uint32_t *sp = (uint32_t *)(p->kernel_stack + sizeof(p->kernel_stack)) - 5;
+    ASSERT_EQ(CTX_FRAME_WORDS, 6u, "context_switch frame is 6 words");
+    uint32_t *sp = (uint32_t *)(p->kernel_stack + sizeof(p->kernel_stack))
+                   - CTX_FRAME_WORDS;
 
-    ASSERT_EQ(sp[0], 0u, "initial edi = 0");
-    ASSERT_EQ(sp[1], 0u, "initial esi = 0");
-    ASSERT_EQ(sp[2], 0u, "initial ebx = 0");
-    ASSERT_EQ(sp[3], 0u, "initial ebp = 0");
-    /* sp[4] = ret address -- in host build it is 0; in kernel it is the
+    ASSERT_EQ(sp[0], CTX_EFLAGS_INIT, "initial eflags = reserved bit only");
+    ASSERT_EQ(sp[0] & 0x200u, 0u, "new context starts with IF=0");
+    ASSERT_EQ(sp[1], 0u, "initial edi = 0");
+    ASSERT_EQ(sp[2], 0u, "initial esi = 0");
+    ASSERT_EQ(sp[3], 0u, "initial ebx = 0");
+    ASSERT_EQ(sp[4], 0u, "initial ebp = 0");
+    /* sp[5] = ret address -- in host build it is 0; in kernel it is the
      * address of process_first_run.  We just verify access doesn't fault. */
-    (void)sp[4];
+    (void)sp[5];
+}
+
+/* ctx_frame_build is shared by process_create, SYS_FORK and SYS_CLONE. */
+static void test_ctx_frame_build(void)
+{
+    uint32_t stack[16];
+    for (int i = 0; i < 16; i++) stack[i] = 0xDEADBEEFu;
+    uint32_t *top = stack + 16;
+    uint32_t *sp  = ctx_frame_build(top, 0x1234u);
+    ASSERT(sp == top - CTX_FRAME_WORDS, "frame is CTX_FRAME_WORDS below top");
+    ASSERT_EQ(sp[0], CTX_EFLAGS_INIT, "eflags word at kernel_esp");
+    ASSERT_EQ(sp[5], 0x1234u, "return address at the top of the frame");
+    ASSERT_EQ(stack[16 - CTX_FRAME_WORDS - 1], 0xDEADBEEFu,
+              "nothing written below the frame");
 }
 
 /* ===========================================================================
@@ -604,9 +623,9 @@ static void test_stack_high_water(void)
 {
     process_init();
     process_t *p = process_create("a", 0, 0);
-    /* process_create pre-pushes a 5-word context_switch frame at the top
+    /* process_create pre-pushes a 6-word context_switch frame at the top
      * (all zeros on the host). */
-    ASSERT_EQ(process_stack_used(p), 5u * 4u,
+    ASSERT_EQ(process_stack_used(p), CTX_FRAME_WORDS * 4u,
               "only the initial context_switch frame is in use");
     /* Simulate a deep call chain touching byte 1000 from the top. */
     p->kernel_stack[PROCESS_KSTACK_SIZE - 1000] = 0x11;
@@ -625,7 +644,7 @@ static void test_stack_reset_on_reuse(void)
     process_t *q = process_create("b", 0, 0);
     ASSERT(q == p, "slot reused");
     ASSERT(process_stack_intact(q), "a reused slot gets a fresh canary");
-    ASSERT_EQ(process_stack_used(q), 5u * 4u, "and a fresh high-water mark");
+    ASSERT_EQ(process_stack_used(q), CTX_FRAME_WORDS * 4u, "and a fresh high-water mark");
 }
 
 /* ===========================================================================
@@ -684,6 +703,7 @@ int main(void)
 
     /* process_create -- kernel stack frame */
     RUN_SUITE(test_create_kernel_esp_within_stack);
+    RUN_SUITE(test_ctx_frame_build);
     RUN_SUITE(test_create_kernel_stack_frame_layout);
 
     /* process_find */

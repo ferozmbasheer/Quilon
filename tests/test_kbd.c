@@ -97,6 +97,29 @@ static void test_extended(void)
     ASSERT_STR_EQ(FEED(&st, 0xE0, 0x48, 0x1E), "\x1b[Aa", "prefix consumed");
 }
 
+/* ROADMAP3 18.2: modifiers on special keys use the xterm parameter forms. */
+static void test_modified_specials(void)
+{
+    kbd_state_t st; kbd_state_init(&st);
+    /* Shift (0x2A) + Up, release Shift. */
+    ASSERT_STR_EQ(FEED(&st, 0x2A, 0xE0, 0x48, 0xAA), "\x1b[1;2A", "Shift-Up");
+    /* Alt (0x38) + F4 (0x3E): the WM's close-window shortcut. */
+    ASSERT_STR_EQ(FEED(&st, 0x38, 0x3E, 0xB8), "\x1b[1;3S", "Alt-F4");
+    /* Ctrl (0x1D) + Delete. */
+    ASSERT_STR_EQ(FEED(&st, 0x1D, 0xE0, 0x53, 0x9D), "\x1b[3;5~", "Ctrl-Delete");
+    /* Ctrl + Alt + Shift + F12: the longest sequence. */
+    ASSERT_STR_EQ(FEED(&st, 0x1D, 0x38, 0x2A, 0x58, 0xAA, 0xB8, 0x9D),
+                  "\x1b[24;8~", "Ctrl-Alt-Shift-F12");
+    ASSERT((int)strlen("\x1b[24;8~") <= KBD_SEQ_MAX, "fits KBD_SEQ_MAX");
+    /* Right Ctrl (E0 1D) + Left. */
+    ASSERT_STR_EQ(FEED(&st, 0xE0, 0x1D, 0xE0, 0x4B, 0xE0, 0x9D), "\x1b[1;5D",
+                  "RCtrl-Left");
+    /* Released modifiers: back to the plain forms. */
+    ASSERT_STR_EQ(FEED(&st, 0xE0, 0x48, 0x3E), "\x1b[A\x1bOS", "plain again");
+    /* Alt-Tab is still ESC TAB (not a special key). */
+    ASSERT_STR_EQ(FEED(&st, 0x38, 0x0F, 0xB8), "\x1b\t", "Alt-Tab");
+}
+
 static void test_fake_shift_and_pause(void)
 {
     kbd_state_t st; kbd_state_init(&st);
@@ -116,6 +139,7 @@ int main(void)
     RUN_SUITE(test_ctrl);
     RUN_SUITE(test_alt);
     RUN_SUITE(test_extended);
+    RUN_SUITE(test_modified_specials);
     RUN_SUITE(test_fake_shift_and_pause);
     TEST_SUMMARY();
 }

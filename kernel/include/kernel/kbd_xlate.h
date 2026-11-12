@@ -12,6 +12,9 @@
  *       Up ESC[A  Down ESC[B  Right ESC[C  Left ESC[D  Home ESC[H  End ESC[F
  *       Insert ESC[2~  Delete ESC[3~  PgUp ESC[5~  PgDn ESC[6~
  *       F1-F4 ESC O P..S   F5-F12 ESC[15~ ESC[17~ .. ESC[24~
+ *     with Shift/Alt/Ctrl held, the xterm parameter forms (ROADMAP3 18.2):
+ *       ESC[1;<m>A .. ESC[1;<m>S, ESC[<n>;<m>~, m = 1 + Shift 1 + Alt 2 +
+ *       Ctrl 4 -- e.g. Shift-Up ESC[1;2A, Alt-F4 ESC[1;3S, Ctrl-Del ESC[3;5~
  *
  * Encoding special keys as escape sequences keeps the read()-a-byte-stream ABI
  * unchanged: terminals, the shells' line editors and a future vi all parse one

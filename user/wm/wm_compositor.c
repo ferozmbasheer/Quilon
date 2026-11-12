@@ -216,23 +216,28 @@ void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
     gfx_fill_rect(screen, (rect_t){0, ty,   sw, 1}, WM_FRAME_SHADOW);
     gfx_fill_rect(screen, (rect_t){0, ty+1, sw, 1}, WM_FRAME_HI);
 
-    /* Raised buttons. */
+    /* Raised app buttons (skipping any the Power button would cover). */
     for (i = 0; i < nlabels; i++) {
-        int bx = i * btn_w + 2;
-        int by = ty + 3;
-        int bw = btn_w - 4;
-        int bh = taskbar_h - 6;
-
-        /* Base fill. */
-        gfx_fill_rect(screen, (rect_t){bx, by, bw, bh}, WM_TASKBTN_COL);
-
-        /* 3D raised bevel on the button. */
-        raised_bevel(screen, bx, by, bw, bh);
-
-        /* Button label — centred vertically, 6px left padding. */
-        gfx_draw_text(screen,
-                      bx + 6,
-                      by + (bh - GFX_CHAR_H) / 2,
-                      labels[i], WM_TASKBTN_TEXT, WM_TASKBTN_COL);
+        if ((i + 1) * btn_w > sw - WM_POWER_BTN_W) break;
+        wm_draw_button(screen,
+                       (rect_t){ i * btn_w + 2, ty + 3, btn_w - 4, taskbar_h - 6 },
+                       labels[i]);
     }
+
+    /* Power button, right-aligned. */
+    wm_draw_button(screen, wm_taskbar_power_rect(sw, sh, taskbar_h),
+                   WM_POWER_LABEL);
+}
+
+void wm_draw_button(canvas_t *c, rect_t r, const char *label)
+{
+    gfx_fill_rect(c, r, WM_TASKBTN_COL);
+    raised_bevel(c, r.x, r.y, r.w, r.h);
+    /* Label: centred (at least 6 px from the left edge). */
+    int len = 0;
+    while (label[len]) len++;
+    int lx = r.x + (r.w - len * GFX_CHAR_W) / 2;
+    if (lx < r.x + 6) lx = r.x + 6;
+    gfx_draw_text(c, lx, r.y + (r.h - GFX_CHAR_H) / 2,
+                  label, WM_TASKBTN_TEXT, WM_TASKBTN_COL);
 }

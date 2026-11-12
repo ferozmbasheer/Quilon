@@ -169,9 +169,14 @@ typedef struct {
     int           x;        /* absolute cursor x in pixels */
     int           y;        /* absolute cursor y in pixels */
     unsigned char buttons;  /* bitmask: bit 0=left, bit 1=right, bit 2=middle */
-} mouse_event_t;
+    unsigned char pressed;  /* went down since the last mouse_read (18.2)    */
+    unsigned char released; /* went up since the last mouse_read   (18.2)    */
+    unsigned char _pad;
+    int           wheel;    /* wheel notches since the last read, + = down   */
+} mouse_event_t;           /* mirrors kernel/include/kernel/syscall.h       */
 
-/* Query the current mouse position and button state.
+/* Query the current mouse position and button state, plus the button edges
+ * and wheel motion since the previous call (which this call clears).
  * Returns 1 on success, -1 if out is NULL.               */
 int mouse_read(mouse_event_t *out);
 
@@ -179,8 +184,8 @@ int mouse_read(mouse_event_t *out);
 
 /* wait_input -- sleep until input is ready, the timeout passes, or a signal
  * arrives.  Sources: fd 0 (keyboard, or the stdin pipe), the mouse (a packet
- * since the last mouse_read), and fds[0..nfds-1] (bytes to read; EOF does not
- * count).  timeout_ms: 0 = poll, WAIT_INPUT_FOREVER = no limit.
+ * since the last mouse_read), and fds[0..nfds-1] (bytes to read, or a pipe
+ * at EOF -- all its writers closed -- as poll() reports POLLHUP).  timeout_ms: 0 = poll, WAIT_INPUT_FOREVER = no limit.
  * Returns a mask of WAIT_INPUT_* bits (0 = timeout/signal), -1 on bad args.
  * Mirrors kernel/include/kernel/syscall.h. */
 #define SYS_WAIT_INPUT      58
@@ -190,6 +195,10 @@ int mouse_read(mouse_event_t *out);
 #define WAIT_INPUT_MAX_FDS  16
 #define WAIT_INPUT_FOREVER  (-1)
 int wait_input(int timeout_ms, const int *fds, int nfds);
+
+/* poweroff -- switch the machine off.  Never returns.  SYS_POWEROFF (60). */
+#define SYS_POWEROFF        60
+void poweroff(void) __attribute__((noreturn));
 
 #define MOUSE_BTN_LEFT   0x01
 #define MOUSE_BTN_RIGHT  0x02

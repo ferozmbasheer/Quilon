@@ -57,6 +57,7 @@
 #include <kernel/vbe.h>
 #include <kernel/mouse.h>
 #include <kernel/waitq.h>
+#include <kernel/power.h>
 #include <string.h>
 #endif
 
@@ -627,7 +628,7 @@ void syscall_handler(syscall_regs_t *regs)
      *   3. Allocate child PCB via process_create().
      *   4. Copy parent's syscall iret frame into child's kernel stack.
      *   5. Patch child EAX = 0 (fork returns 0 in child).
-     *   6. Install 5-word context_switch frame pointing to fork_child_return.
+     *   6. Install the context_switch frame pointing to fork_child_return.
      *   7. Return child PID to parent (regs->eax set at end of handler).
      *
      * The child is placed in PROC_READY and will be scheduled by IRQ0.
@@ -698,18 +699,12 @@ void syscall_handler(syscall_regs_t *regs)
          *     edx,ecx = 8 × 4 = 32 bytes before eax).                      */
         *((uint32_t *)(child_ktop - 64 + 32)) = 0u;
 
-        /* 6. Build the 5-word context_switch frame just below the iret frame.
-         *
-         * context_switch pops edi, esi, ebx, ebp, then rets.
-         * We pre-push them (high->low): fork_child_return, ebp=0, ebx=0, esi=0, edi=0
-         */
+        /* 6. Build the context_switch frame just below the iret frame:
+         * context_switch pops eflags, edi, esi, ebx, ebp, then rets to
+         * fork_child_return (see ctx_frame_build in process.h). */
         extern void fork_child_return(void);
-        uint32_t *fork_sp = (uint32_t *)(child_ktop - 64);
-        *(--fork_sp) = (uint32_t)(uintptr_t)fork_child_return;
-        *(--fork_sp) = 0u;   /* ebp */
-        *(--fork_sp) = 0u;   /* ebx */
-        *(--fork_sp) = 0u;   /* esi */
-        *(--fork_sp) = 0u;   /* edi -- kernel_esp points here */
+        uint32_t *fork_sp = ctx_frame_build((uint32_t *)(child_ktop - 64),
+                                            (uint32_t)(uintptr_t)fork_child_return);
         fork_child->kernel_esp = (uint32_t)(uintptr_t)fork_sp;
         irq_restore(fork_irq);
 
@@ -1263,7 +1258,7 @@ void syscall_handler(syscall_regs_t *regs)
      *   3. Set thread_group to the process-group leader's PID.
      *   4. Build a 64-byte iret frame at the top of the thread's kernel stack
      *      with eip=fn, useresp=stack, cs/ss/eflags from the parent's saved regs.
-     *   5. Build a 5-word context_switch frame pointing to fork_child_return so
+     *   5. Build a context_switch frame pointing to fork_child_return so
      *      the scheduler can pick up this thread like any other process.
      *   6. Mark PROC_READY.
      *
@@ -1354,17 +1349,14 @@ void syscall_handler(syscall_regs_t *regs)
         frame[15] = regs->ds;                  /* ss = data segment */
 
         /*
-         * Build the 5-word context_switch frame just below the iret frame.
-         * Identical to SYS_FORK: context_switch pops edi/esi/ebx/ebp then rets
-         * to fork_child_return, which does popa + iret into ring 3 at clone_fn.
+         * Build the context_switch frame just below the iret frame.
+         * Identical to SYS_FORK: context_switch pops eflags/edi/esi/ebx/ebp
+         * then rets to fork_child_return, which does popa + iret into ring 3
+         * at clone_fn.
          */
         extern void fork_child_return(void);
-        uint32_t *cs_sp = frame;
-        *(--cs_sp) = (uint32_t)(uintptr_t)fork_child_return;
-        *(--cs_sp) = 0u;  /* ebp */
-        *(--cs_sp) = 0u;  /* ebx */
-        *(--cs_sp) = 0u;  /* esi */
-        *(--cs_sp) = 0u;  /* edi  ← kernel_esp points here */
+        uint32_t *cs_sp = ctx_frame_build(frame,
+                                          (uint32_t)(uintptr_t)fork_child_return);
         thread->kernel_esp = (uint32_t)(uintptr_t)cs_sp;
         irq_restore(clone_irq);
 
@@ -1381,6 +1373,11 @@ void syscall_handler(syscall_regs_t *regs)
      *
      *   EBX = pointer to mouse_event_t in user space
      *
+     * Besides the position and button state, reports the button presses /
+     * releases and wheel notches latched since the previous read, and clears
+     * them (ROADMAP3 18.2) -- so a click shorter than the reader's loop is
+     * not lost between two samples.
+     *
      * Returns 1 always (the current position is always available).
      * Returns -1 if the pointer is NULL.
      * ------------------------------------------------------------------------ */
@@ -1390,9 +1387,14 @@ void syscall_handler(syscall_regs_t *regs)
          * between leaves seq != seen, so SYS_WAIT_INPUT still reports it
          * (ROADMAP3 18.1).  The other order could lose that packet. */
         uint32_t seq = mouse_get_seq();
+        if (!uap_ok(regs->ebx, sizeof ev, 1)) { ret = (uint32_t)-1; break; }
         ev.x       = mouse_get_x();
         ev.y       = mouse_get_y();
         ev.buttons = mouse_get_buttons();
+        ev._pad    = 0;
+        /* Edges + wheel since the last read; taking them clears them, so
+         * validate the buffer first and never lose them to a bad pointer. */
+        mouse_take_events(&ev.pressed, &ev.released, &ev.wheel);
         if (copyout(regs->ebx, &ev, sizeof ev) != 0) { ret = (uint32_t)-1; break; }
         if (current_process) current_process->mouse_seq_seen = seq;
         ret = 1;
@@ -1872,8 +1874,9 @@ void syscall_handler(syscall_regs_t *regs)
      *
      * Sleeps until one of: fd 0 has input (raw keyboard, or the stdin pipe
      * when redirected), a mouse packet arrived since the caller's last
-     * SYS_MOUSE_READ, one of fds[] has bytes to read, the timeout passes, or
-     * a signal is pending.  Returns the WAIT_INPUT_* mask of ready sources
+     * SYS_MOUSE_READ, one of fds[] has bytes to read (or is a pipe at EOF --
+     * its writers all closed, as poll() reports POLLHUP), the timeout passes,
+     * or a signal is pending.  Returns the WAIT_INPUT_* mask of ready sources
      * (0 on timeout / signal), -1 on a bad argument.
      *
      * This is what lets the WM stop spinning: it used to poll the mouse and
@@ -1912,7 +1915,8 @@ void syscall_handler(syscall_regs_t *regs)
             }
             if (mouse_get_seq() != me->mouse_seq_seen) mask |= WAIT_INPUT_MOUSE;
             for (uint32_t i = 0; i < nfds; i++)
-                if (fds[i] >= 0 && vfs_readable(fds[i]) > 0)
+                if (fds[i] >= 0 &&
+                    (vfs_readable(fds[i]) > 0 || vfs_hung_up(fds[i])))
                     mask |= WAIT_INPUT_FD(i);
 
             if (mask || tmo == 0 || signal_pending(me)) { ret = mask; break; }
@@ -1961,6 +1965,21 @@ void syscall_handler(syscall_regs_t *regs)
 #endif
         break;
     }
+
+    /* ------------------------------------------------------------------------
+     * SYS_POWEROFF (60) -- poweroff()
+     *
+     * Switches the machine off (kernel/power.h).  Never returns.  Quilon has
+     * no users or privileges, so any process may call it -- the shell's
+     * `poweroff` command and the desktop's Power button do.
+     * ------------------------------------------------------------------------ */
+    case SYS_POWEROFF:
+#ifdef __is_kernel
+        power_off();
+#else
+        ret = (uint32_t)-1;
+        break;
+#endif
 
     /* ------------------------------------------------------------------------
      * Unknown syscall

@@ -154,7 +154,7 @@ child, and `scheduler_yield` turns a still-RUNNING caller into READY, so a
 voluntary yield can never strand a process. *Tests:* `ktest` "wait() for one
 child survives a sibling exiting first" — deterministic; hangs the old kernel.
 
-### J. Intermittent hang right after a child exits (fork/exec + wait) — *open*
+### J. Intermittent hang right after a child exits (fork/exec + wait) — *fixed*
 
 *(Found 2026-11 while doing ROADMAP3 18.1.)* About 1 `make ktest` run in 12
 on the FAT16 image hangs silently right after `[kernel] pid 2 exited (code 0)`
@@ -168,6 +168,34 @@ noted under Testing. Suspects: a remaining lost-wakeup between
 `SYS_WAIT` loop, or a lock taken in both thread and IRQ context on the
 exit/print path. Reproduce with a loop of `make ktest`; the kept
 `smoke-fail.log` shows where it stopped.
+
+**Cause (2026-11-11): `context_switch` did not save EFLAGS.** A process
+resumed with whatever interrupt flag the *switcher* had.  Syscalls run with
+IF=1 (int 0x80 is a trap gate), but the timer IRQ and exception handlers run
+with IF=0; a process that slept in `wait()` and was resumed from one of those
+went on with interrupts **off**.  Its next pass round the `SYS_WAIT` loop then
+found nothing else runnable, `scheduler_yield` returned at once, and it spun
+forever with IF=0 -- so the timer could never wake the child it was waiting
+for.  Silent, intermittent, right after an exit: exactly J.  It only needed a
+process to die (or wake its parent) from IRQ/exception context while another
+child was asleep, which the fork/exec/kill tests do constantly.
+
+A second, rarer hole on the same path: `process_mark_exited` ran with IRQs on
+between `state = ZOMBIE` and waking the parent; a timer switch in that window
+never returned to the zombie, so the parent stayed BLOCKED (and live
+children were never orphaned).
+
+**Fixed:** `context_switch` pushes/pops EFLAGS with the callee-saved
+registers (one shared `ctx_frame_build()` for process_create, fork and clone;
+new contexts start with IF=0 and their trampoline's iret loads the user's
+EFLAGS); the ZOMBIE→reap-children→wake-parent tail of `process_mark_exited`
+runs with IRQs masked; `process_exit`'s idle loop is `sti; hlt`, since it can
+be entered from IRQ context.  *Tests:* `ktest` "wait() survives a sibling
+dying in an exception (J)" -- the parent waits for a child asleep in
+`wait_input` while a sibling page-faults; **deterministic**: hangs every time
+with the EFLAGS save removed, passes with it; `test_process` frame layout +
+`ctx_frame_build`.  15 consecutive `make ktest` runs passed afterwards
+(previously ~1 in 12 hung).
 
 ### G. Kernel stack overflow went undetected — *fixed (guard); size kept*
 
@@ -241,14 +269,17 @@ are covered by new headless in-OS checks:
 - Of ~40 `ktest` runs after the fixes, one ext2 run failed early on without
   a kept log (before `smoke-fail.log` existed) and never reproduced in 13
   later runs; if it recurs, the kept log will say why. **It recurred** (on
-  FAT16, ~1 in 12) — see J.
+  FAT16, ~1 in 12) — see J, now fixed.
+- Desktop/power checks added since: `make termtest` (`exit` closes a terminal
+  window), `make powertest` (shell `poweroff` + the desktop Power button must
+  switch QEMU off), `make eventtest` (ROADMAP3 18.2: fast click, Alt-Tab,
+  Alt-F4, wheel negotiated).
 
 ## Order of work
 
 A + B first (Section 17 ports will hit them immediately), then C + D as one
 `process_exit` change, then F, then E, then G and polish.
 
-Done: A, B, C, D, F, G (guard), H, I, the process half of E, and three of
-the polish items. Still open: J (intermittent post-exit hang), the fd half
-of E (per-process fd ownership),
+Done: A, B, C, D, F, G (guard), H, I, J, the process half of E, and three
+of the polish items. Still open: the fd half of E (per-process fd ownership),
 the Architecture items, boot-demo gating, and the network-stack note.

@@ -80,6 +80,29 @@ static inline int mouse_clamp(int v, int lo, int hi)
 
 /* -- Kernel-only API ------------------------------------------------------ */
 
+/*
+ * IntelliMouse wheel (ROADMAP3 18.2).  Setting the sample rate to 200, 100,
+ * 80 in a row is the "knock" that switches a wheel mouse to device ID 3,
+ * whose packets are 4 bytes; byte 3 holds the wheel movement Z (we use its
+ * low 4 bits, two's complement -- correct for ID 3 and ID 4 mice alike).
+ * Positive Z = wheel turned towards the user (scroll down).
+ */
+#define MOUSE_ID_WHEEL 3u
+
+static inline int mouse_packet_dz(uint8_t b)
+{
+    int z = b & 0x0F;
+    return (z & 0x08) ? z - 16 : z;
+}
+
+/* Button edges between two packets' button states (pure, host-tested). */
+static inline void mouse_button_edges(uint8_t before, uint8_t after,
+                                      uint8_t *pressed, uint8_t *released)
+{
+    *pressed  |= (uint8_t)(after & ~before);
+    *released |= (uint8_t)(before & ~after);
+}
+
 #ifdef __is_kernel
 
 /*
@@ -111,6 +134,11 @@ uint8_t mouse_get_buttons(void);
 /* Number of complete packets received so far (wraps).  SYS_WAIT_INPUT
  * compares it with the PCB's mouse_seq_seen.  ROADMAP3 18.1. */
 uint32_t mouse_get_seq(void);
+/* Take (and clear) the button edges and wheel notches latched since the last
+ * call -- SYS_MOUSE_READ.  IRQ-safe. */
+void mouse_take_events(uint8_t *pressed, uint8_t *released, int *wheel);
+/* 1 if a wheel (IntelliMouse) protocol was negotiated at init. */
+int  mouse_has_wheel(void);
 
 /*
  * mouse_cursor_invalidate -- erase the on-screen cursor from the shadow buffer.
