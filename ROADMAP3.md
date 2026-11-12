@@ -66,7 +66,7 @@ build) real programs inside Quilon.
 
 **Order of work (2026-11):** 17.0.1 (keyboard, ✓ done) first — it unblocks typing
 code, Ctrl-C, and arrow keys for both the ports and the desktop. Then
-Section 18 (desktop polish), then the rest of 17.0, then 17.1 → 17.3.
+Section 18 (desktop polish; 18.1 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
 
 ---
 
@@ -112,7 +112,8 @@ the new 17.0 prerequisites — interleaved with Section 18, desktop polish.)*
 | ATA Bus Master DMA (16.1) | `ata_dma.c`, `ata.c` | ✓ Complete |
 | ext2 filesystem (16.2) | `ext2.c` | ✓ Complete — **read-only**; probed before FAT16; `fs` command + `SYS_FSINFO` |
 | Keyboard + Ctrl-C (17.0.1) | `kbd_xlate.c`, `keyboard.c`, `signal.c`, `process.c` | ✓ Complete — shift/caps/ctrl/alt, arrows as VT100 escapes, Ctrl-C → SIGINT to the foreground job; `kill`/`signal`/`setfg`/`intr` |
-| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (21 checks) + `make wmtest` (desktop) + `make kbdtest` (keyboard) |
+| Idle desktop (18.1) | `syscall.c` (`SYS_WAIT_INPUT`, `SYS_GFX_FLUSH_RECT`), `waitq.c`, `user/wm/` | ✓ Complete — WM sleeps until input/ticks, repaints + flushes only damage rects; idle desktop 100% → ~4% host CPU |
+| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (26 checks) + `make wmtest` (desktop) + `make kbdtest` (keyboard) |
 
 ---
 
@@ -1705,6 +1706,50 @@ maximized, or minimized. This section keeps the single-threaded model — **do
 not reintroduce app threads** — and makes the desktop efficient and pleasant.
 
 ### 18.1 An Idle, Damage-Driven Event Loop
+
+> **✓ Done (2026-11).** As built:
+> - **`SYS_WAIT_INPUT` (58)** `wait_input(timeout_ms, fds, nfds)` sleeps until
+>   fd 0 has input (raw keyboard or the stdin pipe), a mouse packet arrived
+>   since the caller's last `mouse_read` (kernel `mouse_seq` vs PCB
+>   `mouse_seq_seen`), one of up to 16 fds has bytes, the timeout passes, or a
+>   signal is pending; returns a `WAIT_INPUT_*` mask. All sources wake one
+>   shared **`input_wq`** (`input_notify()` from the keyboard and mouse IRQs,
+>   `pipe_write`, `pipe_close_write`); sleepers re-check their own predicate.
+>   Timeouts: PCB `wake_tick`, expired by `process_wake_timeouts()` from
+>   `pit_tick`.
+> - **`waitq_sleep` now halts** (`cli`; re-check still BLOCKED; `sti; hlt`)
+>   when `scheduler_yield` finds nothing else to run. Before, a blocked
+>   process with nothing else runnable spun in ring 0 — so 12.2's "CPU idles"
+>   was only true when another process was runnable. Benefits every sleeper
+>   (keyboard, pipes), not just the WM. `waitq_wake_all` now walks the list
+>   with IRQs off (timeouts made it possible for a woken sleeper to return
+>   and drop its stack entry mid-walk).
+> - **`SYS_GFX_FLUSH_RECT` (59)** marks only the rect's rows dirty (kernel
+>   tracking is per row) and flushes; `gfx_flush_rect()` in libgfx.
+>   `vbe_dirty_rows` is now IRQ-safe.
+> - **WM** (`user/wm/main.c`): windows declare `tick_ms` (clock: 250) and/or
+>   `wait_fd` (gterm: its shell-output pipe) instead of being ticked every
+>   iteration; the loop sleeps in `wait_input` for the earliest due tick
+>   (100 ms while a closed terminal's shell is unreaped). A **damage list**
+>   (`wm_damage_t` in `wm.h`, ≤16 non-overlapping rects, collapsing to a
+>   bounding rect on overflow) collects old+new cursor rects, old+new bounds
+>   of a dragged window, focus changes, closed windows and dirty windows;
+>   `wm_composite_rect()` repaints each clipped, then each is flushed.
+> - **Cursor without recomposite (item 4) not done as save-under:** with
+>   damage rects, cursor motion already recomposites just two ~12×18 rects
+>   (a fill + clipped blits), which is as cheap as save/restore and has no
+>   stale-background hazard. `gfx_blit` now clips the span once instead of
+>   testing every pixel.
+> - **Measured:** QEMU host CPU with the desktop idle (Terminal + Clock open):
+>   **100% before, ~4% after.**
+> - *Tests:* `test_wm` (rect algebra, damage merge/clip/overflow, randomized
+>   cover + disjointness invariants, clipped composite == full composite inside
+>   the clip and untouched outside, tick scheduling incl. wrap), `test_process`
+>   (`process_wake_timeouts`), `test_syscall` (`wait_input_ticks`); `ktest`
+>   wait_input checks (times out, bad args, poll, woken early by another
+>   process's pipe write, killable); `make wmtest`/`kbdtest` pass.
+>   `tools/qemu_type.py` gained `{down}`, `{up}`, `{dump:FILE}` (screendump)
+>   for drag + visual checks.
 
 **Today:** `user/wm/main.c` spins on `mouse_read()` + `read_nonblock()` with no
 blocking call, so the WM consumes a full CPU even when nothing happens. Any

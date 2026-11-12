@@ -55,6 +55,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
     /* Wake one process blocked in keyboard_getchar. */
     waitq_wake_one(&kb_wq);
+    input_notify();   /* and a SYS_WAIT_INPUT sleeper (ROADMAP3 18.1) */
 }
 
 int keyboard_available(void) {

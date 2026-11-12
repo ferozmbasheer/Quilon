@@ -71,6 +71,28 @@
 #define SYS_SIGNAL     55 /* signal(sig, SIG_DFL|SIG_IGN) -> old (0/1) or -1           */
 #define SYS_SETFG      56 /* setfg(pid) -> 0 or -1; pid<0 clears (caller's fg job)      */
 #define SYS_INTR       57 /* intr(shell_pid) -> 1 SIGINT sent, 0 no fg job, -1 err      */
+/* Idle, damage-driven desktop (ROADMAP3 18.1) */
+#define SYS_WAIT_INPUT 58 /* wait_input(timeout_ms, const int *fds, nfds) -> ready mask */
+#define SYS_GFX_FLUSH_RECT 59 /* gfx_flush_rect(x, y, w, h) -> 0; flush only that band */
+
+/* SYS_WAIT_INPUT result bits (0 = timed out or interrupted by a signal).
+ * Keep in sync with user/libc/include/unistd.h. */
+#define WAIT_INPUT_KBD      0x001u          /* fd 0 has input (kbd or pipe) */
+#define WAIT_INPUT_MOUSE    0x002u          /* a mouse packet since the last
+                                             * SYS_MOUSE_READ                */
+#define WAIT_INPUT_FD(i)    (0x100u << (i)) /* fds[i] has bytes to read     */
+#define WAIT_INPUT_MAX_FDS  16
+#define WAIT_INPUT_FOREVER  (-1)            /* timeout_ms: no timeout       */
+
+/* Timer ticks for a timeout of `ms` at `hz`, rounded UP so a short timeout
+ * never becomes "no wait at all".  0 ms -> 0 ticks (poll). */
+static inline uint32_t wait_input_ticks(uint32_t ms, uint32_t hz)
+{
+    if (ms == 0 || hz == 0) return 0;
+    uint64_t t = ((uint64_t)ms * hz + 999u) / 1000u;
+    if (t > 0x7FFFFFFFu) t = 0x7FFFFFFFu;   /* stay inside tick_reached's range */
+    return (uint32_t)t;
+}
 
 /* mouse_event_t -- filled by SYS_MOUSE_READ; matches user/libc/include/mouse.h */
 typedef struct {

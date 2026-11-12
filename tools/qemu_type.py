@@ -10,6 +10,8 @@ then plays <script>.  Plain characters are typed with HMP `sendkey`; a literal
     {mouse:DX,DY}    relative mouse move (a big negative move pins the cursor
                      to the top-left corner, since the kernel clamps it)
     {click}          left button press + release
+    {down} / {up}    left button press / release alone (drag = down, mouse, up)
+    {dump:FILE}      QEMU screendump of the display to FILE (PPM)
     {wait:SECONDS}   sleep
     {until:TEXT}     wait (up to 60 s) until TEXT appears in the serial log
     {key:NAME}       one raw HMP sendkey, e.g. {key:ctrl-c}, {key:left},
@@ -89,6 +91,12 @@ def main():
             elif name == 'click':
                 hmp('mouse_button 1', 0.2)
                 hmp('mouse_button 0', 0.2)
+            elif name == 'down':
+                hmp('mouse_button 1', 0.2)
+            elif name == 'up':
+                hmp('mouse_button 0', 0.2)
+            elif name == 'dump':
+                hmp('screendump %s' % arg, 0.5)
             elif name == 'wait':
                 time.sleep(float(arg))
             elif name == 'key':

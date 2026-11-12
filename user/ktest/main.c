@@ -491,6 +491,54 @@ static void test_ctrl_c_foreground_job(void)
            signal(SIGKILL, SIG_IGN) == SIG_ERR);
 }
 
+/*
+ * ROADMAP3 18.1 -- wait_input(), the sleep the desktop's event loop is built
+ * on.  It must time out (not return at once, not hang), wake early when a
+ * watched pipe gets data -- from another process, which can only run because
+ * we are asleep rather than spinning -- and be killable.
+ */
+static void test_wait_input(void)
+{
+    mouse_event_t me;
+    mouse_read(&me);                    /* sync "mouse seen": no stale bit */
+    unsigned hz = gethz();
+
+    unsigned t0 = getticks();
+    int r = wait_input(100, (const int *)0, 0);
+    unsigned ms = (getticks() - t0) * 1000u / hz;
+    report("wait_input() times out after ~100 ms with nothing ready",
+           r == 0 && ms >= 90 && ms < 1000);
+
+    report("wait_input() rejects bad arguments",
+           wait_input(10, (const int *)0, WAIT_INPUT_MAX_FDS + 1) == -1 &&
+           wait_input(-5, (const int *)0, 0) == -1);
+
+    int p[2];
+    if (pipe(p) != 0) { report("wait_input() pipe checks (pipe)", 0); return; }
+    report("wait_input(0) polls an empty pipe without sleeping",
+           wait_input(0, &p[0], 1) == 0);
+
+    int w = fork();
+    if (w == 0) { sleep_ms(100); write(p[1], "x", 1); exit(0); }
+    t0 = getticks();
+    r = wait_input(3000, &p[0], 1);
+    ms = (getticks() - t0) * 1000u / hz;
+    char c;
+    read(p[0], &c, 1);
+    wait_code(w);
+    report("wait_input() wakes early when a watched pipe gets data",
+           (r & (int)WAIT_INPUT_FD(0)) && ms < 1500);
+    close(p[0]);
+    close(p[1]);
+
+    int sl = fork();
+    if (sl == 0) { wait_input(WAIT_INPUT_FOREVER, (const int *)0, 0); exit(0); }
+    sleep_ms(50);
+    int k = kill(sl, SIGTERM);
+    report("kill() wakes a child asleep in wait_input() (-15)",
+           k == 0 && wait_code(sl) == -SIGTERM);
+}
+
 int main(void)
 {
     printf("ktest: kernel regression tests\r\n");
@@ -505,6 +553,7 @@ int main(void)
     test_concurrent_reads();
     test_kill_reaches_any_state();
     test_ctrl_c_foreground_job();
+    test_wait_input();
 
     if (failures == 0) printf("KTEST: ALL PASS\r\n");
     else               printf("KTEST: %d FAILED\r\n", failures);

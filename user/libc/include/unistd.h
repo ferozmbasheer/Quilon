@@ -175,6 +175,22 @@ typedef struct {
  * Returns 1 on success, -1 if out is NULL.               */
 int mouse_read(mouse_event_t *out);
 
+/* -- Waiting for input (ROADMAP3 18.1) --------------------------------------- */
+
+/* wait_input -- sleep until input is ready, the timeout passes, or a signal
+ * arrives.  Sources: fd 0 (keyboard, or the stdin pipe), the mouse (a packet
+ * since the last mouse_read), and fds[0..nfds-1] (bytes to read; EOF does not
+ * count).  timeout_ms: 0 = poll, WAIT_INPUT_FOREVER = no limit.
+ * Returns a mask of WAIT_INPUT_* bits (0 = timeout/signal), -1 on bad args.
+ * Mirrors kernel/include/kernel/syscall.h. */
+#define SYS_WAIT_INPUT      58
+#define WAIT_INPUT_KBD      0x001u
+#define WAIT_INPUT_MOUSE    0x002u
+#define WAIT_INPUT_FD(i)    (0x100u << (i))
+#define WAIT_INPUT_MAX_FDS  16
+#define WAIT_INPUT_FOREVER  (-1)
+int wait_input(int timeout_ms, const int *fds, int nfds);
+
 #define MOUSE_BTN_LEFT   0x01
 #define MOUSE_BTN_RIGHT  0x02
 #define MOUSE_BTN_MIDDLE 0x04

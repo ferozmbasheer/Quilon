@@ -152,6 +152,17 @@ typedef struct process {
      */
     int          fg_child;
 
+    /*
+     * Timed sleep (ROADMAP3 18.1, SYS_WAIT_INPUT).  While a process is
+     * PROC_BLOCKED with wake_tick != 0, the timer interrupt makes it
+     * PROC_READY once pit ticks reach wake_tick (process_wake_timeouts).
+     * 0 = no timeout.  mouse_seq_seen is the mouse packet counter value the
+     * process last read with SYS_MOUSE_READ, so SYS_WAIT_INPUT can tell
+     * whether the mouse has moved since.
+     */
+    uint32_t     wake_tick;
+    uint32_t     mouse_seq_seen;
+
     char         name[PROCESS_NAME_LEN];
 
     /*
@@ -239,6 +250,20 @@ process_t *process_group_leader(process_t *p);
  * the host.
  */
 process_t *process_pick_next(void);
+
+/*
+ * process_wake_timeouts -- make every PROC_BLOCKED process whose wake_tick
+ * has been reached (now >= wake_tick, wrap-safe) PROC_READY and clear its
+ * wake_tick.  Called from the timer interrupt (pit_tick).  ROADMAP3 18.1.
+ * Returns the number of processes woken (for tests).
+ */
+int process_wake_timeouts(uint32_t now);
+
+/* Wrap-safe "has tick counter `now` reached `deadline`?" */
+static inline int tick_reached(uint32_t now, uint32_t deadline)
+{
+    return (int32_t)(now - deadline) >= 0;
+}
 
 /*
  * process_launch -- enter user mode for the current process.

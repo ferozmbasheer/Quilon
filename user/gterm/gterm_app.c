@@ -5,7 +5,8 @@
  * callbacks on the WM loop thread -- there are NO gterm threads.
  *
  *   gterm_open    -- create two pipes, exec /shell.elf, init emulator state.
- *   on_tick       -- non-blocking drain of the shell's stdout pipe; on new
+ *   on_tick       -- (when the pipe is readable -- win->wait_fd) non-blocking
+ *                    drain of the shell's stdout pipe; on new
  *                    bytes, feed the ANSI emulator and re-render.
  *   on_event      -- key  -> write byte to the shell's stdin pipe.
  *                    close -> request destroy.
@@ -61,24 +62,30 @@ static void gterm_render(gterm_t *t, canvas_t *c, int cur_visible)
 
 /* ── Callbacks ───────────────────────────────────────────────────────────── */
 
-/* Non-blocking drain of the shell's output pipe; re-render on new data. */
+/* Non-blocking drain of the shell's output pipe; re-render on new data.
+ * Called when the WM's wait_input() reports the pipe readable (wait_fd). */
+#define GTERM_DRAIN_MAX  16     /* chunks per tick: bounded, never starves */
 static void gterm_tick(window_t *win)
 {
     gterm_state_t *st = (gterm_state_t *)win->app_state;
     if (st->exited) return;
 
+    /* Drain what is there (up to a bound) and render once, rather than
+     * re-rendering every 256 bytes.  Anything left keeps the pipe readable,
+     * so the WM ticks us again straight away.  read_nonblock reports 0 both
+     * for "empty" and for EOF; wait_input only wakes for real bytes, so a
+     * dead shell just leaves the terminal idle. */
     char ibuf[256];
-    int n = read_nonblock(st->from_shell[0], ibuf, sizeof(ibuf));
-    if (n > 0) {
+    int got = 0;
+    for (int i = 0; i < GTERM_DRAIN_MAX; i++) {
+        int n = read_nonblock(st->from_shell[0], ibuf, sizeof(ibuf));
+        if (n <= 0) break;
         gterm_write(&st->term, ibuf, n);
+        got = 1;
+    }
+    if (got) {
         gterm_render(&st->term, win->backbuf, 1);
         win->dirty = 1;
-    } else if (n == 0) {
-        /* No data ready -- but distinguish "empty" from "writer closed" (EOF).
-         * vfs reports 0 for both via read_nonblock; we detect a dead shell by
-         * a blocking read returning 0 only when there are no writers.  Keep it
-         * simple: rely on read_nonblock and treat persistent 0 as idle.  A
-         * proper EOF notice would need a readable()-returns-EOF signal. */
     }
 }
 
@@ -133,6 +140,8 @@ static void reap_queue_add(int pid)
     if (reap_count < REAP_MAX) reap_pids[reap_count++] = pid;
 }
 
+int gterm_reap_pending(void) { return reap_count > 0; }
+
 void gterm_reap_shells(void)
 {
     for (int i = 0; i < reap_count; ) {
@@ -175,6 +184,7 @@ void gterm_open(window_t *win)
 
     win->app_state  = st;
     win->on_tick    = gterm_tick;
+    win->wait_fd    = st->from_shell[0];   /* tick when the shell writes */
     win->on_event   = gterm_event;
     win->on_destroy = gterm_destroy;
 

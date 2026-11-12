@@ -104,6 +104,7 @@ int pipe_write(int idx, const uint8_t *buf, uint32_t len)
 
 #ifdef __is_kernel
         waitq_wake_all(&p->wq);   /* wake any reader waiting for data */
+        input_notify();           /* and SYS_WAIT_INPUT pollers (18.1) */
 #endif
     }
 
@@ -160,6 +161,7 @@ void pipe_close_write(int idx)
     pipe_pool[idx].writers--;
 #ifdef __is_kernel
     waitq_wake_all(&pipe_pool[idx].wq);   /* let blocked readers detect EOF */
+    input_notify();
 #endif
     if (pipe_pool[idx].readers <= 0 && pipe_pool[idx].writers <= 0)
         pipe_pool[idx].in_use = 0;

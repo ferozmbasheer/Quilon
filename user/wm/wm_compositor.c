@@ -112,19 +112,31 @@ static void sunken_bevel(canvas_t *c, int x, int y, int w, int h)
 
 /* ── Compositor (painter's algorithm) ─────────────────────────────────────── */
 
-void wm_composite(wm_state_t *s, canvas_t *screen)
+/*
+ * wm_composite_rect -- repaint the desktop and every window, back to front,
+ * restricted to `clip` (ROADMAP3 18.1).  Every primitive used here honours
+ * the canvas clip rect, so the work is proportional to the damaged area --
+ * except that each window's chrome is still visited, which is cheap.
+ * Windows that don't touch `clip` are skipped outright.
+ */
+void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip)
 {
     int i;
 
+    gfx_set_clip(screen, clip);
+    if (!screen->has_clip) { gfx_clear_clip(screen); return; }   /* empty */
+
     /* 1. Desktop background. */
-    gfx_fill(screen, WM_DESKTOP_COL);
+    gfx_fill_rect(screen, clip, WM_DESKTOP_COL);
 
     /* 2. Back-to-front via z_order (z_order[0]=back, z_order[num_windows-1]=front). */
     for (i = 0; i < s->num_windows; i++) {
         window_t *w = &s->windows[s->z_order[i]];
 
-        rect_t tb    = wm_titlebar_rect(w);
         rect_t full  = wm_full_rect(w);
+        if (!wm_rect_intersects(full, clip)) continue;
+
+        rect_t tb    = wm_titlebar_rect(w);
         rect_t close = wm_close_btn_rect(w);
         color_t tbar_col = w->focused ? WM_TBAR_FOCUSED : WM_TBAR_UNFOCUSED;
 
@@ -155,11 +167,13 @@ void wm_composite(wm_state_t *s, canvas_t *screen)
 
         /* ── App canvas ────────────────────────────────────────────────── */
         if (w->backbuf) {
-            gfx_set_clip(screen, w->bounds);
-            gfx_blit(screen, w->bounds.x, w->bounds.y,
-                     w->backbuf,
-                     (rect_t){0, 0, w->backbuf->w, w->backbuf->h});
-            gfx_clear_clip(screen);
+            /* gfx_blit clips to the screen clip (= the damage rect); limit
+             * the source to the content area so an oversized canvas can't
+             * spill over the chrome. */
+            rect_t src = { 0, 0,
+                           w->backbuf->w < w->bounds.w ? w->backbuf->w : w->bounds.w,
+                           w->backbuf->h < w->bounds.h ? w->backbuf->h : w->bounds.h };
+            gfx_blit(screen, w->bounds.x, w->bounds.y, w->backbuf, src);
         } else {
             gfx_fill_rect(screen, w->bounds, GFX_RGB(20, 20, 20));
         }
@@ -171,12 +185,20 @@ void wm_composite(wm_state_t *s, canvas_t *screen)
 
         /* ── 3D raised frame (outermost layer, drawn last) ─────────────── */
         raised_bevel(screen, fx, fy, fw, fh);
-
-        w->dirty = 0;
     }
 
+    gfx_clear_clip(screen);
     /* The cursor is drawn by the caller AFTER the taskbar, so it stays on top
      * of everything (including the taskbar). */
+}
+
+/* Full-screen composite (initial frame, tests).  Clears every dirty flag. */
+void wm_composite(wm_state_t *s, canvas_t *screen)
+{
+    rect_t all = { 0, 0, screen->w, screen->h };
+    wm_composite_rect(s, screen, all);
+    for (int i = 0; i < s->num_windows; i++)
+        s->windows[s->z_order[i]].dirty = 0;
 }
 
 /* ── Taskbar ─────────────────────────────────────────────────────────────── */

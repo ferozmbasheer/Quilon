@@ -90,6 +90,12 @@ canvas_t *gfx_screen_init(gfx_info_t *info);
  */
 void gfx_flush(void);
 
+/*
+ * gfx_flush_rect -- like gfx_flush, but copies only the screen rows the rect
+ * covers (SYS_GFX_FLUSH_RECT).  Empty rects are ignored.  ROADMAP3 18.1.
+ */
+void gfx_flush_rect(rect_t r);
+
 /* -- Clip rectangle ------------------------------------------------------ */
 
 /* Restrict drawing to the intersection of rect and the canvas bounds.

@@ -56,6 +56,7 @@
 #include <kernel/net.h>
 #include <kernel/vbe.h>
 #include <kernel/mouse.h>
+#include <kernel/waitq.h>
 #include <string.h>
 #endif
 
@@ -1385,10 +1386,15 @@ void syscall_handler(syscall_regs_t *regs)
      * ------------------------------------------------------------------------ */
     case SYS_MOUSE_READ: {
         mouse_event_t ev;
+        /* Sample the packet sequence BEFORE the state: a packet landing in
+         * between leaves seq != seen, so SYS_WAIT_INPUT still reports it
+         * (ROADMAP3 18.1).  The other order could lose that packet. */
+        uint32_t seq = mouse_get_seq();
         ev.x       = mouse_get_x();
         ev.y       = mouse_get_y();
         ev.buttons = mouse_get_buttons();
         if (copyout(regs->ebx, &ev, sizeof ev) != 0) { ret = (uint32_t)-1; break; }
+        if (current_process) current_process->mouse_seq_seen = seq;
         ret = 1;
         break;
     }
@@ -1851,6 +1857,105 @@ void syscall_handler(syscall_regs_t *regs)
         process_t *t = process_intr_target(root);
         if (t) signal_send(t, SIGINT);
         ret = t ? 1 : 0;
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_WAIT_INPUT (58) -- wait_input(timeout_ms, fds, nfds)   (ROADMAP3 18.1)
+     *
+     *   EBX = timeout in ms; 0 = just poll, WAIT_INPUT_FOREVER (-1) = no limit
+     *   ECX = const int fds[nfds] (user space; may be NULL when nfds == 0)
+     *   EDX = nfds (0..WAIT_INPUT_MAX_FDS)
+     *
+     * Sleeps until one of: fd 0 has input (raw keyboard, or the stdin pipe
+     * when redirected), a mouse packet arrived since the caller's last
+     * SYS_MOUSE_READ, one of fds[] has bytes to read, the timeout passes, or
+     * a signal is pending.  Returns the WAIT_INPUT_* mask of ready sources
+     * (0 on timeout / signal), -1 on a bad argument.
+     *
+     * This is what lets the WM stop spinning: it used to poll the mouse and
+     * keyboard in a tight loop.  All sources wake the single input_wq, and
+     * the timer wakes a sleeper whose wake_tick has passed.
+     * ------------------------------------------------------------------------ */
+    case SYS_WAIT_INPUT: {
+#ifdef __is_kernel
+        int32_t  tmo  = (int32_t)regs->ebx;
+        uint32_t nfds = regs->edx;
+        int      fds[WAIT_INPUT_MAX_FDS];
+        if (!current_process || nfds > WAIT_INPUT_MAX_FDS ||
+            (tmo < 0 && tmo != WAIT_INPUT_FOREVER)) {
+            ret = (uint32_t)-1; break;
+        }
+        if (nfds) {
+            if (!uap_ok(regs->ecx, nfds * sizeof(int), 0)) {
+                ret = (uint32_t)-1; break;
+            }
+            memcpy(fds, (const void *)(uintptr_t)regs->ecx, nfds * sizeof(int));
+        }
+
+        uint32_t deadline = 0;
+        if (tmo > 0) {
+            deadline = pit_get_ticks() + wait_input_ticks((uint32_t)tmo, pit_get_hz());
+            if (deadline == 0) deadline = 1;      /* 0 means "no timeout" */
+        }
+
+        process_t *me = current_process;
+        for (;;) {
+            uint32_t mask = 0;
+            if (me->stdin_fd >= 0) {
+                if (vfs_readable(me->stdin_fd) > 0) mask |= WAIT_INPUT_KBD;
+            } else if (keyboard_available()) {
+                mask |= WAIT_INPUT_KBD;
+            }
+            if (mouse_get_seq() != me->mouse_seq_seen) mask |= WAIT_INPUT_MOUSE;
+            for (uint32_t i = 0; i < nfds; i++)
+                if (fds[i] >= 0 && vfs_readable(fds[i]) > 0)
+                    mask |= WAIT_INPUT_FD(i);
+
+            if (mask || tmo == 0 || signal_pending(me)) { ret = mask; break; }
+            if (deadline && tick_reached(pit_get_ticks(), deadline)) {
+                ret = 0; break;
+            }
+
+            me->wake_tick = deadline;
+            waitq_sleep(&input_wq);
+            me->wake_tick = 0;
+        }
+#else
+        ret = (uint32_t)-1;
+#endif
+        break;
+    }
+
+    /* ------------------------------------------------------------------------
+     * SYS_GFX_FLUSH_RECT (59) -- gfx_flush_rect(x, y, w, h)       (ROADMAP3 18.1)
+     *
+     * Like SYS_GFX_FLUSH, but marks only the rows [y, y+h) dirty, so the copy
+     * from the shadow buffer to VRAM covers just the band the caller changed
+     * (the kernel's dirty tracking is per row, so x/w are accepted for the
+     * API's sake and the whole width of those rows is copied).  The rect is
+     * clipped to the screen; an empty rect is a no-op.  Returns 0, -1 if no
+     * VBE framebuffer.  Only the surface owner may flush.
+     * ------------------------------------------------------------------------ */
+    case SYS_GFX_FLUSH_RECT: {
+#ifdef __is_kernel
+        if (!vbe_active() || !current_process ||
+            gfx_owner_pid != (int)current_process->pid) {
+            ret = (uint32_t)-1; break;
+        }
+        const vbe_info_t *info = vbe_get_info();
+        int32_t y = (int32_t)regs->ecx, h = (int32_t)regs->esi;
+        int32_t y0 = y < 0 ? 0 : y;
+        int64_t y1 = (int64_t)y + h;
+        if (y1 > (int64_t)info->height) y1 = info->height;
+        if (h > 0 && y1 > y0) {
+            vbe_dirty_rows((uint32_t)y0, (uint32_t)(y1 - y0));
+            vbe_flush();
+        }
+        ret = 0;
 #else
         ret = (uint32_t)-1;
 #endif

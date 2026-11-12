@@ -64,6 +64,25 @@ void waitq_sleep(waitq_t *wq)
     wq_irq_restore(flags);
     scheduler_yield();
 
+#ifdef __is_kernel
+    /* scheduler_yield returns at once when nothing else is runnable.  We
+     * used to fall straight back into the caller's predicate loop, so a
+     * blocked process with nobody else to run spun the CPU in ring 0.
+     * Instead, halt until the next interrupt (timer, keyboard, mouse...).
+     * cli + re-check + "sti; hlt" closes the race with a wake that lands
+     * between the check and the halt: sti only takes effect after the next
+     * instruction, so the IRQ cannot slip in before hlt.  Only when the
+     * caller had interrupts enabled -- otherwise nothing could wake us.
+     * ROADMAP3 18.1. */
+    if (flags & 0x200u) {
+        asm volatile("cli" ::: "memory");
+        if (current_process->state == PROC_BLOCKED)
+            asm volatile("sti; hlt" ::: "memory");
+        else
+            asm volatile("sti" ::: "memory");
+    }
+#endif
+
     /* Remove our entry if still present (e.g. yield returned without a real
      * switch because no other process was runnable).  IRQs off so a wake
      * cannot mutate the list mid-walk. */
@@ -95,11 +114,24 @@ void waitq_wake_all(waitq_t *wq)
      * pushes onto a fresh empty list rather than our in-progress one. */
     waitq_entry_t *e = wq->head;
     wq->head = NULL;
-    wq_irq_restore(flags);
 
+    /* Walk with IRQs still off.  The entries live on the sleepers' stacks;
+     * once a sleeper is READY (or its timeout fires -- ROADMAP3 18.1) a timer
+     * IRQ could switch to it, it would return from waitq_sleep, and its entry
+     * -- possibly the one we are about to follow -- would be gone. */
     while (e) {
         waitq_entry_t *next = e->next;
         e->proc->state = PROC_READY;
         e = next;
     }
+    wq_irq_restore(flags);
+}
+
+/* -- "some input arrived" queue (ROADMAP3 18.1) -------------------------- */
+
+waitq_t input_wq = WAITQ_INIT;
+
+void input_notify(void)
+{
+    if (input_wq.head) waitq_wake_all(&input_wq);
 }

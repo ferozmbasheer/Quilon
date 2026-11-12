@@ -52,6 +52,15 @@
 #define WM_MIN_W         64
 #define WM_MIN_H         32
 
+/* Mouse cursor footprint on screen, including its 1-px drop shadow.  The
+ * damage rect for a cursor at (x, y) is (x, y, WM_CURSOR_W, WM_CURSOR_H). */
+#define WM_CURSOR_W      12
+#define WM_CURSOR_H      18
+
+/* Damage list capacity (ROADMAP3 18.1).  On overflow the list collapses to
+ * one bounding rect rather than dropping damage. */
+#define WM_DAMAGE_MAX    16
+
 /* Desktop */
 #define WM_DESKTOP_COL      GFX_RGB( 96, 138, 175)   /* steel blue (à la twlv) */
 
@@ -119,6 +128,15 @@ typedef struct wm_window_ {
     wm_on_event_fn   on_event;       /* key/close handler, or NULL          */
     wm_on_tick_fn    on_tick;        /* periodic handler, or NULL           */
     wm_on_destroy_fn on_destroy;     /* cleanup handler, or NULL            */
+
+    /* When to call on_tick (ROADMAP3 18.1) -- the loop sleeps otherwise:
+     *   tick_ms > 0  -- every tick_ms milliseconds (the clock);
+     *   wait_fd >= 0 -- whenever that fd has bytes to read (a terminal's
+     *                   shell-output pipe).
+     * Both may be set; with neither, on_tick is never called. */
+    int            tick_ms;
+    int            wait_fd;
+    uint32_t       next_tick;        /* PIT tick the next timed tick is due */
 } window_t;
 
 /* ── WM state ──────────────────────────────────────────────────────────── */
@@ -218,6 +236,9 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
         s->windows[i].on_event    = (wm_on_event_fn)0;
         s->windows[i].on_tick     = (wm_on_tick_fn)0;
         s->windows[i].on_destroy  = (wm_on_destroy_fn)0;
+        s->windows[i].tick_ms     = 0;
+        s->windows[i].wait_fd     = -1;
+        s->windows[i].next_tick   = 0;
         s->z_order[i]             = i;
     }
     s->num_windows   = 0;
@@ -266,6 +287,9 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
     win->on_event     = (wm_on_event_fn)0;
     win->on_tick      = (wm_on_tick_fn)0;
     win->on_destroy   = (wm_on_destroy_fn)0;
+    win->tick_ms      = 0;
+    win->wait_fd      = -1;
+    win->next_tick    = 0;
 
     /* Copy title — avoid string.h dependency. */
     for (i = 0; i < WM_TITLE_LEN - 1 && title && title[i]; i++)
@@ -334,6 +358,8 @@ static inline void wm_destroy_window(wm_state_t *s, int id)
     w->on_event   = (wm_on_event_fn)0;
     w->on_tick    = (wm_on_tick_fn)0;
     w->on_destroy = (wm_on_destroy_fn)0;
+    w->tick_ms    = 0;
+    w->wait_fd    = -1;
 
     s->num_windows--;
 
@@ -473,9 +499,157 @@ static inline void wm_handle_mouse_up(wm_state_t *s)
     s->drag_win_id   = -1;
 }
 
+/* ── Rect algebra (ROADMAP3 18.1) ──────────────────────────────────────── */
+
+static inline int wm_rect_empty(rect_t r) { return r.w <= 0 || r.h <= 0; }
+
+static inline rect_t wm_rect_intersect(rect_t a, rect_t b)
+{
+    int x0 = a.x > b.x ? a.x : b.x;
+    int y0 = a.y > b.y ? a.y : b.y;
+    int x1 = (a.x + a.w) < (b.x + b.w) ? (a.x + a.w) : (b.x + b.w);
+    int y1 = (a.y + a.h) < (b.y + b.h) ? (a.y + a.h) : (b.y + b.h);
+    rect_t r;
+    r.x = x0; r.y = y0;
+    r.w = x1 > x0 ? x1 - x0 : 0;
+    r.h = y1 > y0 ? y1 - y0 : 0;
+    return r;
+}
+
+static inline int wm_rect_intersects(rect_t a, rect_t b)
+{
+    return !wm_rect_empty(wm_rect_intersect(a, b));
+}
+
+/* Smallest rect containing both (an empty rect contributes nothing). */
+static inline rect_t wm_rect_union(rect_t a, rect_t b)
+{
+    if (wm_rect_empty(a)) return b;
+    if (wm_rect_empty(b)) return a;
+    int x0 = a.x < b.x ? a.x : b.x;
+    int y0 = a.y < b.y ? a.y : b.y;
+    int x1 = (a.x + a.w) > (b.x + b.w) ? (a.x + a.w) : (b.x + b.w);
+    int y1 = (a.y + a.h) > (b.y + b.h) ? (a.y + a.h) : (b.y + b.h);
+    rect_t r = { x0, y0, x1 - x0, y1 - y0 };
+    return r;
+}
+
+/* ── Damage list (ROADMAP3 18.1) ─────────────────────────────────────────
+ *
+ * The screen regions that must be recomposited and flushed this frame.
+ * Invariant: rects are non-empty, inside the screen, and pairwise
+ * non-overlapping (overlapping adds are merged into their union), so no
+ * pixel is composited twice.  If the list fills up it collapses to a single
+ * bounding rect -- more pixels than needed, but never fewer.
+ */
+typedef struct {
+    rect_t r[WM_DAMAGE_MAX];
+    int    n;
+    int    sw, sh;      /* screen size: everything is clipped to it */
+} wm_damage_t;
+
+static inline void wm_damage_init(wm_damage_t *d, int sw, int sh)
+{
+    d->n = 0; d->sw = sw; d->sh = sh;
+}
+
+static inline void wm_damage_add(wm_damage_t *d, rect_t r)
+{
+    rect_t scr = { 0, 0, d->sw, d->sh };
+    r = wm_rect_intersect(r, scr);
+    if (wm_rect_empty(r)) return;
+
+    /* Absorb every existing rect that overlaps r; the grown r may now
+     * overlap rects it missed before, so rescan until nothing merges. */
+    int merged = 1;
+    while (merged) {
+        merged = 0;
+        for (int i = 0; i < d->n; i++) {
+            if (wm_rect_intersects(d->r[i], r)) {
+                r = wm_rect_union(r, d->r[i]);
+                d->r[i] = d->r[--d->n];
+                merged = 1;
+                break;
+            }
+        }
+    }
+
+    if (d->n == WM_DAMAGE_MAX) {
+        /* Full: collapse everything into one bounding rect. */
+        rect_t all = r;
+        for (int i = 0; i < d->n; i++) all = wm_rect_union(all, d->r[i]);
+        d->r[0] = all;
+        d->n = 1;
+        return;
+    }
+    d->r[d->n++] = r;
+}
+
+static inline void wm_damage_add_all(wm_damage_t *d)
+{
+    rect_t scr = { 0, 0, d->sw, d->sh };
+    d->n = 0;
+    wm_damage_add(d, scr);
+}
+
+/* Damage rect covering the cursor drawn at (mx, my). */
+static inline rect_t wm_cursor_rect(int mx, int my)
+{
+    rect_t r = { mx, my, WM_CURSOR_W, WM_CURSOR_H };
+    return r;
+}
+
+/* ── Tick scheduling (ROADMAP3 18.1) ─────────────────────────────────────
+ * Times are PIT ticks (getticks()); hz = gethz().  Comparisons are
+ * wrap-safe. */
+
+static inline uint32_t wm_ms_to_ticks(int ms, uint32_t hz)
+{
+    if (ms <= 0 || hz == 0) return 0;
+    uint32_t t = (uint32_t)(((uint64_t)(uint32_t)ms * hz + 999u) / 1000u);
+    return t ? t : 1;
+}
+
+static inline int wm_tick_due(const window_t *w, uint32_t now)
+{
+    return w->id != 0 && w->on_tick && w->tick_ms > 0 &&
+           (int32_t)(now - w->next_tick) >= 0;
+}
+
+/* Arm the next timed tick tick_ms after `now`. */
+static inline void wm_tick_rearm(window_t *w, uint32_t now, uint32_t hz)
+{
+    w->next_tick = now + wm_ms_to_ticks(w->tick_ms, hz);
+}
+
+/*
+ * wm_next_timeout_ms -- how long the loop may sleep: milliseconds until the
+ * earliest timed tick is due (0 if one is already due), or -1 if no window
+ * has a timed tick (sleep until input).
+ */
+static inline int wm_next_timeout_ms(const wm_state_t *s, uint32_t now,
+                                     uint32_t hz)
+{
+    int best = -1;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        const window_t *w = &s->windows[i];
+        if (w->id == 0 || !w->on_tick || w->tick_ms <= 0) continue;
+        int32_t dt = (int32_t)(w->next_tick - now);
+        int ms;
+        if (dt <= 0 || hz == 0) ms = 0;
+        else ms = (int)(((uint64_t)(uint32_t)dt * 1000u + hz - 1) / hz);
+        if (best < 0 || ms < best) best = ms;
+    }
+    return best;
+}
+
 /* ── Compositor declarations ────────────────────────────────────────────── */
 
 void wm_composite(wm_state_t *s, canvas_t *screen);
+/* Recomposite only `clip` (desktop + windows, back to front), leaving the
+ * screen's clip rect cleared afterwards.  Does not touch w->dirty.
+ * ROADMAP3 18.1. */
+void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip);
 void wm_draw_cursor(canvas_t *screen, int mx, int my);
 void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
                      const char **labels, int nlabels, int btn_w);

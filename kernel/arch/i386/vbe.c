@@ -399,9 +399,14 @@ void vbe_dirty_rows(uint32_t y, uint32_t count)
     if (!vbe_ready) return;
     uint32_t y_end = y + count;
     if (y >= vbe.height) return;
-    if (y_end > vbe.height) y_end = vbe.height;
+    if (y_end > vbe.height || y_end < y) y_end = vbe.height;
+    /* Same IRQ-atomicity reasoning as dirty_mark(): the PIT flushes too. */
+    uint32_t efl;
+    asm volatile("pushfl; pop %0" : "=r"(efl) :: "memory");
+    asm volatile("cli" ::: "memory");
     if (y < dirty_y_min) dirty_y_min = y;
     if (y_end > dirty_y_max) dirty_y_max = y_end;
+    asm volatile("push %0; popfl" :: "r"(efl) : "memory");
 }
 
 /* -- Initialization ------------------------------------------------------- */

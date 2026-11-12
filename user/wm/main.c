@@ -9,12 +9,15 @@
  * framebuffer, there are no shared-state races -- no locks, no SPSC queues, no
  * pthread_join reaping.  Window create/destroy happen synchronously in the loop.
  *
- * Each iteration:
- *   1. poll the mouse (non-blocking)        -> raise/focus/drag/close
- *   2. poll the keyboard (non-blocking)     -> deliver key to focused window
- *   3. tick every window (on_tick)          -> clock updates, pipe draining
+ * Each iteration (ROADMAP3 18.1 -- the loop sleeps when nothing happens):
+ *   0. wait_input(): sleep until the keyboard, the mouse, a watched fd (a
+ *      terminal's shell pipe) has input, or the next timed app tick is due
+ *   1. read the mouse                       -> raise/focus/drag/close
+ *   2. drain the keyboard                   -> deliver key to focused window
+ *   3. tick the windows that are due        -> clock updates, pipe draining
  *   4. destroy windows that requested close (want_close)
- *   5. if anything is dirty: composite + taskbar + flush
+ *   5. recomposite + flush ONLY the damaged screen rects (cursor, moved or
+ *      dirty windows, taskbar)
  *
  * Apps must never block.  Anything that would block (a terminal reading its
  * shell's pipe) is done with a non-blocking poll inside on_tick.
@@ -34,6 +37,7 @@ void clock_open(window_t *win);
 void filebr_open(window_t *win);
 void textview_open(window_t *win);
 void gterm_reap_shells(void);   /* reap shells of closed terminals */
+int  gterm_reap_pending(void);  /* 1 while a closed terminal's shell is unreaped */
 
 /* ── App table ────────────────────────────────────────────────────────────── */
 
@@ -59,6 +63,22 @@ static const app_entry_t g_apps[] = {
 static wm_state_t  g_wm;
 static canvas_t   *g_screen;
 static int         g_sw, g_sh;   /* screen dimensions */
+static wm_damage_t g_damage;     /* screen rects to repaint this frame (18.1) */
+
+/* Mark a window's whole on-screen footprint (chrome + content) damaged. */
+static void damage_window(const window_t *w)
+{
+    if (w && w->id != 0) wm_damage_add(&g_damage, wm_full_rect(w));
+}
+
+/* The focused window, or NULL. */
+static window_t *focused_window(void)
+{
+    for (int i = 0; i < WM_MAX_WINDOWS; i++)
+        if (g_wm.windows[i].id != 0 && g_wm.windows[i].focused)
+            return &g_wm.windows[i];
+    return (window_t *)0;
+}
 
 /* ── Launch an app in a new window ───────────────────────────────────────── */
 
@@ -155,6 +175,9 @@ static void request_close(window_t *w)
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
 
+/* How often to retry reaping a closed terminal's shell while one is pending. */
+#define REAP_POLL_MS  100
+
 int main(void)
 {
     printf("[wm] Quilon Desktop starting\r\n");
@@ -177,13 +200,22 @@ int main(void)
 
     /* 2. Initialise WM state (screen height minus taskbar). */
     wm_state_init(&g_wm, g_sw, g_sh - TASKBAR_H);
+    wm_damage_init(&g_damage, g_sw, g_sh);
+    const rect_t taskbar_rect = { 0, g_sh - TASKBAR_H, g_sw, TASKBAR_H };
+    const uint32_t hz = gethz();
 
     /* 3. Build the static label array for wm_draw_taskbar. */
     const char *labels[G_NOAPPS];
     int i;
     for (i = 0; i < G_NOAPPS; i++) labels[i] = g_apps[i].label;
 
-    /* 4. Initial frame: desktop + taskbar + cursor (cursor last = on top). */
+    /* 4. Initial frame: desktop + taskbar + cursor (cursor last = on top).
+     *    Reading the mouse first also syncs the kernel's "mouse seen" mark,
+     *    so the first wait_input() doesn't return at once for stale motion. */
+    mouse_event_t prev = {0};
+    mouse_read(&prev);
+    g_wm.mouse_x = prev.x;
+    g_wm.mouse_y = prev.y;
     wm_composite(&g_wm, g_screen);
     wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
                     labels, G_NOAPPS, TASKBAR_BTN_W);
@@ -191,9 +223,26 @@ int main(void)
     gfx_flush();
 
     /* 5. Event loop. */
-    mouse_event_t prev = {0};
     while (1) {
-        int any_dirty = 0;
+        /* -- Sleep until something can happen ------------------------------
+         * Watch each window's wait_fd (terminal shell pipes); wake for the
+         * next timed tick (the clock), or to retry reaping a closed
+         * terminal's shell.  With none of those we sleep until input. */
+        int fds[WAIT_INPUT_MAX_FDS], fd_slot[WAIT_INPUT_MAX_FDS], nfds = 0;
+        for (i = 0; i < WM_MAX_WINDOWS && nfds < WAIT_INPUT_MAX_FDS; i++) {
+            window_t *w = &g_wm.windows[i];
+            if (w->id != 0 && w->on_tick && w->wait_fd >= 0) {
+                fds[nfds] = w->wait_fd;
+                fd_slot[nfds++] = i;
+            }
+        }
+        int timeout = wm_next_timeout_ms(&g_wm, getticks(), hz);
+        if (gterm_reap_pending() && (timeout < 0 || timeout > REAP_POLL_MS))
+            timeout = REAP_POLL_MS;
+        int ready = wait_input(timeout < 0 ? WAIT_INPUT_FOREVER : timeout,
+                               fds, nfds);
+        if (ready < 0) ready = 0;
+        uint32_t now = getticks();
 
         /* -- Mouse --------------------------------------------------------- */
         mouse_event_t me;
@@ -203,11 +252,17 @@ int main(void)
         int pressed = (me.buttons && !prev.buttons);
         int release = (!me.buttons && prev.buttons);
 
+        if (moved) {
+            /* The cursor leaves its old spot and appears at the new one. */
+            wm_damage_add(&g_damage, wm_cursor_rect(prev.x, prev.y));
+            wm_damage_add(&g_damage, wm_cursor_rect(me.x, me.y));
+        }
+
         if (pressed) {
             if (me.y >= g_sh - TASKBAR_H) {
                 int idx = me.x / TASKBAR_BTN_W;
                 if (idx >= 0 && idx < G_NOAPPS)
-                    wm_launch(idx);
+                    wm_launch(idx);     /* new window is dirty -> damaged */
             } else {
                 int hit = wm_hittest(&g_wm, me.x, me.y);
                 if (hit >= 0) {
@@ -215,6 +270,10 @@ int main(void)
                     if (wm_in_close_btn(w, me.x, me.y)) {
                         request_close(w);
                     } else {
+                        /* Raise + focus: the old focus loses its active
+                         * titlebar and the hit window may come to the front. */
+                        damage_window(focused_window());
+                        damage_window(w);
                         wm_handle_mouse_down(&g_wm, me.x, me.y, me.buttons);
                         /* Deliver in-content clicks to the app, with the
                          * cursor expressed relative to the content origin.
@@ -231,12 +290,15 @@ int main(void)
                     }
                 }
             }
-            any_dirty = 1;
         } else if (release) {
             wm_handle_mouse_up(&g_wm);
-        } else if (moved) {
+        }
+        if (moved) {
+            /* A drag repaints where the window was and where it now is. */
+            window_t *dw = wm_find_window(&g_wm, g_wm.drag_win_id);
+            damage_window(dw);
             wm_handle_mouse_move(&g_wm, me.x, me.y);
-            any_dirty = 1;
+            damage_window(dw);
         }
         prev = me;
 
@@ -245,11 +307,19 @@ int main(void)
         while (read_nonblock(STDIN_FILENO, &c, 1) == 1)
             deliver_key(c);
 
-        /* -- Tick every window (periodic, non-blocking app work) ----------- */
+        /* -- Tick the windows that are due --------------------------------- */
         for (i = 0; i < WM_MAX_WINDOWS; i++) {
             window_t *w = &g_wm.windows[i];
-            if (w->id != 0 && w->on_tick)
-                w->on_tick(w);
+            if (w->id == 0 || !w->on_tick) continue;
+            int due = wm_tick_due(w, now);
+            for (int k = 0; k < nfds && !due; k++)
+                if (fd_slot[k] == i && fds[k] == w->wait_fd &&
+                    (ready & (int)WAIT_INPUT_FD(k)))
+                    due = 1;
+            if (!due) continue;
+            if (w->tick_ms > 0 && wm_tick_due(w, now))
+                wm_tick_rearm(w, now, hz);
+            w->on_tick(w);
         }
 
         /* -- Reap the shells of terminals closed earlier (never blocks) ----- */
@@ -259,24 +329,38 @@ int main(void)
         for (i = 0; i < WM_MAX_WINDOWS; i++) {
             window_t *w = &g_wm.windows[i];
             if (w->id != 0 && w->want_close) {
+                damage_window(w);
                 wm_destroy_window(&g_wm, w->id);
-                any_dirty = 1;
+                /* Focus may have passed to the new frontmost window. */
+                damage_window(focused_window());
             }
         }
 
-        /* -- Composite if anything changed --------------------------------- */
+        /* -- Dirty windows (new pixels, moved, or just created) ------------ */
         for (i = 0; i < g_wm.num_windows; i++) {
-            if (g_wm.windows[g_wm.z_order[i]].dirty) { any_dirty = 1; break; }
+            window_t *w = &g_wm.windows[g_wm.z_order[i]];
+            if (w->dirty) { damage_window(w); w->dirty = 0; }
         }
 
-        if (any_dirty) {
-            wm_composite(&g_wm, g_screen);
-            wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
-                            labels, G_NOAPPS, TASKBAR_BTN_W);
-            /* Cursor last so it stays on top of windows AND the taskbar. */
-            wm_draw_cursor(g_screen, g_wm.mouse_x, g_wm.mouse_y);
-            gfx_flush();
+        if (g_damage.n == 0) continue;
+
+        /* -- Repaint + flush only the damage ------------------------------- */
+        for (i = 0; i < g_damage.n; i++) {
+            rect_t r = g_damage.r[i];
+            wm_composite_rect(&g_wm, g_screen, r);
+            if (wm_rect_intersects(r, taskbar_rect)) {
+                gfx_set_clip(g_screen, r);
+                wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
+                                labels, G_NOAPPS, TASKBAR_BTN_W);
+                gfx_clear_clip(g_screen);
+            }
         }
+        /* Cursor last so it stays on top of windows AND the taskbar.  Where
+         * nothing under it was repainted this rewrites identical pixels. */
+        wm_draw_cursor(g_screen, g_wm.mouse_x, g_wm.mouse_y);
+        for (i = 0; i < g_damage.n; i++)
+            gfx_flush_rect(g_damage.r[i]);
+        g_damage.n = 0;
     }
 
     return 0;

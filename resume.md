@@ -37,7 +37,9 @@ terminals left shells spinning. Each fix has host tests plus an in-OS check:
 **`make ktest`** (user/ktest, typed into the VM via the QEMU monitor) and
 **`make wmtest`** (mouse-driven desktop test). Run both on kernel changes, on
 both images (`SMOKE_DISK=ext2.img make ktest`). Still open in REVIEW.md:
-per-process fd tables + cwd, errno, boot-demo gating, single TCP connection.
+per-process fd tables + cwd, errno, boot-demo gating, single TCP connection,
+and **J: an intermittent (~1/12) hang right after a child exits** in `ktest`
+(pre-existing; reproduced on the base commit).
 
 ## Next milestone
 
@@ -46,9 +48,11 @@ both DONE (ext2 read-only).** Next up is **ROADMAP3 §17 — porting** (17.1 Lua
 17.2 a text editor, 17.3 TinyCC), or ext2 **write** support if the disk should
 become the primary read-write filesystem. **Planned order (2026-11):** §17.0.1
 keyboard (shift/ctrl/arrows/Ctrl-C + `SYS_KILL`) — **done**, see the 17.0.1
-"as built" note in ROADMAP3 and `make kbdtest` → §18 desktop polish (idle
-damage-driven WM loop, richer events, resize/min/max, taskbar window list,
-widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
+"as built" note in ROADMAP3 and `make kbdtest` → §18 desktop polish (**18.1
+idle damage-driven WM loop — done**, see its "as built" note: `SYS_WAIT_INPUT`,
+`SYS_GFX_FLUSH_RECT`, damage rects, `waitq_sleep` halts; idle desktop 100% →
+~4% host CPU; next 18.2 richer events, then resize/min/max, taskbar window
+list, widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
 newlib/PDCLib port) → 17.1–17.3. The 15.x and 16.x details below are
 kept as a record.
 

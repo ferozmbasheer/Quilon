@@ -449,8 +449,24 @@ static void test_eax_is_always_overwritten(void)
  * main
  * =========================================================================== */
 
+
+/* ROADMAP3 18.1 -- SYS_WAIT_INPUT timeout conversion rounds up. */
+static void test_wait_input_ticks(void)
+{
+    ASSERT_EQ(wait_input_ticks(0, 100), 0u, "0 ms polls");
+    ASSERT_EQ(wait_input_ticks(1, 100), 1u, "1 ms -> 1 tick (rounds up)");
+    ASSERT_EQ(wait_input_ticks(100, 100), 10u, "100 ms @100 Hz");
+    ASSERT_EQ(wait_input_ticks(15, 1000), 15u, "15 ms @1 kHz");
+    ASSERT_EQ(wait_input_ticks(50, 0), 0u, "no timer: 0");
+    ASSERT(wait_input_ticks(0x7FFFFFFFu, 1000) <= 0x7FFFFFFFu, "huge timeout capped");
+    ASSERT(WAIT_INPUT_FD(0) != WAIT_INPUT_KBD && WAIT_INPUT_FD(0) != WAIT_INPUT_MOUSE,
+           "fd bits don't collide with kbd/mouse");
+    ASSERT_EQ(WAIT_INPUT_FD(WAIT_INPUT_MAX_FDS - 1), 0x800000u, "last fd bit fits");
+}
+
 int main(void)
 {
+    RUN_SUITE(test_wait_input_ticks);
     /* Constants */
     RUN_SUITE(test_syscall_numbers);
     RUN_SUITE(test_fd_constants);

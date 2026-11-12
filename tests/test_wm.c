@@ -714,6 +714,178 @@ static void test_on_destroy_invoked(void)
 
 /* ── Entry point ─────────────────────────────────────────────────────────── */
 
+
+/* ═══════════════════════ ROADMAP3 18.1: damage + ticks ═══════════════════ */
+
+static int rect_eq(rect_t a, int x, int y, int w, int h)
+{
+    return a.x == x && a.y == y && a.w == w && a.h == h;
+}
+
+static void test_rect_algebra(void)
+{
+    rect_t a = { 0, 0, 10, 10 }, b = { 5, 5, 10, 10 }, c = { 20, 0, 5, 5 };
+    ASSERT(rect_eq(wm_rect_intersect(a, b), 5, 5, 5, 5), "intersect overlap");
+    ASSERT(wm_rect_empty(wm_rect_intersect(a, c)), "intersect disjoint is empty");
+    ASSERT(!wm_rect_intersects((rect_t){0,0,10,10}, (rect_t){10,0,5,5}),
+           "touching edges do not intersect");
+    ASSERT(rect_eq(wm_rect_union(a, b), 0, 0, 15, 15), "union bounding box");
+    ASSERT(rect_eq(wm_rect_union((rect_t){0,0,0,0}, c), 20, 0, 5, 5),
+           "union with empty = other");
+}
+
+static void test_damage_merge_and_clip(void)
+{
+    wm_damage_t d;
+    wm_damage_init(&d, 100, 80);
+    wm_damage_add(&d, (rect_t){ 10, 10, 0, 5 });
+    ASSERT_EQ(d.n, 0, "empty rect ignored");
+    wm_damage_add(&d, (rect_t){ 200, 10, 5, 5 });
+    ASSERT_EQ(d.n, 0, "off-screen rect ignored");
+    wm_damage_add(&d, (rect_t){ -5, -5, 10, 10 });
+    ASSERT(d.n == 1 && rect_eq(d.r[0], 0, 0, 5, 5), "clipped to screen");
+
+    wm_damage_add(&d, (rect_t){ 50, 50, 10, 10 });
+    ASSERT_EQ(d.n, 2, "disjoint rects kept apart");
+    wm_damage_add(&d, (rect_t){ 3, 3, 4, 4 });
+    ASSERT_EQ(d.n, 2, "overlapping rect merged");
+
+    /* A bridge overlapping both merges all three into one. */
+    wm_damage_add(&d, (rect_t){ 4, 4, 50, 50 });
+    ASSERT(d.n == 1 && rect_eq(d.r[0], 0, 0, 60, 60), "chain merge");
+
+    wm_damage_add_all(&d);
+    ASSERT(d.n == 1 && rect_eq(d.r[0], 0, 0, 100, 80), "add_all = whole screen");
+}
+
+static void test_damage_overflow_collapses(void)
+{
+    wm_damage_t d;
+    wm_damage_init(&d, 1000, 1000);
+    for (int i = 0; i < WM_DAMAGE_MAX; i++)
+        wm_damage_add(&d, (rect_t){ i * 20, 0, 5, 5 });
+    ASSERT_EQ(d.n, WM_DAMAGE_MAX, "list full of disjoint rects");
+    wm_damage_add(&d, (rect_t){ 500, 500, 5, 5 });
+    ASSERT(d.n == 1 && rect_eq(d.r[0], 0, 0, 505, 505),
+           "overflow collapses to the bounding rect");
+}
+
+/* Random adds: every added pixel stays covered, and no two rects overlap. */
+static void test_damage_invariants_random(void)
+{
+    enum { W = 64, H = 48 };
+    static unsigned char want[H][W];
+    wm_damage_t d;
+    unsigned seed = 12345;
+    int ok_cover = 1, ok_disjoint = 1;
+
+    for (int round = 0; round < 50; round++) {
+        wm_damage_init(&d, W, H);
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) want[y][x] = 0;
+        int adds = 1 + round % 12;
+        for (int k = 0; k < adds; k++) {
+            seed = seed * 1103515245u + 12345u; int x = (int)(seed >> 16) % (W + 10) - 5;
+            seed = seed * 1103515245u + 12345u; int y = (int)(seed >> 16) % (H + 10) - 5;
+            seed = seed * 1103515245u + 12345u; int w = (int)(seed >> 16) % 20;
+            seed = seed * 1103515245u + 12345u; int h = (int)(seed >> 16) % 20;
+            wm_damage_add(&d, (rect_t){ x, y, w, h });
+            for (int yy = y; yy < y + h; yy++)
+                for (int xx = x; xx < x + w; xx++)
+                    if (xx >= 0 && yy >= 0 && xx < W && yy < H) want[yy][xx] = 1;
+        }
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++)
+                if (want[y][x]) {
+                    int hit = 0;
+                    for (int i = 0; i < d.n; i++)
+                        if (wm_rect_contains(d.r[i], x, y)) hit = 1;
+                    if (!hit) ok_cover = 0;
+                }
+        for (int i = 0; i < d.n; i++)
+            for (int j = i + 1; j < d.n; j++)
+                if (wm_rect_intersects(d.r[i], d.r[j])) ok_disjoint = 0;
+    }
+    ASSERT(ok_cover, "damage list covers every damaged pixel");
+    ASSERT(ok_disjoint, "damage rects never overlap");
+}
+
+/* Compositing a clip rect paints exactly that rect, identically to a full
+ * composite, and leaves every other pixel alone. */
+static void test_composite_rect_matches_full(void)
+{
+    enum { W = 300, H = 200 };
+    canvas_t *full = canvas_create(W, H), *part = canvas_create(W, H);
+    ASSERT(full && part, "canvases allocated");
+
+    wm_state_t s;
+    wm_state_init(&s, W, H);
+    int a = wm_create_window(&s, "A", 20, 40, 120, 80);
+    int b = wm_create_window(&s, "B", 90, 70, 150, 90);
+    window_t *wa = wm_find_window(&s, a), *wb = wm_find_window(&s, b);
+    wa->backbuf = canvas_create(120, 80); gfx_fill(wa->backbuf, GFX_RGB(200, 0, 0));
+    wb->backbuf = canvas_create(150, 90); gfx_fill(wb->backbuf, GFX_RGB(0, 0, 200));
+    wm_focus(&s, wm_find_idx(&s, b));
+
+    wm_composite(&s, full);
+    const color_t SENT = GFX_RGB(1, 2, 3);
+    gfx_fill(part, SENT);
+    rect_t clip = { 70, 50, 100, 60 };
+    wm_composite_rect(&s, part, clip);
+
+    int inside_ok = 1, outside_ok = 1;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            uint32_t pv = part->pixels[y * part->pitch + x];
+            if (wm_rect_contains(clip, x, y)) {
+                if (pv != full->pixels[y * full->pitch + x]) inside_ok = 0;
+            } else if (pv != SENT) {
+                outside_ok = 0;
+            }
+        }
+    ASSERT(inside_ok, "clipped composite == full composite inside the clip");
+    ASSERT(outside_ok, "clipped composite touches nothing outside the clip");
+    ASSERT(!part->has_clip, "clip cleared afterwards");
+
+    canvas_free(wa->backbuf); canvas_free(wb->backbuf);
+    canvas_free(full); canvas_free(part);
+}
+
+static void test_tick_scheduling(void)
+{
+    ASSERT_EQ(wm_ms_to_ticks(250, 100), 25u, "250 ms @100 Hz = 25 ticks");
+    ASSERT_EQ(wm_ms_to_ticks(1, 100), 1u, "1 ms rounds up to 1 tick");
+    ASSERT_EQ(wm_ms_to_ticks(0, 100), 0u, "0 ms = 0 ticks");
+
+    wm_state_t s;
+    wm_state_init(&s, 400, 300);
+    ASSERT_EQ(wm_next_timeout_ms(&s, 0, 100), -1, "no windows: sleep forever");
+
+    int id = wm_create_window(&s, "T", 10, 30, 100, 50);
+    window_t *w = wm_find_window(&s, id);
+    ASSERT(w->tick_ms == 0 && w->wait_fd == -1, "new window has no tick, no fd");
+    w->on_tick = (wm_on_tick_fn)1;      /* never called here */
+    ASSERT_EQ(wm_next_timeout_ms(&s, 0, 100), -1, "untimed window: forever");
+
+    w->tick_ms = 250;
+    w->next_tick = 0;
+    ASSERT(wm_tick_due(w, 0), "first tick due immediately");
+    wm_tick_rearm(w, 1000, 100);
+    ASSERT_EQ(w->next_tick, 1025u, "rearm = now + 25 ticks");
+    ASSERT(!wm_tick_due(w, 1024), "not due one tick early");
+    ASSERT(wm_tick_due(w, 1025), "due on time");
+    ASSERT_EQ(wm_next_timeout_ms(&s, 1000, 100), 250, "250 ms to go");
+    ASSERT_EQ(wm_next_timeout_ms(&s, 1030, 100), 0, "overdue: 0 ms");
+
+    /* Tick counter wrap. */
+    wm_tick_rearm(w, 0xFFFFFFF0u, 100);
+    ASSERT(!wm_tick_due(w, 0xFFFFFFFFu), "not due before wrap");
+    ASSERT(wm_tick_due(w, 0x00000009u), "due across the wrap");
+    ASSERT_EQ(wm_next_timeout_ms(&s, 0xFFFFFFF0u, 100), 250, "timeout across wrap");
+
+    wm_destroy_window(&s, id);
+    ASSERT_EQ(wm_next_timeout_ms(&s, 0, 100), -1, "destroyed window not scheduled");
+}
+
 int main(void)
 {
     RUN_SUITE(test_geometry_rect_contains);
@@ -752,6 +924,13 @@ int main(void)
 
     RUN_SUITE(test_window_fresh_callbacks);
     RUN_SUITE(test_on_destroy_invoked);
+
+    RUN_SUITE(test_rect_algebra);
+    RUN_SUITE(test_damage_merge_and_clip);
+    RUN_SUITE(test_damage_overflow_collapses);
+    RUN_SUITE(test_damage_invariants_random);
+    RUN_SUITE(test_composite_rect_matches_full);
+    RUN_SUITE(test_tick_scheduling);
 
     TEST_SUMMARY();
 }

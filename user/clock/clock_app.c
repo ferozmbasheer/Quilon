@@ -67,6 +67,8 @@ void clock_open(window_t *win)
 
     win->app_state  = st;
     win->on_tick    = clock_tick;
+    win->tick_ms    = 250;   /* the WM sleeps in between (ROADMAP3 18.1);
+                              * redraws only when the second changes */
     win->on_event   = clock_event;
     win->on_destroy = clock_destroy;
 

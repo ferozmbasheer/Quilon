@@ -2,6 +2,9 @@
 #include <kernel/pit.h>
 #include <kernel/scheduler.h>
 #include <kernel/vbe.h>
+#ifdef __is_kernel
+#include <kernel/process.h>
+#endif
 
 extern void outb(unsigned short port, unsigned char data);
 extern char inb(unsigned short port);
@@ -44,6 +47,11 @@ uint32_t pit_get_hz(void)
 void pit_tick(void)
 {
     pit_ticks++;
+#ifdef __is_kernel
+    /* Timed sleepers (SYS_WAIT_INPUT, ROADMAP3 18.1) whose deadline has
+     * passed become runnable before the scheduler picks the next process. */
+    process_wake_timeouts(pit_ticks);
+#endif
     scheduler_tick();
     /* Flush the VBE shadow buffer to the hardware framebuffer here, outside
      * any terminal lock.  At 100 Hz the display lag is at most 10 ms. */

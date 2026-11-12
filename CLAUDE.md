@@ -64,12 +64,12 @@ Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 16**
 (graphical desktop stable; BSD sockets + DNS + wget; ATA Bus Master DMA; ext2
 read-only, booting off an ext2 disk); next is Section 17 (porting Lua, a text
 editor, TinyCC), starting with the new 17.0 prerequisites (17.0.1 keyboard + Ctrl-C is done)
-and interleaved with Section 18 (desktop polish). The WM was reworked from CLONE_VM threads to a
+and interleaved with Section 18 (desktop polish; 18.1 idle, damage-driven WM loop is done). The WM was reworked from CLONE_VM threads to a
 **single-threaded event loop** (apps = callbacks) — see `resume.md` and the
 "WM architecture" / "thread concurrency" project memories.
 
 A pre-§17 stability review is tracked in [REVIEW.md](REVIEW.md) (items A–I
-fixed; per-process fd tables/cwd, errno and a few others still open). Keep its
+fixed; J, an intermittent post-exit hang, open; per-process fd tables/cwd, errno and a few others still open). Keep its
 statuses current when touching those areas, and add a `user/ktest` check
 (shown to fail without the fix) for any new kernel bug fix.
 

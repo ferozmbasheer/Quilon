@@ -89,6 +89,8 @@ process_t *process_create(const char *name, uint32_t entry, uint32_t cr3)
         p->owns_std_fds    = 0;
         p->pending_signals = 0;
         p->fg_child        = -1;
+        p->wake_tick       = 0;
+        p->mouse_seq_seen  = 0;
         for (int s = 0; s < NSIG; s++)
             p->signal_handlers[s] = SIG_DFL;
         vma_init(p->vmas, PROC_VMA_MAX);
@@ -379,6 +381,20 @@ process_t *process_pick_next(void)
             return &process_table[idx];
     }
     return NULL;   /* no other runnable process */
+}
+
+int process_wake_timeouts(uint32_t now)
+{
+    int n = 0;
+    for (int i = 0; i < PROCESS_MAX; i++) {
+        process_t *p = &process_table[i];
+        if (p->wake_tick == 0 || p->state != PROC_BLOCKED) continue;
+        if (!tick_reached(now, p->wake_tick)) continue;
+        p->wake_tick = 0;
+        p->state     = PROC_READY;
+        n++;
+    }
+    return n;
 }
 
 /* -- First-run entry point -------------------------------------------------- */

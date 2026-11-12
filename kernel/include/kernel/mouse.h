@@ -108,6 +108,9 @@ void mouse_irq_handler(void);
 int mouse_get_x(void);
 int mouse_get_y(void);
 uint8_t mouse_get_buttons(void);
+/* Number of complete packets received so far (wraps).  SYS_WAIT_INPUT
+ * compares it with the PCB's mouse_seq_seen.  ROADMAP3 18.1. */
+uint32_t mouse_get_seq(void);
 
 /*
  * mouse_cursor_invalidate -- erase the on-screen cursor from the shadow buffer.

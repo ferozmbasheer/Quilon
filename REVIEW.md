@@ -154,6 +154,21 @@ child, and `scheduler_yield` turns a still-RUNNING caller into READY, so a
 voluntary yield can never strand a process. *Tests:* `ktest` "wait() for one
 child survives a sibling exiting first" — deterministic; hangs the old kernel.
 
+### J. Intermittent hang right after a child exits (fork/exec + wait) — *open*
+
+*(Found 2026-11 while doing ROADMAP3 18.1.)* About 1 `make ktest` run in 12
+on the FAT16 image hangs silently right after `[kernel] pid 2 exited (code 0)`
+— once in the `exec+exit` leak loop (after the 3rd of 5 `hello.elf` runs),
+once on the **unmodified base commit** (88f5369) after the first fork test.
+No panic, no further serial output: the parent (ktest) is never resumed, or
+its next exec/fork never completes. So it predates 18.1 (base: 1/12 fails;
+with 18.1: 1/12 fails) and is likely the "one ext2 run failed early on"
+noted under Testing. Suspects: a remaining lost-wakeup between
+`process_mark_exited` (wakes the parent only if it is BLOCKED) and the
+`SYS_WAIT` loop, or a lock taken in both thread and IRQ context on the
+exit/print path. Reproduce with a loop of `make ktest`; the kept
+`smoke-fail.log` shows where it stopped.
+
 ### G. Kernel stack overflow went undetected — *fixed (guard); size kept*
 
 `kernel_stack[4096]` lives inside the PCB. The stack grows down, so an overflow
@@ -225,7 +240,8 @@ are covered by new headless in-OS checks:
   `smoke-fail.log` (gitignored).
 - Of ~40 `ktest` runs after the fixes, one ext2 run failed early on without
   a kept log (before `smoke-fail.log` existed) and never reproduced in 13
-  later runs; if it recurs, the kept log will say why.
+  later runs; if it recurs, the kept log will say why. **It recurred** (on
+  FAT16, ~1 in 12) — see J.
 
 ## Order of work
 
@@ -233,5 +249,6 @@ A + B first (Section 17 ports will hit them immediately), then C + D as one
 `process_exit` change, then F, then E, then G and polish.
 
 Done: A, B, C, D, F, G (guard), H, I, the process half of E, and three of
-the polish items. Still open: the fd half of E (per-process fd ownership),
+the polish items. Still open: J (intermittent post-exit hang), the fd half
+of E (per-process fd ownership),
 the Architecture items, boot-demo gating, and the network-stack note.

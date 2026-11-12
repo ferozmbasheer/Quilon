@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <kernel/mouse.h>
 #include <kernel/vbe.h>
+#include <kernel/waitq.h>
 
 #ifdef __is_kernel
 
@@ -42,6 +43,7 @@ static uint8_t mouse_buttons = 0;
 
 static uint8_t  packet[3];
 static uint8_t  packet_cycle = 0;   /* which byte of the 3-byte packet */
+static volatile uint32_t mouse_seq;   /* complete packets received (18.1) */
 
 /*
  * Saved pixels under the cursor in the shadow buffer (BGRX, 32 bpp).
@@ -306,8 +308,13 @@ void mouse_irq_handler(void)
     }
 
     cursor_move(mouse_x, mouse_y);
+
+    /* A complete packet: let SYS_WAIT_INPUT sleepers see it (ROADMAP3 18.1). */
+    mouse_seq++;
+    input_notify();
 }
 
+uint32_t mouse_get_seq(void)    { return mouse_seq; }
 int     mouse_get_x(void)       { return mouse_x; }
 int     mouse_get_y(void)       { return mouse_y; }
 uint8_t mouse_get_buttons(void) { return mouse_buttons; }

@@ -17,6 +17,7 @@ extern void  free(void *);
 #define SYS_GFX_INFO   40
 #define SYS_GFX_MAP    41
 #define SYS_GFX_FLUSH  42
+#define SYS_GFX_FLUSH_RECT 59   /* ROADMAP3 18.1 */
 
 /* User VA where SYS_GFX_MAP places the shadow buffer (must match kernel). */
 #define GFX_MAP_UADDR  0x60000000u
@@ -35,8 +36,20 @@ static inline int gfx_syscall1(uint32_t num, uint32_t a)
     asm volatile("int $0x80" : "=a"(ret) : "a"(num), "b"(a) : "memory");
     return ret;
 }
+
+static inline int gfx_syscall4(uint32_t num, uint32_t a, uint32_t b,
+                               uint32_t c, uint32_t d)
+{
+    int ret;
+    asm volatile("int $0x80" : "=a"(ret)
+                 : "a"(num), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
+    return ret;
+}
 #else
 /* Host / non-i386: syscall stubs are no-ops so gfx.c compiles for testing. */
+static inline int gfx_syscall4(uint32_t num, uint32_t a, uint32_t b,
+                               uint32_t c, uint32_t d)
+    { (void)num; (void)a; (void)b; (void)c; (void)d; return -1; }
 static inline int gfx_syscall0(uint32_t num) { (void)num; return -1; }
 static inline int gfx_syscall1(uint32_t num, uint32_t a)
     { (void)num; (void)a; return -1; }
@@ -263,6 +276,13 @@ void gfx_flush(void)
     gfx_syscall0(SYS_GFX_FLUSH);
 }
 
+void gfx_flush_rect(rect_t r)
+{
+    if (r.w <= 0 || r.h <= 0) return;
+    gfx_syscall4(SYS_GFX_FLUSH_RECT, (uint32_t)r.x, (uint32_t)r.y,
+                 (uint32_t)r.w, (uint32_t)r.h);
+}
+
 /* -- Clip rectangle ------------------------------------------------------ */
 
 void gfx_set_clip(canvas_t *c, rect_t r)
@@ -328,18 +348,20 @@ void gfx_blit(canvas_t *dst, int dx, int dy,
     if (sr.y + sr.h > src->h) sr.h = src->h - sr.y;
     if (sr.w <= 0 || sr.h <= 0) return;
 
-    for (int row = 0; row < sr.h; row++) {
-        int sy = sr.y + row;
-        int dy_ = dy + row;
-        if (!pixel_visible(dst, dx, dy_) && !pixel_visible(dst, dx + sr.w - 1, dy_))
-            continue; /* quick row check */
-        for (int col = 0; col < sr.w; col++) {
-            int sx = sr.x + col;
-            int dx_ = dx + col;
-            if (!pixel_visible(dst, dx_, dy_)) continue;
-            dst->pixels[dy_ * dst->pitch + dx_] =
-                src->pixels[sy  * src->pitch + sx];
-        }
+    /* Visible destination span: the target rect clipped to the canvas and
+     * the active clip rect, computed once instead of testing every pixel
+     * (the WM blits whole windows into small damage rects -- ROADMAP3 18.1). */
+    int x0 = dx, y0 = dy, x1 = dx + sr.w, y1 = dy + sr.h;
+    clip_rect(dst, &x0, &y0, &x1, &y1);
+    if (x0 >= x1 || y0 >= y1) return;
+
+    int n = x1 - x0;
+    for (int y = y0; y < y1; y++) {
+        const uint32_t *sp = src->pixels + (sr.y + (y - dy)) * src->pitch
+                                         + sr.x + (x0 - dx);
+        uint32_t *dp = dst->pixels + y * dst->pitch + x0;
+        for (int i = 0; i < n; i++)
+            dp[i] = sp[i];
     }
 }
 

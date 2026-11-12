@@ -598,6 +598,20 @@ intr:
     popl  %ebx
     ret
 
+/* -- Idle desktop (ROADMAP3 18.1) ------------------------------------------ */
+
+/* wait_input(timeout_ms, fds, nfds) -> WAIT_INPUT_* mask, 0, -1  SYS_WAIT_INPUT (58) */
+.global wait_input
+wait_input:
+    pushl %ebx
+    movl  $58,      %eax
+    movl  8(%esp),  %ebx    /* timeout_ms */
+    movl  12(%esp), %ecx    /* const int *fds */
+    movl  16(%esp), %edx    /* nfds */
+    int   $0x80
+    popl  %ebx
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

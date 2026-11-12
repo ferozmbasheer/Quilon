@@ -111,6 +111,10 @@ convention is documented in [BUILD.md](BUILD.md); user-side stubs are in
 > stdin/stdout fds). Since the 2026-11 review: `SYS_WAIT` takes an options
 > word in EDX (`WAIT_NOHANG`; libc `wait_nohang()`), and `SYS_MEMINFO` (53)
 > returns the free physical page count (used by ktest's leak checks).
+Desktop (ROADMAP3 18.1): `SYS_WAIT_INPUT` (58, sleep on the shared `input_wq`
+until kbd/mouse/fds are ready or a timeout -- PCB `wake_tick`, expired from
+`pit_tick`) and `SYS_GFX_FLUSH_RECT` (59). `waitq_sleep` halts the CPU when
+nothing else is runnable instead of spinning.
 
 ## Filesystem
 
@@ -135,7 +139,10 @@ design that was deeply race-prone).
   (`on_event`, `on_tick`, `on_destroy`) instead of a thread/event-queue. The
   loop: poll mouse → poll keyboard (`read_nonblock`) → tick windows → destroy
   windows that set `want_close` → composite (`wm_compositor.c`) + taskbar +
-  cursor-last + `gfx_flush`.
+  cursor-last + flush. Since ROADMAP3 18.1 the loop **sleeps** in
+  `wait_input()` (`SYS_WAIT_INPUT`) until keyboard/mouse input, a window's
+  `wait_fd` (terminal pipe) has data, or its `tick_ms` is due, and repaints +
+  flushes (`SYS_GFX_FLUSH_RECT`) only a list of damage rects.
 - Apps (`gterm`, `clock`, `filebr`, `textview`) are launched via `*_open(win)`
   entry points that install callbacks and allocate `app_state`. The terminal
   drains its shell's stdout pipe in `on_tick` (non-blocking) and spawns the

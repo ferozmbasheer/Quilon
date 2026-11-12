@@ -632,10 +632,43 @@ static void test_stack_reset_on_reuse(void)
  * main
  * =========================================================================== */
 
+
+/* ROADMAP3 18.1 -- timed sleep: the timer wakes expired sleepers only. */
+static void test_wake_timeouts(void)
+{
+    process_init();
+    process_t *a = process_create("a", 0, 0);
+    process_t *b = process_create("b", 0, 0);
+    process_t *c = process_create("c", 0, 0);
+    process_t *d = process_create("d", 0, 0);
+    ASSERT(a && b && c && d, "four processes created");
+    ASSERT_EQ(a->wake_tick, 0u, "new process has no timeout");
+
+    a->state = PROC_BLOCKED; a->wake_tick = 100;   /* expires at 100   */
+    b->state = PROC_BLOCKED; b->wake_tick = 200;   /* not yet          */
+    c->state = PROC_BLOCKED; c->wake_tick = 0;     /* no timeout       */
+    d->state = PROC_READY;   d->wake_tick = 50;    /* not asleep       */
+
+    ASSERT_EQ(process_wake_timeouts(99), 0, "nothing expires early");
+    ASSERT_EQ(process_wake_timeouts(100), 1, "one sleeper expires on time");
+    ASSERT(a->state == PROC_READY && a->wake_tick == 0, "expired: READY, cleared");
+    ASSERT(b->state == PROC_BLOCKED, "later deadline still asleep");
+    ASSERT(c->state == PROC_BLOCKED, "no-timeout sleeper untouched");
+    ASSERT(d->state == PROC_READY && d->wake_tick == 50, "non-sleeper untouched");
+
+    /* Wrap-safe: deadline just past the wrap. */
+    b->wake_tick = 5;
+    ASSERT_EQ(process_wake_timeouts(0xFFFFFFF0u), 0, "before the wrap: asleep");
+    ASSERT_EQ(process_wake_timeouts(6), 1, "after the wrap: woken");
+    ASSERT(tick_reached(3, 0xFFFFFFFEu) && !tick_reached(0xFFFFFFFEu, 3),
+           "tick_reached across the wrap");
+}
+
 int main(void)
 {
     /* State enum */
     RUN_SUITE(test_proc_state_values);
+    RUN_SUITE(test_wake_timeouts);
 
     /* process_init */
     RUN_SUITE(test_init_clears_table);

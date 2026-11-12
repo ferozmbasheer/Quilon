@@ -84,4 +84,17 @@ void waitq_wake_one(waitq_t *wq);
  */
 void waitq_wake_all(waitq_t *wq);
 
+/*
+ * input_wq -- one queue for "some input arrived" (ROADMAP3 18.1).
+ *
+ * SYS_WAIT_INPUT sleeps here so one process can wait on several sources at
+ * once (keyboard, mouse, a set of pipe fds) without being on several queues.
+ * Every source calls input_notify() when it produces data -- the keyboard
+ * and mouse IRQs, pipe_write, pipe_close_write -- and the sleeper re-checks
+ * its own predicate, so a wake meant for another waiter is just spurious.
+ * Safe to call from an IRQ handler.
+ */
+extern waitq_t input_wq;
+void input_notify(void);
+
 #endif /* _KERNEL_WAITQ_H */
