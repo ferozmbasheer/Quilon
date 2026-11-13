@@ -116,6 +116,8 @@
 #define WM_TASKBAR_COL      GFX_RGB(191, 191, 191)   /* light gray */
 #define WM_TASKBTN_COL      WM_FRAME_BASE
 #define WM_TASKBTN_TEXT     GFX_BLACK
+#define WM_TASKBTN_DOWN     GFX_RGB(224, 224, 224)   /* pressed (focused) */
+#define WM_TASKBTN_DIM      GFX_RGB(110, 110, 110)   /* minimized window */
 
 /* ── Event types (WM → app) ────────────────────────────────────────────── */
 
@@ -1099,7 +1101,7 @@ static inline int wm_scroll_clamp(int scroll, int delta, int total, int rows)
 #define WM_DLG_BTN_H       24
 #define WM_DLG_BTN_GAP     16
 
-/* The Power button's screen rect (inset like the app buttons). */
+/* The Power button's screen rect (inset like the other taskbar buttons). */
 static inline rect_t wm_taskbar_power_rect(int sw, int sh, int taskbar_h)
 {
     rect_t r = { sw - WM_POWER_BTN_W + 2, sh - taskbar_h + 3,
@@ -1107,17 +1109,184 @@ static inline rect_t wm_taskbar_power_rect(int sw, int sh, int taskbar_h)
     return r;
 }
 
-/* Index of the taskbar app button under (mx, my), or -1.  App buttons are
- * btn_w wide from the left edge; a button hidden under the Power button
- * (very narrow screens) doesn't count. */
-static inline int wm_taskbar_app_hit(int mx, int my, int sw, int sh,
-                                     int taskbar_h, int napps, int btn_w)
+/* ── Taskbar: Apps menu, window list, tray (ROADMAP3 18.4) ─────────────
+ * Left to right: the Apps (start) button, one button per open window, the
+ * tray clock, the Power button.  The Apps button opens a menu of the app
+ * table just above it.  Pure geometry + logic, host-tested. */
+
+#define WM_START_BTN_W     64
+#define WM_START_LABEL     "Apps"
+#define WM_CLOCK_W         60      /* tray clock: "HH:MM" in a sunken box */
+#define WM_WINBTN_MAX_W   160      /* a window button never grows past this */
+#define WM_WINBTN_MIN_W    24      /* narrower than this: not shown */
+#define WM_MENU_W         160
+#define WM_MENU_ITEM_H     22
+
+static inline rect_t wm_taskbar_start_rect(int sh, int taskbar_h)
 {
-    if (my < sh - taskbar_h || my >= sh || mx < 0 || btn_w <= 0) return -1;
-    int idx = mx / btn_w;
-    if (idx >= napps) return -1;
-    if ((idx + 1) * btn_w > sw - WM_POWER_BTN_W) return -1;
-    return idx;
+    rect_t r = { 2, sh - taskbar_h + 3, WM_START_BTN_W - 4, taskbar_h - 6 };
+    return r;
+}
+
+/* The tray clock, just left of the Power button. */
+static inline rect_t wm_taskbar_clock_rect(int sw, int sh, int taskbar_h)
+{
+    rect_t r = { sw - WM_POWER_BTN_W - WM_CLOCK_W + 2, sh - taskbar_h + 3,
+                 WM_CLOCK_W - 4, taskbar_h - 6 };
+    return r;
+}
+
+/* Button i of n in the window list: the strip between the Apps button and
+ * the tray, shared equally (at most WM_WINBTN_MAX_W each).  An empty rect
+ * when the strip is too narrow to show it. */
+static inline rect_t wm_winlist_btn_rect(int i, int n, int sw, int sh,
+                                         int taskbar_h)
+{
+    rect_t none = { 0, 0, 0, 0 };
+    int x0 = WM_START_BTN_W;
+    int x1 = sw - WM_POWER_BTN_W - WM_CLOCK_W;
+    if (n <= 0 || i < 0 || i >= n || x1 <= x0) return none;
+    int bw = (x1 - x0) / n;
+    if (bw > WM_WINBTN_MAX_W) bw = WM_WINBTN_MAX_W;
+    if (bw < WM_WINBTN_MIN_W) return none;
+    rect_t r = { x0 + i * bw + 2, sh - taskbar_h + 3, bw - 4, taskbar_h - 6 };
+    return r;
+}
+
+/* Index of the window-list button under (mx, my), or -1. */
+static inline int wm_winlist_hit(int mx, int my, int n, int sw, int sh,
+                                 int taskbar_h)
+{
+    for (int i = 0; i < n; i++)
+        if (wm_rect_contains(wm_winlist_btn_rect(i, n, sw, sh, taskbar_h),
+                             mx, my))
+            return i;
+    return -1;
+}
+
+/* Slots of the open windows in creation (id) order -- a stable taskbar
+ * order that raising or focusing doesn't shuffle.  Returns the count. */
+static inline int wm_winlist(const wm_state_t *s, int out[WM_MAX_WINDOWS])
+{
+    int n = 0;
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        if (s->windows[i].id == 0) continue;
+        int j = n++;
+        while (j > 0 && s->windows[out[j - 1]].id > s->windows[i].id) {
+            out[j] = out[j - 1];
+            j--;
+        }
+        out[j] = i;
+    }
+    return n;
+}
+
+/* A click on a window's taskbar button: restore it if minimized, minimize
+ * it if it already has the focus, otherwise raise + focus it. */
+#define WM_WL_NONE       0
+#define WM_WL_RESTORED   1
+#define WM_WL_MINIMIZED  2
+#define WM_WL_FOCUSED    3
+static inline int wm_winlist_click(wm_state_t *s, int slot)
+{
+    if (slot < 0 || slot >= WM_MAX_WINDOWS) return WM_WL_NONE;
+    window_t *w = &s->windows[slot];
+    if (w->id == 0) return WM_WL_NONE;
+    if (w->minimized) { wm_unminimize(s, slot); return WM_WL_RESTORED; }
+    if (w->focused)   { wm_minimize(s, slot);   return WM_WL_MINIMIZED; }
+    wm_raise(s, slot);
+    wm_focus(s, slot);
+    return WM_WL_FOCUSED;
+}
+
+/* The text on a window's taskbar button: the title's last path component
+ * (a text viewer keeps the file's full path as its title). */
+static inline const char *wm_title_label(const char *title)
+{
+    const char *l = title;
+    for (const char *p = title; *p; p++)
+        if (*p == '/' && p[1]) l = p + 1;
+    return l;
+}
+
+/* "HH:MM" (UTC) for Unix time t, or "--:--" when the clock is unknown. */
+static inline void wm_format_hhmm(uint32_t t, char out[6])
+{
+    if (t == 0) {
+        out[0] = out[1] = out[3] = out[4] = '-';
+    } else {
+        uint32_t h = (t / 3600) % 24, m = (t / 60) % 60;
+        out[0] = (char)('0' + h / 10); out[1] = (char)('0' + h % 10);
+        out[3] = (char)('0' + m / 10); out[4] = (char)('0' + m % 10);
+    }
+    out[2] = ':';
+    out[5] = '\0';
+}
+
+/* The Apps menu: n items stacked just above the Apps button. */
+static inline rect_t wm_menu_rect(int n, int sh, int taskbar_h)
+{
+    int h = n * WM_MENU_ITEM_H + 4;
+    rect_t r = { 0, sh - taskbar_h - h, WM_MENU_W, h };
+    return r;
+}
+
+static inline rect_t wm_menu_item_rect(int i, int n, int sh, int taskbar_h)
+{
+    rect_t m = wm_menu_rect(n, sh, taskbar_h);
+    rect_t r = { m.x + 2, m.y + 2 + i * WM_MENU_ITEM_H, m.w - 4, WM_MENU_ITEM_H };
+    return r;
+}
+
+/* Index of the menu item under (mx, my), or -1. */
+static inline int wm_menu_hit(int mx, int my, int n, int sh, int taskbar_h)
+{
+    for (int i = 0; i < n; i++)
+        if (wm_rect_contains(wm_menu_item_rect(i, n, sh, taskbar_h), mx, my))
+            return i;
+    return -1;
+}
+
+/* Everything the taskbar shows, so the loop can tell (by hash) when it has
+ * to be repainted and the compositor can draw it. */
+typedef struct {
+    int         n;                          /* window buttons */
+    int         slot[WM_MAX_WINDOWS];
+    const char *label[WM_MAX_WINDOWS];
+    uint8_t     pressed[WM_MAX_WINDOWS];    /* focused window */
+    uint8_t     minimized[WM_MAX_WINDOWS];
+    int         start_down;                 /* Apps menu open */
+    char        clock[6];                   /* "HH:MM" */
+} wm_taskbar_view_t;
+
+static inline void wm_taskbar_view(const wm_state_t *s, int menu_open,
+                                   uint32_t now, wm_taskbar_view_t *v)
+{
+    v->n = wm_winlist(s, v->slot);
+    for (int i = 0; i < v->n; i++) {
+        const window_t *w = &s->windows[v->slot[i]];
+        v->label[i]     = wm_title_label(w->title);
+        v->pressed[i]   = (uint8_t)(w->focused && !w->minimized);
+        v->minimized[i] = (uint8_t)w->minimized;
+    }
+    v->start_down = menu_open ? 1 : 0;
+    wm_format_hhmm(now, v->clock);
+}
+
+/* FNV-1a over what the taskbar would draw: equal hashes = nothing to redo. */
+static inline uint32_t wm_taskbar_view_hash(const wm_taskbar_view_t *v)
+{
+    uint32_t h = 2166136261u;
+#define WM_FNV(b) (h = (h ^ (uint8_t)(b)) * 16777619u)
+    WM_FNV(v->n); WM_FNV(v->start_down);
+    for (int i = 0; i < 5; i++) WM_FNV(v->clock[i]);
+    for (int i = 0; i < v->n; i++) {
+        WM_FNV(v->slot[i]); WM_FNV(v->pressed[i]); WM_FNV(v->minimized[i]);
+        for (const char *p = v->label[i]; *p; p++) WM_FNV(*p);
+        WM_FNV(0);
+    }
+#undef WM_FNV
+    return h;
 }
 
 /* Dialog buttons, in content coordinates: 0 = "Power off", 1 = "Cancel",
@@ -1151,9 +1320,13 @@ void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip);
 void wm_draw_cursor(canvas_t *screen, int mx, int my);
 /* The 2-px resize outline (WM_OUTLINE_W) around full-window rect r. */
 void wm_draw_outline(canvas_t *screen, rect_t r);
-/* App buttons from the left, and the Power button at the right end. */
+/* The taskbar (ROADMAP3 18.4): Apps button, window list, tray clock, Power. */
 void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
-                     const char **labels, int nlabels, int btn_w);
+                     const wm_taskbar_view_t *v);
+/* The Apps menu (n labels) above the Apps button; `hover` item highlighted
+ * (-1 = none). */
+void wm_draw_menu(canvas_t *screen, int sh, int taskbar_h,
+                  const char *const *labels, int n, int hover);
 /* A raised, labelled button (taskbar and dialog buttons share the look). */
 void wm_draw_button(canvas_t *c, rect_t r, const char *label);
 

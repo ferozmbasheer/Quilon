@@ -66,7 +66,7 @@ build) real programs inside Quilon.
 
 **Order of work (2026-11):** 17.0.1 (keyboard, ✓ done) first — it unblocks typing
 code, Ctrl-C, and arrow keys for both the ports and the desktop. Then
-Section 18 (desktop polish; 18.1 + 18.2 + 18.3 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
+Section 18 (desktop polish; 18.1 – 18.4 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
 
 ---
 
@@ -115,8 +115,9 @@ the new 17.0 prerequisites — interleaved with Section 18, desktop polish.)*
 | Idle desktop (18.1) | `syscall.c` (`SYS_WAIT_INPUT`, `SYS_GFX_FLUSH_RECT`), `waitq.c`, `user/wm/` | ✓ Complete — WM sleeps until input/ticks, repaints + flushes only damage rects; idle desktop 100% → ~4% host CPU |
 | Richer input events (18.2) | `user/wm/wm_keys.h`, `user/wm/main.c`, `mouse.c`, `kbd_xlate.c` | ✓ Complete — keycode + mods, press/release/drag per button, scroll wheel, Alt-Tab / Alt-F4 |
 | Window operations (18.3) | `user/wm/wm.h`, `user/wm/main.c`, `wm_compositor.c`, `user/gterm/gterm.h` | ✓ Complete — grip resize (outline drag), maximize/restore (button + title double-click), minimize (Alt-Tab restores), cascade placement, new windows focused |
+| Taskbar (18.4) | `user/wm/wm.h`, `user/wm/main.c`, `wm_compositor.c`, `kernel/kernel/rtc.c` (`SYS_GETTIME` 61) | ✓ Complete — Apps menu (from `g_apps[]`), window list (focus / minimize / restore), tray clock from the CMOS RTC (UTC); a window slot is kept for the Power dialog |
 | Power off | `arch/i386/power.c`, `SYS_POWEROFF` (60), `user/wm/power_app.c` | ✓ `poweroff` in both shells + a taskbar Power button with a confirm dialog (emulator PM ports; no ACPI table parsing yet) |
-| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (27 checks) + `wmtest` (desktop) + `kbdtest` (keyboard) + `termtest` + `powertest` + `eventtest` |
+| In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (29 checks) + `wmtest` (desktop) + `kbdtest` (keyboard) + `termtest` + `powertest` + `eventtest` |
 
 ---
 
@@ -1910,6 +1911,43 @@ cascade placement, minimize/z-order invariants (all pure `wm.h` logic); extend
 `make wmtest` with a resize and a minimize/restore.
 
 ### 18.4 Taskbar: Window List and Tray
+
+> **✓ Done (2026-11-12).** As built:
+> - **Layout** (`wm.h`, pure + host-tested): Apps button at the left, then
+>   one button per open window sharing the strip up to the tray (at most
+>   `WM_WINBTN_MAX_W` = 160 px each; dropped rather than overlapped when
+>   narrower than 24 px), the tray clock, the Power button.
+> - **Apps menu.** The Apps button toggles a menu of `g_apps[]` just above
+>   it, drawn as an overlay in the damage loop with a hover highlight.  An
+>   item launches its app; a click elsewhere (or Esc) closes it, and that
+>   click still goes through normally.  The fixed launcher buttons are gone.
+>   (Directory-of-`.elf`s menu: later.)
+> - **Window list.** Buttons in creation (id) order (`wm_winlist`), so
+>   raising doesn't shuffle them.  The focused window's button is pressed in, and a
+>   minimized one's label is dimmed.  The label is the title's last path component
+>   (textview titles are full paths).  `wm_winlist_click`: minimized →
+>   restore; focused → minimize; otherwise raise + focus.
+> - **Tray clock** `HH:MM`, **UTC** (QEMU's RTC default).  New kernel
+>   `kernel/kernel/rtc.c`: CMOS read (UIP wait, two matching passes,
+>   `rtc_lock` irqsave), BCD/binary and 12/24-hour decoding, days-from-civil
+>   → Unix seconds; **`SYS_GETTIME` (61)** → `gettime()`.  The WM reads it
+>   once a minute and interpolates with PIT ticks in between; the loop's
+>   `wait_input` timeout includes the next minute boundary, so the idle
+>   desktop still sleeps.  Network status / free memory: not done (optional).
+> - **Repaint.** Each iteration builds a `wm_taskbar_view_t` (what the bar
+>   shows) and hashes it; the taskbar is damaged only when the hash changes.
+> - **Reserved slot.** App/textview windows use `wm_create_app_window`, which
+>   stops `WM_RESERVED_SLOTS` (1) short of `WM_MAX_WINDOWS` (16), so the
+>   Power dialog can always open.
+> - **Tests.** `test_rtc.c` (BCD/binary × 12/24 h, garbage, epoch maths);
+>   `test_wm.c`: taskbar/menu layout, window-list order and click
+>   semantics, view hash (minute, focus, menu), pixels of the drawn bar and
+>   menu.  ktest: `gettime()` is plausible and advances.  The headless tests
+>   now open apps through the menu (`OPEN_TERM` / `OPEN_CLOCK` in the
+>   Makefile).  `make wmtest` has a third boot: Terminal + Clock, then the
+>   Terminal's taskbar button focuses, minimizes and restores it.
+
+Original plan:
 
 **Today:** the taskbar is three fixed launcher buttons.
 

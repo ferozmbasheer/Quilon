@@ -621,6 +621,15 @@ poweroff:
     int   $0x80
 1:  jmp   1b                /* unreachable */
 
+/* -- Wall clock ------------------------------------------------------------ */
+
+/* gettime() -> Unix seconds (UTC), 0 if unavailable             SYS_GETTIME (61) */
+.global gettime
+gettime:
+    movl  $61, %eax
+    int   $0x80
+    ret
+
 /* -- _pthread_trampoline -- ring-3 entry point for new pthreads ------------ */
 /* Entered via iret from SYS_CLONE.  esp = clone_stack (no prologue).        */
 /* pthread_create prepares the stack so:                                      */

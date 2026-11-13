@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm $(BINDIR)/test_ata_dma $(BINDIR)/test_ext2 $(BINDIR)/test_addrspace $(BINDIR)/test_kbd
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm $(BINDIR)/test_ata_dma $(BINDIR)/test_ext2 $(BINDIR)/test_addrspace $(BINDIR)/test_kbd $(BINDIR)/test_rtc
 
 .PHONY: all build run clean help
 
@@ -420,6 +420,11 @@ $(BINDIR)/test_ata_dma: test_ata_dma.c framework.h ../kernel/include/kernel/ata_
 $(BINDIR)/test_kbd: test_kbd.c framework.h ../kernel/kernel/kbd_xlate.c \
                     ../kernel/include/kernel/kbd_xlate.h
 	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_kbd.c ../kernel/kernel/kbd_xlate.c
+
+# CMOS RTC decoding + Unix-time maths (ROADMAP3 18.4) -- the pure half of rtc.c.
+$(BINDIR)/test_rtc: test_rtc.c framework.h ../kernel/kernel/rtc.c \
+                    ../kernel/include/kernel/rtc.h
+	$(CC) $(CFLAGS) $(KERNEL_INCLUDES) -o $@ test_rtc.c ../kernel/kernel/rtc.c
 
 # ── Cleanup ────────────────────────────────────────────────────────────────
 

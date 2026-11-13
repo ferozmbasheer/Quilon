@@ -580,6 +580,22 @@ static void test_wait_input(void)
            k == 0 && wait_code(sl) == -SIGTERM);
 }
 
+/*
+ * ROADMAP3 18.4 -- gettime() reads the CMOS RTC.  It must return a sane date
+ * (after 2020-01-01, before 2100), and advance with the PIT: ~2 s later it
+ * reads 1..4 s more (the RTC ticks on whole seconds).
+ */
+static void test_gettime(void)
+{
+    unsigned t0 = gettime();
+    sleep_ms(2000);
+    unsigned t1 = gettime();
+    printf("ktest: gettime %u -> %u\r\n", t0, t1);
+    report("gettime() returns a plausible date",
+           t0 >= 1577836800u && t0 < 4102444800u);
+    report("gettime() advances with real time", t1 - t0 >= 1 && t1 - t0 <= 4);
+}
+
 int main(void)
 {
     printf("ktest: kernel regression tests\r\n");
@@ -596,6 +612,7 @@ int main(void)
     test_ctrl_c_foreground_job();
     test_wait_input();
     test_wait_survives_sibling_fault();
+    test_gettime();
 
     if (failures == 0) printf("KTEST: ALL PASS\r\n");
     else               printf("KTEST: %d FAILED\r\n", failures);

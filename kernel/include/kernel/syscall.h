@@ -78,6 +78,9 @@
 /* Power (shell `poweroff`, desktop Power button) */
 #define SYS_POWEROFF   60 /* poweroff() -> never returns                              */
 
+/* Wall clock (taskbar tray clock, ROADMAP3 18.4) */
+#define SYS_GETTIME    61 /* gettime() -> Unix seconds (UTC) from the CMOS RTC, 0 = n/a */
+
 /* SYS_WAIT_INPUT result bits (0 = timed out or interrupted by a signal).
  * Keep in sync with user/libc/include/unistd.h. */
 #define WAIT_INPUT_KBD      0x001u          /* fd 0 has input (kbd or pipe) */

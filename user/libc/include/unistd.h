@@ -200,6 +200,11 @@ int wait_input(int timeout_ms, const int *fds, int nfds);
 #define SYS_POWEROFF        60
 void poweroff(void) __attribute__((noreturn));
 
+/* gettime -- wall-clock time from the CMOS RTC as Unix seconds (UTC), or 0
+ * if the clock can't be read.  SYS_GETTIME (61). */
+#define SYS_GETTIME         61
+unsigned int gettime(void);
+
 #define MOUSE_BTN_LEFT   0x01
 #define MOUSE_BTN_RIGHT  0x02
 #define MOUSE_BTN_MIDDLE 0x04

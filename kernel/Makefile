@@ -33,6 +33,7 @@ kernel/kernel.o \
 kernel/kmalloc.o \
 kernel/keyboard.o \
 kernel/kbd_xlate.o \
+kernel/rtc.o \
 kernel/waitq.o \
 kernel/shell.o \
 kernel/scheduler.o \

@@ -922,29 +922,197 @@ static void test_tick_scheduling(void)
 
 static void test_power_button_layout(void)
 {
-    const int sw = 800, sh = 600, th = 28, bw = 110;
+    const int sw = 800, sh = 600, th = 28;
     rect_t p = wm_taskbar_power_rect(sw, sh, th);
     ASSERT(p.x + p.w <= sw && p.x >= sw - WM_POWER_BTN_W,
            "Power button sits at the right end of the taskbar");
     ASSERT(p.y >= sh - th && p.y + p.h <= sh, "Power button inside the taskbar");
-
-    ASSERT_EQ(wm_taskbar_app_hit(5, sh - 10, sw, sh, th, 3, bw), 0, "first app");
-    ASSERT_EQ(wm_taskbar_app_hit(2 * bw + 1, sh - 10, sw, sh, th, 3, bw), 2,
-              "third app");
-    ASSERT_EQ(wm_taskbar_app_hit(3 * bw + 1, sh - 10, sw, sh, th, 3, bw), -1,
-              "past the last app: nothing");
-    ASSERT_EQ(wm_taskbar_app_hit(5, sh - th - 1, sw, sh, th, 3, bw), -1,
-              "above the taskbar: nothing");
-    ASSERT_EQ(wm_taskbar_app_hit(p.x + 1, p.y + 1, sw, sh, th, 3, bw), -1,
-              "the Power button is not an app button");
     ASSERT(wm_rect_contains(p, p.x + 1, p.y + 1), "Power button hit");
+}
 
-    /* A screen so narrow the Power button overlaps app buttons: the covered
-     * ones are not clickable (and not drawn), so a click never does both. */
-    int narrow = 3 * bw;
-    rect_t pn = wm_taskbar_power_rect(narrow, sh, th);
-    ASSERT_EQ(wm_taskbar_app_hit(pn.x + 1, sh - 10, narrow, sh, th, 3, bw), -1,
-              "app button under the Power button doesn't fire");
+/* -- Taskbar: Apps menu, window list, tray (ROADMAP3 18.4) ----------------- */
+
+static void test_taskbar_layout(void)
+{
+    const int sw = 1280, sh = 800, th = 28;
+    rect_t st = wm_taskbar_start_rect(sh, th);
+    rect_t ck = wm_taskbar_clock_rect(sw, sh, th);
+    rect_t pw = wm_taskbar_power_rect(sw, sh, th);
+    ASSERT(st.x >= 0 && st.x + st.w <= WM_START_BTN_W, "Apps button at the left");
+    ASSERT(ck.x + ck.w <= pw.x, "clock left of Power");
+    ASSERT(!wm_rect_intersects(st, ck), "Apps and clock apart");
+
+    /* Window buttons: inside the strip, in order, never overlapping the
+     * Apps button or the tray, capped width with few windows. */
+    for (int n = 1; n <= WM_MAX_WINDOWS; n++) {
+        int ok = 1;
+        for (int i = 0; i < n; i++) {
+            rect_t r = wm_winlist_btn_rect(i, n, sw, sh, th);
+            if (r.w <= 0 || r.w > WM_WINBTN_MAX_W) ok = 0;
+            if (wm_rect_intersects(r, st) || wm_rect_intersects(r, ck) ||
+                wm_rect_intersects(r, pw)) ok = 0;
+            if (i > 0 && wm_rect_intersects(r, wm_winlist_btn_rect(i - 1, n, sw, sh, th)))
+                ok = 0;
+            if (r.y < sh - th || r.y + r.h > sh) ok = 0;
+            if (wm_winlist_hit(r.x + 1, r.y + 1, n, sw, sh, th) != i) ok = 0;
+        }
+        ASSERT(ok, "n window buttons laid out");
+    }
+    ASSERT_EQ(wm_winlist_hit(st.x + 1, st.y + 1, 3, sw, sh, th), -1,
+              "the Apps button is not a window button");
+    ASSERT_EQ(wm_winlist_hit(ck.x + 1, ck.y + 1, 3, sw, sh, th), -1,
+              "the clock is not a window button");
+    ASSERT_EQ(wm_winlist_hit(100, sh - th - 1, 3, sw, sh, th), -1,
+              "above the taskbar: nothing");
+
+    /* A screen too narrow to share out: buttons vanish rather than overlap. */
+    rect_t tiny = wm_winlist_btn_rect(0, WM_MAX_WINDOWS, 300, sh, th);
+    ASSERT_EQ(tiny.w, 0, "no room: empty rect");
+    ASSERT_EQ(wm_winlist_hit(100, sh - 10, WM_MAX_WINDOWS, 300, sh, th), -1,
+              "no room: no hit");
+}
+
+static void test_menu_layout(void)
+{
+    const int sh = 800, th = 28, n = 3;
+    rect_t m = wm_menu_rect(n, sh, th);
+    ASSERT_EQ(m.y + m.h, sh - th, "menu sits right on the taskbar");
+    ASSERT_EQ(m.x, 0, "menu at the left (above Apps)");
+    for (int i = 0; i < n; i++) {
+        rect_t r = wm_menu_item_rect(i, n, sh, th);
+        ASSERT(r.y >= m.y && r.y + r.h <= m.y + m.h, "item inside the menu");
+        ASSERT_EQ(wm_menu_hit(r.x + 5, r.y + r.h / 2, n, sh, th), i, "item hit");
+    }
+    ASSERT_EQ(wm_menu_hit(5, m.y - 1, n, sh, th), -1, "above the menu");
+    ASSERT_EQ(wm_menu_hit(m.w + 1, m.y + 5, n, sh, th), -1, "right of the menu");
+    /* The headless tests click Terminal at (60,715) on 1280x800. */
+    ASSERT_EQ(wm_menu_hit(60, 715, n, 800, 28), 0, "Terminal item at (60,715)");
+}
+
+static void test_winlist_order_and_click(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 572);
+    int a = wm_create_window(&s, "A", 10, 30, 100, 80);
+    int b = wm_create_window(&s, "B", 40, 60, 100, 80);
+    int c = wm_create_window(&s, "C", 70, 90, 100, 80);
+    int ia = wm_find_idx(&s, a), ib = wm_find_idx(&s, b), ic = wm_find_idx(&s, c);
+    wm_focus(&s, ic);
+
+    /* Free slot 0 and reuse it: the list stays in creation order. */
+    wm_destroy_window(&s, a);
+    int d = wm_create_window(&s, "D", 10, 30, 100, 80);
+    int id_ = wm_find_idx(&s, d);
+    ASSERT_EQ(id_, ia, "D reuses A's slot");
+    int slots[WM_MAX_WINDOWS];
+    int n = wm_winlist(&s, slots);
+    ASSERT_EQ(n, 3, "three buttons");
+    ASSERT(slots[0] == ib && slots[1] == ic && slots[2] == id_,
+           "creation order B, C, D (not slot order)");
+    wm_raise(&s, ib);
+    wm_winlist(&s, slots);
+    ASSERT(slots[0] == ib && slots[1] == ic, "raising doesn't reorder the list");
+
+    /* Click an unfocused window: raise + focus. */
+    wm_focus(&s, ic);
+    ASSERT_EQ(wm_winlist_click(&s, ib), WM_WL_FOCUSED, "unfocused -> focused");
+    ASSERT(s.windows[ib].focused, "B focused");
+    ASSERT_EQ(s.z_order[s.num_windows - 1], ib, "B frontmost");
+
+    /* Click it again: minimized, focus moves on. */
+    ASSERT_EQ(wm_winlist_click(&s, ib), WM_WL_MINIMIZED, "focused -> minimized");
+    ASSERT(s.windows[ib].minimized && !s.windows[ib].focused, "B hidden");
+    ASSERT(s.windows[ic].focused || s.windows[id_].focused, "focus moved on");
+
+    /* And again: restored, raised and focused. */
+    ASSERT_EQ(wm_winlist_click(&s, ib), WM_WL_RESTORED, "minimized -> restored");
+    ASSERT(!s.windows[ib].minimized && s.windows[ib].focused, "B back + focused");
+    ASSERT_EQ(s.z_order[s.num_windows - 1], ib, "B frontmost again");
+
+    ASSERT_EQ(wm_winlist_click(&s, -1), WM_WL_NONE, "bad slot");
+}
+
+static void test_taskbar_view(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 572);
+    int a = wm_create_window(&s, "/docs/readme.txt", 10, 30, 100, 80);
+    int b = wm_create_window(&s, "Terminal", 40, 60, 100, 80);
+    wm_focus(&s, wm_find_idx(&s, b));
+
+    wm_taskbar_view_t v;
+    wm_taskbar_view(&s, 0, 1794520025u, &v);         /* 2026-11-12 21:47:05 */
+    ASSERT_EQ(v.n, 2, "two buttons");
+    ASSERT_STR_EQ(v.label[0], "readme.txt", "path title shows its basename");
+    ASSERT_STR_EQ(v.label[1], "Terminal", "plain title");
+    ASSERT(!v.pressed[0] && v.pressed[1], "focused window pressed in");
+    ASSERT_STR_EQ(v.clock, "21:47", "tray clock HH:MM");
+    uint32_t h0 = wm_taskbar_view_hash(&v);
+
+    wm_taskbar_view(&s, 0, 1794520025u + 30, &v);
+    ASSERT_EQ(wm_taskbar_view_hash(&v), h0, "same minute: no repaint");
+    wm_taskbar_view(&s, 0, 1794520025u + 60, &v);
+    ASSERT(wm_taskbar_view_hash(&v) != h0, "new minute: repaint");
+    wm_taskbar_view(&s, 1, 1794520025u, &v);
+    ASSERT(wm_taskbar_view_hash(&v) != h0, "menu opened: repaint");
+    wm_focus(&s, wm_find_idx(&s, a));
+    wm_taskbar_view(&s, 0, 1794520025u, &v);
+    ASSERT(wm_taskbar_view_hash(&v) != h0, "focus change: repaint");
+    wm_minimize(&s, wm_find_idx(&s, a));
+    wm_taskbar_view(&s, 0, 1794520025u, &v);
+    ASSERT(v.minimized[0] && !v.pressed[0], "minimized: dim, not pressed");
+
+    char hm[6];
+    wm_format_hhmm(0, hm);
+    ASSERT_STR_EQ(hm, "--:--", "no RTC: dashes");
+    wm_format_hhmm(59, hm);
+    ASSERT_STR_EQ(hm, "00:00", "epoch");
+    ASSERT_STR_EQ(wm_title_label("dir/"), "dir/", "trailing slash kept");
+}
+
+/* The taskbar draws its parts where the layout says: the focused window's
+ * button is pressed (lighter fill), others raised; the clock text lands in
+ * the clock box. */
+static void test_taskbar_draw(void)
+{
+    const int sw = 640, sh = 200, th = 28;
+    canvas_t *c = canvas_create(sw, sh);
+    wm_state_t s;
+    wm_state_init(&s, sw, sh - th);
+    wm_create_window(&s, "One", 10, 30, 100, 80);
+    int b = wm_create_window(&s, "Two", 40, 60, 100, 80);
+    wm_focus(&s, wm_find_idx(&s, b));
+    wm_taskbar_view_t v;
+    wm_taskbar_view(&s, 0, 1794520025u, &v);
+    wm_draw_taskbar(c, sw, sh, th, &v);
+
+    rect_t r0 = wm_winlist_btn_rect(0, 2, sw, sh, th);
+    rect_t r1 = wm_winlist_btn_rect(1, 2, sw, sh, th);
+    /* Sample the fill just inside the right end (past any label text). */
+    ASSERT_EQ(pixel_at(c, r0.x + r0.w - 4, r0.y + 4), WM_TASKBTN_COL,
+              "unfocused window button raised fill");
+    ASSERT_EQ(pixel_at(c, r1.x + r1.w - 4, r1.y + 4), WM_TASKBTN_DOWN,
+              "focused window button pressed fill");
+    ASSERT_EQ(pixel_at(c, r1.x, r1.y), WM_FRAME_SHADOW,
+              "pressed button: dark top-left edge");
+
+    rect_t ck = wm_taskbar_clock_rect(sw, sh, th);
+    int dark = 0;
+    for (int y = ck.y + 2; y < ck.y + ck.h - 2; y++)
+        for (int x = ck.x + 2; x < ck.x + ck.w - 2; x++)
+            if (pixel_at(c, x, y) == WM_TASKBTN_TEXT) dark++;
+    ASSERT(dark > 20, "clock text drawn in its box");
+
+    /* Menu: hovered item takes the title-bar colour. */
+    const char *labels[] = { "Terminal", "Clock", "Files" };
+    wm_draw_menu(c, sh, th, labels, 3, 1);
+    rect_t it = wm_menu_item_rect(1, 3, sh, th);
+    rect_t i0 = wm_menu_item_rect(0, 3, sh, th);
+    ASSERT_EQ(pixel_at(c, it.x + it.w - 3, it.y + 2), WM_TBAR_FOCUSED,
+              "hovered item highlighted");
+    ASSERT_EQ(pixel_at(c, i0.x + i0.w - 3, i0.y + 2), WM_FRAME_BASE,
+              "other items plain");
+    canvas_free(c);
 }
 
 static void test_power_dialog_buttons(void)
@@ -1508,6 +1676,11 @@ int main(void)
     RUN_SUITE(test_tick_scheduling);
     RUN_SUITE(test_power_button_layout);
     RUN_SUITE(test_power_dialog_buttons);
+    RUN_SUITE(test_taskbar_layout);
+    RUN_SUITE(test_menu_layout);
+    RUN_SUITE(test_winlist_order_and_click);
+    RUN_SUITE(test_taskbar_view);
+    RUN_SUITE(test_taskbar_draw);
     RUN_SUITE(test_key_plain_and_control);
     RUN_SUITE(test_key_escape_sequences);
     RUN_SUITE(test_key_modifiers);

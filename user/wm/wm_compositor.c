@@ -262,12 +262,37 @@ void wm_composite(wm_state_t *s, canvas_t *screen)
         wm_draw_outline(screen, wm_resize_outline(s));
 }
 
-/* ── Taskbar ─────────────────────────────────────────────────────────────── */
+/* ── Taskbar (ROADMAP3 18.4) ─────────────────────────────────────────────── */
+
+/* A taskbar/dialog button: raised, or sunken with the label nudged 1 px when
+ * pressed.  The label is centred, or left-aligned (window list), and cut
+ * with ".." to fit. */
+static void draw_button(canvas_t *c, rect_t r, const char *label,
+                        int pressed, color_t text, int centre)
+{
+    if (r.w <= 0 || r.h <= 0) return;
+    gfx_fill_rect(c, r, pressed ? WM_TASKBTN_DOWN : WM_TASKBTN_COL);
+    if (pressed) sunken_bevel(c, r.x, r.y, r.w, r.h);
+    else         raised_bevel(c, r.x, r.y, r.w, r.h);
+
+    char buf[WM_TITLE_LEN];
+    int max = (r.w - 12) / GFX_CHAR_W, len = 0;
+    if (max <= 0) return;
+    if (max > WM_TITLE_LEN - 1) max = WM_TITLE_LEN - 1;
+    while (label[len] && len < max) { buf[len] = label[len]; len++; }
+    if (label[len] && len >= 3) buf[len - 1] = buf[len - 2] = '.';
+    buf[len] = '\0';
+
+    int lx = centre ? r.x + (r.w - len * GFX_CHAR_W) / 2 : r.x + 6;
+    if (lx < r.x + 6) lx = r.x + 6;
+    int ly = r.y + (r.h - GFX_CHAR_H) / 2;
+    if (pressed) { lx++; ly++; }
+    gfx_draw_text(c, lx, ly, buf, text, pressed ? WM_TASKBTN_DOWN : WM_TASKBTN_COL);
+}
 
 void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
-                     const char **labels, int nlabels, int btn_w)
+                     const wm_taskbar_view_t *v)
 {
-    int i;
     int ty = sh - taskbar_h;
 
     /* Light gray bar background. */
@@ -277,28 +302,46 @@ void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
     gfx_fill_rect(screen, (rect_t){0, ty,   sw, 1}, WM_FRAME_SHADOW);
     gfx_fill_rect(screen, (rect_t){0, ty+1, sw, 1}, WM_FRAME_HI);
 
-    /* Raised app buttons (skipping any the Power button would cover). */
-    for (i = 0; i < nlabels; i++) {
-        if ((i + 1) * btn_w > sw - WM_POWER_BTN_W) break;
-        wm_draw_button(screen,
-                       (rect_t){ i * btn_w + 2, ty + 3, btn_w - 4, taskbar_h - 6 },
-                       labels[i]);
-    }
+    /* Apps button: held down while its menu is open. */
+    draw_button(screen, wm_taskbar_start_rect(sh, taskbar_h), WM_START_LABEL,
+                v->start_down, WM_TASKBTN_TEXT, 1);
+
+    /* One button per window; the focused one pressed in, minimized ones
+     * dimmed. */
+    for (int i = 0; i < v->n; i++)
+        draw_button(screen, wm_winlist_btn_rect(i, v->n, sw, sh, taskbar_h),
+                    v->label[i], v->pressed[i],
+                    v->minimized[i] ? WM_TASKBTN_DIM : WM_TASKBTN_TEXT, 0);
+
+    /* Tray clock: sunken, like a status field. */
+    rect_t cr = wm_taskbar_clock_rect(sw, sh, taskbar_h);
+    sunken_bevel(screen, cr.x, cr.y, cr.w, cr.h);
+    gfx_draw_text(screen, cr.x + (cr.w - 5 * GFX_CHAR_W) / 2,
+                  cr.y + (cr.h - GFX_CHAR_H) / 2, v->clock,
+                  WM_TASKBTN_TEXT, WM_TASKBAR_COL);
 
     /* Power button, right-aligned. */
-    wm_draw_button(screen, wm_taskbar_power_rect(sw, sh, taskbar_h),
-                   WM_POWER_LABEL);
+    draw_button(screen, wm_taskbar_power_rect(sw, sh, taskbar_h),
+                WM_POWER_LABEL, 0, WM_TASKBTN_TEXT, 1);
+}
+
+void wm_draw_menu(canvas_t *screen, int sh, int taskbar_h,
+                  const char *const *labels, int n, int hover)
+{
+    rect_t m = wm_menu_rect(n, sh, taskbar_h);
+    gfx_fill_rect(screen, m, WM_FRAME_BASE);
+    raised_bevel(screen, m.x, m.y, m.w, m.h);
+    for (int i = 0; i < n; i++) {
+        rect_t r = wm_menu_item_rect(i, n, sh, taskbar_h);
+        color_t bg = (i == hover) ? WM_TBAR_FOCUSED : WM_FRAME_BASE;
+        color_t fg = (i == hover) ? WM_TBAR_TEXT_COL : WM_TASKBTN_TEXT;
+        gfx_fill_rect(screen, r, bg);
+        gfx_draw_text(screen, r.x + 10, r.y + (r.h - GFX_CHAR_H) / 2,
+                      labels[i], fg, bg);
+    }
 }
 
 void wm_draw_button(canvas_t *c, rect_t r, const char *label)
 {
-    gfx_fill_rect(c, r, WM_TASKBTN_COL);
-    raised_bevel(c, r.x, r.y, r.w, r.h);
-    /* Label: centred (at least 6 px from the left edge). */
-    int len = 0;
-    while (label[len]) len++;
-    int lx = r.x + (r.w - len * GFX_CHAR_W) / 2;
-    if (lx < r.x + 6) lx = r.x + 6;
-    gfx_draw_text(c, lx, r.y + (r.h - GFX_CHAR_H) / 2,
-                  label, WM_TASKBTN_TEXT, WM_TASKBTN_COL);
+    draw_button(c, r, label, 0, WM_TASKBTN_TEXT, 1);
 }

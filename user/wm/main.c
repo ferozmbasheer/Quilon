@@ -13,7 +13,8 @@
  *   0. wait_input(): sleep until the keyboard, the mouse, a watched fd (a
  *      terminal's shell pipe) has input, or the next timed app tick is due
  *   1. read the mouse                       -> raise/focus/drag/close,
- *                                              taskbar apps + Power button;
+ *                                              taskbar: Apps menu, window
+ *                                              list, Power button (18.4);
  *                                              per-button press/release, drag
  *                                              motion and wheel to apps (18.2)
  *   2. drain + decode the keyboard          -> Alt-Tab / Alt-F4, else a key
@@ -22,7 +23,7 @@
  *   4. destroy windows that requested close (want_close)
  *   4b. give resized windows a new backbuf + WM_EV_RESIZE (18.3)
  *   5. recomposite + flush ONLY the damaged screen rects (cursor, moved or
- *      dirty windows, taskbar)
+ *      dirty windows, the taskbar when what it shows changed, the menu)
  *
  * Apps must never block.  Anything that would block (a terminal reading its
  * shell's pipe) is done with a non-blocking poll inside on_tick.
@@ -64,7 +65,9 @@ static const app_entry_t g_apps[] = {
 #define G_NOAPPS  ((int)(sizeof g_apps / sizeof g_apps[0]))
 
 #define TASKBAR_H    28
-#define TASKBAR_BTN_W 110
+
+/* The app table's labels, for the Apps menu. */
+static const char *g_app_labels[G_NOAPPS];
 
 /* ── Global WM state (single-threaded; only the loop touches it) ─────────── */
 
@@ -77,6 +80,10 @@ static int         g_poweroff;   /* set by the power dialog: off after flush */
 static int         g_power_win;  /* id of the open power dialog, 0 = none   */
 
 void wm_request_poweroff(void) { g_poweroff = 1; }
+
+/* Apps menu (ROADMAP3 18.4). */
+static int         g_menu_open;
+static int         g_menu_hover = -1;  /* item under the cursor, -1 = none */
 
 /* Mark a window's whole on-screen footprint (chrome + content) damaged.
  * A minimized window has none. */
@@ -101,6 +108,47 @@ static void focus_new(window_t *w)
     damage_window(focused_window());          /* old focus loses its title */
     wm_focus(&g_wm, wm_find_idx(&g_wm, w->id));
     w->dirty = 1;
+}
+
+/* ── Apps menu (ROADMAP3 18.4) ───────────────────────────────────────────── */
+
+static void damage_menu(void)
+{
+    wm_damage_add(&g_damage, wm_menu_rect(G_NOAPPS, g_sh, TASKBAR_H));
+}
+
+static void menu_set_open(int open)
+{
+    if (g_menu_open == open) return;
+    g_menu_open  = open;
+    g_menu_hover = -1;
+    damage_menu();          /* the taskbar repaints itself (Apps pressed) */
+}
+
+/* ── Wall clock for the tray ──────────────────────────────────────────────
+ * The RTC is read once a minute; in between the time is the last reading
+ * plus PIT ticks, so the loop never does CMOS port I/O per event. */
+static uint32_t g_rtc0, g_rtc_tick0;
+
+static void clock_sync(void)
+{
+    g_rtc0      = gettime();
+    g_rtc_tick0 = getticks();
+}
+
+static uint32_t clock_now(uint32_t hz)
+{
+    if (!g_rtc0 || !hz) return 0;
+    return g_rtc0 + (getticks() - g_rtc_tick0) / hz;
+}
+
+/* Milliseconds until the tray clock's minute changes, or -1 (no clock). */
+static int clock_timeout_ms(uint32_t hz)
+{
+    if (!g_rtc0 || !hz) return -1;
+    uint32_t per   = 60u * hz;
+    uint32_t phase = (g_rtc0 % 60u) * hz + (getticks() - g_rtc_tick0);
+    return (int)((per - phase % per) * 1000u / hz) + 1;
 }
 
 /* ── Launch an app in a new window ───────────────────────────────────────── */
@@ -225,6 +273,11 @@ static void handle_key(const wm_key_t *k)
 {
     window_t *f = focused_window();
 
+    if (g_menu_open && k->keycode == WM_KEY_ESC) {      /* close the menu */
+        menu_set_open(0);
+        return;
+    }
+
     if (k->keycode == WM_KEY_TAB && k->mods == WM_MOD_ALT) {   /* Alt-Tab */
         damage_window(f);
         int back = g_wm.num_windows > 0 ? g_wm.z_order[0] : -1;
@@ -298,20 +351,58 @@ static void send_mouse(window_t *w, wm_ev_type_t type, int mx, int my,
     w->on_event(w, &ev);
 }
 
-static void mouse_press(int mx, int my, uint8_t button, uint8_t buttons,
-                        const char **labels)
+/* A click on window-list button `idx`: restore / minimize / raise+focus. */
+static void winlist_click(int idx)
 {
-    (void)labels;
-    if (my >= g_sh - TASKBAR_H) {
-        if (button != MOUSE_BTN_LEFT) return;
-        int idx = wm_taskbar_app_hit(mx, my, g_sw, g_sh, TASKBAR_H,
-                                     G_NOAPPS, TASKBAR_BTN_W);
-        if (idx >= 0)
-            wm_launch(idx);             /* new window is dirty -> damaged */
-        else if (wm_rect_contains(wm_taskbar_power_rect(g_sw, g_sh, TASKBAR_H),
-                                  mx, my))
-            wm_open_power_dialog();
+    int slots[WM_MAX_WINDOWS];
+    int n = wm_winlist(&g_wm, slots);
+    if (idx < 0 || idx >= n) return;
+    window_t *w = &g_wm.windows[slots[idx]];
+    damage_window(focused_window());
+    damage_window(w);
+    int what = wm_winlist_click(&g_wm, slots[idx]);
+    damage_window(w);
+    damage_window(focused_window());
+    if (what == WM_WL_MINIMIZED)
+        printf("[wm] minimized '%s'\r\n", w->title);
+    else if (what == WM_WL_RESTORED)
+        printf("[wm] restored '%s'\r\n", w->title);
+}
+
+/* The taskbar: Apps button, window list, Power button.  Left button only. */
+static void taskbar_press(int mx, int my)
+{
+    if (wm_rect_contains(wm_taskbar_start_rect(g_sh, TASKBAR_H), mx, my)) {
+        menu_set_open(!g_menu_open);
         return;
+    }
+    menu_set_open(0);
+    int slots[WM_MAX_WINDOWS];
+    int n   = wm_winlist(&g_wm, slots);
+    int idx = wm_winlist_hit(mx, my, n, g_sw, g_sh, TASKBAR_H);
+    if (idx >= 0)
+        winlist_click(idx);
+    else if (wm_rect_contains(wm_taskbar_power_rect(g_sw, g_sh, TASKBAR_H),
+                              mx, my))
+        wm_open_power_dialog();
+}
+
+static void mouse_press(int mx, int my, uint8_t button, uint8_t buttons)
+{
+    if (my >= g_sh - TASKBAR_H) {
+        if (button == MOUSE_BTN_LEFT) taskbar_press(mx, my);
+        return;
+    }
+
+    /* An open Apps menu takes the click: an item launches its app; anywhere
+     * else just closes the menu and the click carries on as usual. */
+    if (g_menu_open) {
+        int item = wm_menu_hit(mx, my, G_NOAPPS, g_sh, TASKBAR_H);
+        int on_menu = wm_rect_contains(wm_menu_rect(G_NOAPPS, g_sh, TASKBAR_H),
+                                       mx, my);
+        menu_set_open(0);
+        if (item >= 0 && button == MOUSE_BTN_LEFT) wm_launch(item);
+        if (on_menu) return;
     }
 
     int hit = wm_hittest(&g_wm, mx, my);
@@ -456,10 +547,13 @@ int main(void)
     const uint32_t hz = gethz();
     g_hz = hz;
 
-    /* 3. Build the static label array for wm_draw_taskbar. */
-    const char *labels[G_NOAPPS];
+    /* 3. The Apps menu's labels; the tray clock's first reading. */
     int i;
-    for (i = 0; i < G_NOAPPS; i++) labels[i] = g_apps[i].label;
+    for (i = 0; i < G_NOAPPS; i++) g_app_labels[i] = g_apps[i].label;
+    clock_sync();
+    wm_taskbar_view_t tb;
+    wm_taskbar_view(&g_wm, g_menu_open, clock_now(hz), &tb);
+    uint32_t tb_hash = wm_taskbar_view_hash(&tb);
 
     /* 4. Initial frame: desktop + taskbar + cursor (cursor last = on top).
      *    Reading the mouse first also syncs the kernel's "mouse seen" mark,
@@ -469,8 +563,7 @@ int main(void)
     g_wm.mouse_x = prev.x;
     g_wm.mouse_y = prev.y;
     wm_composite(&g_wm, g_screen);
-    wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
-                    labels, G_NOAPPS, TASKBAR_BTN_W);
+    wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H, &tb);
     wm_draw_cursor(g_screen, g_wm.mouse_x, g_wm.mouse_y);
     gfx_flush();
 
@@ -491,6 +584,8 @@ int main(void)
         int timeout = wm_next_timeout_ms(&g_wm, getticks(), hz);
         if (gterm_reap_pending() && (timeout < 0 || timeout > REAP_POLL_MS))
             timeout = REAP_POLL_MS;
+        int ct = clock_timeout_ms(hz);              /* tray clock's minute */
+        if (ct >= 0 && (timeout < 0 || ct < timeout)) timeout = ct;
         int ready = wait_input(timeout < 0 ? WAIT_INPUT_FOREVER : timeout,
                                fds, nfds);
         if (ready < 0) ready = 0;
@@ -517,7 +612,7 @@ int main(void)
         for (int e = 0; e < ne; e++) {
             if (edges[e].down) {
                 bstate |= edges[e].button;
-                mouse_press(me.x, me.y, edges[e].button, bstate, labels);
+                mouse_press(me.x, me.y, edges[e].button, bstate);
             } else {
                 bstate &= (uint8_t)~edges[e].button;
                 mouse_release(me.x, me.y, edges[e].button, bstate);
@@ -543,6 +638,11 @@ int main(void)
                 if (ow) wm_damage_add(&g_damage, wm_close_btn_rect(ow));
                 if (nw) wm_damage_add(&g_damage, wm_close_btn_rect(nw));
                 g_wm.hover_close_id = hov;
+            }
+            /* Apps menu hover highlight. */
+            if (g_menu_open) {
+                int mh = wm_menu_hit(me.x, me.y, G_NOAPPS, g_sh, TASKBAR_H);
+                if (mh != g_menu_hover) { g_menu_hover = mh; damage_menu(); }
             }
             /* Motion with a button held goes to the window that got the
              * press (drag-select); plain hovering is not reported. */
@@ -615,6 +715,22 @@ int main(void)
             if (w->dirty) { damage_window(w); w->dirty = 0; }   /* not if minimized */
         }
 
+        /* -- Taskbar: repaint when what it shows changed (18.4) ---------- */
+        {
+            uint32_t t = clock_now(hz);
+            /* Resync with the RTC once per minute (PIT drift). */
+            if (t / 60 != g_rtc0 / 60) {
+                clock_sync();
+                t = clock_now(hz);
+            }
+            wm_taskbar_view(&g_wm, g_menu_open, t, &tb);
+            uint32_t h = wm_taskbar_view_hash(&tb);
+            if (h != tb_hash) {
+                tb_hash = h;
+                wm_damage_add(&g_damage, taskbar_rect);
+            }
+        }
+
         if (g_damage.n == 0) continue;
 
         /* -- Repaint + flush only the damage ------------------------------- */
@@ -623,8 +739,15 @@ int main(void)
             wm_composite_rect(&g_wm, g_screen, r);
             if (wm_rect_intersects(r, taskbar_rect)) {
                 gfx_set_clip(g_screen, r);
-                wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H,
-                                labels, G_NOAPPS, TASKBAR_BTN_W);
+                wm_draw_taskbar(g_screen, g_sw, g_sh, TASKBAR_H, &tb);
+                gfx_clear_clip(g_screen);
+            }
+            /* The Apps menu sits over the windows. */
+            if (g_menu_open &&
+                wm_rect_intersects(r, wm_menu_rect(G_NOAPPS, g_sh, TASKBAR_H))) {
+                gfx_set_clip(g_screen, r);
+                wm_draw_menu(g_screen, g_sh, TASKBAR_H, g_app_labels, G_NOAPPS,
+                             g_menu_hover);
                 gfx_clear_clip(g_screen);
             }
         }

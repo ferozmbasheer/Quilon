@@ -71,10 +71,13 @@ idle damage-driven WM loop — done**, see its "as built" note: `SYS_WAIT_INPUT`
 kernel button edges, IntelliMouse wheel, Alt-Tab/Alt-F4; **18.3 window
 operations — done** (2026-11-12): grip resize with an outline + `WM_EV_RESIZE`
 via the loop's size-sync step, maximize/restore (button or title double-click),
-minimize (Alt-Tab restores until 18.4), cascade placement, new windows get
+minimize, cascade placement, new windows get
 focus, bevelled min/max/close with close hover; gterm grid is resizable;
-**next 18.4** taskbar window list (also the mouse way to restore a minimized
-window) + tray, then 18.5 widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
+**18.4 taskbar — done** (2026-11-12): Apps menu replaces the launcher
+buttons, window list (click = focus / minimize / restore), tray clock from
+the new CMOS RTC driver + `SYS_GETTIME` (61, UTC), one window slot reserved
+for the Power dialog; headless tests open apps via the menu (`OPEN_TERM`);
+**next 18.5** widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
 newlib/PDCLib port) → 17.1–17.3. The 15.x and 16.x details below are
 kept as a record.
 

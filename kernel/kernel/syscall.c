@@ -58,6 +58,7 @@
 #include <kernel/mouse.h>
 #include <kernel/waitq.h>
 #include <kernel/power.h>
+#include <kernel/rtc.h>
 #include <string.h>
 #endif
 
@@ -1980,6 +1981,21 @@ void syscall_handler(syscall_regs_t *regs)
         ret = (uint32_t)-1;
         break;
 #endif
+
+    /* ------------------------------------------------------------------------
+     * SYS_GETTIME (61) -- gettime()
+     *
+     * Wall-clock time from the CMOS RTC (kernel/rtc.h) as Unix seconds, UTC;
+     * 0 if the clock can't be read.  No arguments.  ROADMAP3 18.4 (tray
+     * clock).
+     * ------------------------------------------------------------------------ */
+    case SYS_GETTIME:
+#ifdef __is_kernel
+        ret = rtc_now();
+#else
+        ret = 0;
+#endif
+        break;
 
     /* ------------------------------------------------------------------------
      * Unknown syscall

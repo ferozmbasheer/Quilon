@@ -75,18 +75,25 @@ KBD_KEYS = Hello(World)!\n{until:Unknown command: Hello(World)!}ab{key:left}c\n{
 # (new windows are not focused yet -- ROADMAP3 18.3), Ctrl-C at its prompt,
 # then Ctrl-C kprobe running in it.  The WM ignores SIGINT, gets 0x03 as a key,
 # and gterm asks the kernel (intr) to SIGINT its shell's foreground job.
-KBD_WM_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:300,300}{click}{wait:1}xyz{key:ctrl-c}{wait:1}exec kprobe.elf\n{wait:3}{key:ctrl-c}
+KBD_WM_KEYS = startx\n{until:[wm] screen}{wait:2}$(OPEN_TERM){wait:4}{mouse:-3000,-3000}{mouse:300,300}{click}{wait:1}xyz{key:ctrl-c}{wait:1}exec kprobe.elf\n{wait:3}{key:ctrl-c}
 kbdtest: check-toolchain
 	@SMOKE_KEYS="$(KBD_KEYS)" SMOKE_SENTINEL="'kprobe.elf' exited (code -2)" \
 	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
 	@SMOKE_KEYS="$(KBD_WM_KEYS)" SMOKE_SENTINEL="terminated by signal 2" \
 	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
 
+# Opening an app on the desktop (ROADMAP3 18.4): the Apps button (30,786),
+# then its menu item -- Terminal (60,715), Clock (60,737) -- on the 1280x800
+# screen (wm.h WM_MENU_* layout; test_wm.c checks the Terminal spot).
+OPEN_MENU  = {mouse:-3000,-3000}{mouse:30,786}{click}{wait:1}{mouse:-3000,-3000}
+OPEN_TERM  = $(OPEN_MENU){mouse:60,715}{click}
+OPEN_CLOCK = $(OPEN_MENU){mouse:60,737}{click}
+
 # Desktop regression (REVIEW.md E): startx, then open and close a Terminal three
-# times with the mouse (taskbar button at (55,786), close box at (670,70) on the
+# times with the mouse (Apps menu -> Terminal, close box at (670,70) on the
 # 1280x800 screen).  Each closed terminal's shell must see EOF and exit -- it
 # used to spin forever as an unreaped orphan.
-WM_CYCLE = {mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:670,70}{click}{wait:4}
+WM_CYCLE = $(OPEN_TERM){wait:4}{mouse:-3000,-3000}{mouse:670,70}{click}{wait:4}
 #
 # Then window operations (ROADMAP3 18.3), on a fresh boot: open a Terminal
 # (cascade origin: content (40,80) 640x384), drag its resize grip (bottom-right
@@ -94,7 +101,13 @@ WM_CYCLE = {mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{m
 # maximized to 1280x752 (800 - 28 taskbar - 20 title bar); the restore button
 # (1252,10) -> back to 740x448; the minimize button (734,70); Alt-Tab restores
 # it.  "restored" only logs for a window that was minimized.
-WM_OPS_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:676,460}{down}{mouse:50,32}{mouse:50,32}{up}{wait:2}{mouse:-3000,-3000}{mouse:300,70}{dblclick}{wait:2}{mouse:-3000,-3000}{mouse:1252,10}{click}{wait:2}{mouse:-3000,-3000}{mouse:734,70}{click}{wait:2}{key:alt-tab}{wait:2}
+WM_OPS_KEYS = startx\n{until:[wm] screen}{wait:2}$(OPEN_TERM){wait:4}{mouse:-3000,-3000}{mouse:676,460}{down}{mouse:50,32}{mouse:50,32}{up}{wait:2}{mouse:-3000,-3000}{mouse:300,70}{dblclick}{wait:2}{mouse:-3000,-3000}{mouse:1252,10}{click}{wait:2}{mouse:-3000,-3000}{mouse:734,70}{click}{wait:2}{key:alt-tab}{wait:2}
+#
+# Then the taskbar window list (ROADMAP3 18.4), on a fresh boot: open a
+# Terminal, then a Clock from the Apps menu (the Clock has the focus).  The
+# Terminal's taskbar button (first, at 100,786) is clicked three times:
+# raise + focus, minimize (it's focused), restore.
+WM_TASKBAR_KEYS = startx\n{until:[wm] screen}{wait:2}$(OPEN_TERM){wait:4}$(OPEN_CLOCK){wait:2}{mouse:-3000,-3000}{mouse:100,786}{click}{wait:1}{click}{wait:1}{click}{wait:2}
 wmtest: check-toolchain
 	@SMOKE_KEYS='startx\n{until:[wm] screen}{wait:2}$(WM_CYCLE)$(WM_CYCLE)$(WM_CYCLE)' \
 	    SMOKE_SENTINEL='exited (code 0)' SMOKE_SENTINEL_COUNT=3 \
@@ -102,13 +115,16 @@ wmtest: check-toolchain
 	@SMOKE_KEYS='$(WM_OPS_KEYS)' SMOKE_SENTINEL="[wm] restored 'Terminal'" \
 	    SMOKE_ALSO="[wm] resized 'Terminal' to 740x448" SMOKE_ALSO_COUNT=2 \
 	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
+	@SMOKE_KEYS='$(WM_TASKBAR_KEYS)' SMOKE_SENTINEL="[wm] restored 'Terminal'" \
+	    SMOKE_ALSO="[wm] launched 'Clock'" \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
 
 # `exit` in a terminal window closes the window -- but only the terminal's own
 # shell: open a Terminal, click into it, `exec shell.elf` + `exit` (the nested
 # shell returns to its parent; the window must stay), run hello.elf in it to
 # prove that, then `exit` the terminal's shell.  Three "exited (code 0)" lines
 # (nested shell, hello, terminal shell) and the WM's close line are required.
-TERM_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:300,300}{click}{wait:1}exec shell.elf\n{wait:3}exit\n{wait:2}exec hello.elf\n{wait:3}exit\n
+TERM_KEYS = startx\n{until:[wm] screen}{wait:2}$(OPEN_TERM){wait:4}{mouse:-3000,-3000}{mouse:300,300}{click}{wait:1}exec shell.elf\n{wait:3}exit\n{wait:2}exec hello.elf\n{wait:3}exit\n
 termtest: check-toolchain
 	@SMOKE_KEYS='$(TERM_KEYS)' SMOKE_SENTINEL="[wm] closed 'Terminal'" \
 	    SMOKE_ALSO='exited (code 0)' SMOKE_ALSO_COUNT=3 \
@@ -122,7 +138,7 @@ termtest: check-toolchain
 # Terminal must not.  (A lost click leaves the Terminal backmost, so Alt-Tab
 # picks it and Alt-F4 closes the Terminal instead; a missing Alt-Tab or
 # Alt-F4 closes nothing.)  The boot log must show the wheel was negotiated.
-EVENT_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:3}{mouse:-3000,-3000}{mouse:165,786}{click}{wait:2}{mouse:-3000,-3000}{mouse:100,300}{fastclick}{wait:1}{key:alt-tab}{wait:1}{key:alt-f4}{wait:3}
+EVENT_KEYS = startx\n{until:[wm] screen}{wait:2}$(OPEN_TERM){wait:3}$(OPEN_CLOCK){wait:2}{mouse:-3000,-3000}{mouse:100,300}{fastclick}{wait:1}{key:alt-tab}{wait:1}{key:alt-f4}{wait:3}
 eventtest: check-toolchain
 	@SMOKE_KEYS='$(EVENT_KEYS)' SMOKE_SENTINEL="[wm] closed 'Clock'" \
 	    FAIL_PATTERN="PANIC|Kernel panic|Exception|Triple fault|General Protection|closed 'Terminal'" \
