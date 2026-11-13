@@ -34,14 +34,17 @@
 #include <unistd.h>
 #include <gfx.h>
 #include <signal.h>
+#include <stdlib.h>
 #include "wm.h"
+#include "bmp.h"
 
 /* App "open" entry points: each sets up the window's callbacks + app_state.
  * Defined in the respective app .c files. */
 void gterm_open(window_t *win);
 void clock_open(window_t *win);
 void filebr_open(window_t *win);
-void textview_open(window_t *win);
+void textview_open(window_t *win, const char *path);
+void gterm_open_prog(window_t *win, const char *path);
 void power_dialog_open(window_t *win);
 void gterm_reap_shells(void);   /* reap shells of closed terminals */
 int  gterm_reap_pending(void);  /* 1 while a closed terminal's shell is unreaped */
@@ -183,42 +186,85 @@ static void wm_launch(int app_idx)
     printf("[wm] launched '%s' (win id=%d)\r\n", a->label, id);
 }
 
-/* ── Open a file in a new textview window ────────────────────────────────── */
-
-void wm_open_textview(const char *path)
+/* ── Windows opened by other apps (Files, 18.5) ───────────────────────────
+ * A new w x h window titled with the last component of `path`, with a
+ * backbuf, focused -- ready for the app's open function.  NULL on failure. */
+static window_t *open_path_window(const char *path, int w, int h)
 {
-    /* Use the last component of the path as the window title. */
     const char *title = path;
-    const char *p;
-    for (p = path; *p; p++)
-        if (*p == '/')
-            title = p + 1;
-    if (*title == '\0')
-        title = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '/' && p[1]) title = p + 1;
 
     int x, y;
-    wm_cascade_pos(&g_wm, 560, 360, &x, &y);
-    int id = wm_create_app_window(&g_wm, title, x, y, 560, 360);
+    wm_cascade_pos(&g_wm, w, h, &x, &y);
+    int id = wm_create_app_window(&g_wm, title, x, y, w, h);
     if (id < 0) {
         printf("[wm] no free window slot for '%s'\r\n", title);
-        return;
+        return (window_t *)0;
     }
-
     window_t *win = wm_find_window(&g_wm, id);
-    if (!win) return;
-
-    /* Store the full path in win->title so textview_open can read it. */
-    int i;
-    for (i = 0; i < WM_TITLE_LEN - 1 && path[i]; i++)
-        win->title[i] = path[i];
-    win->title[i] = '\0';
-
-    win->backbuf = canvas_create(win->bounds.w, win->bounds.h);
-    if (!win->backbuf) { wm_destroy_window(&g_wm, id); return; }
+    if (!win) return (window_t *)0;
+    win->backbuf = canvas_create(w, h);
+    if (!win->backbuf) { wm_destroy_window(&g_wm, id); return (window_t *)0; }
     gfx_fill(win->backbuf, GFX_BLACK);
-
     focus_new(win);
-    textview_open(win);
+    return win;
+}
+
+/* A file in a new Textview.  The full path goes to the app (the title only
+ * has room for the name). */
+void wm_open_textview(const char *path)
+{
+    window_t *win = open_path_window(path, 560, 360);
+    if (!win) return;
+    textview_open(win, path);
+    printf("[wm] opened '%s' in textview\r\n", path);
+}
+
+/* A program in a new Terminal window (Files opening an .elf). */
+void wm_open_program(const char *path)
+{
+    window_t *win = open_path_window(path, 640, 384);
+    if (!win) return;
+    gterm_open_prog(win, path);
+    printf("[wm] running '%s' in a terminal\r\n", path);
+}
+
+/* ── Desktop wallpaper (18.5) ─────────────────────────────────────────────
+ * /desktop.bmp, if there is one, rendered once into a screen-sized canvas
+ * that the compositor copies the desktop from.  Read whole into a temporary
+ * buffer; anything unexpected just leaves the plain desktop colour. */
+#define WALLPAPER_PATH     "/desktop.bmp"
+#define WALLPAPER_MAX_FILE (8u << 20)
+
+static void load_wallpaper(void)
+{
+    int fd = open(WALLPAPER_PATH);
+    if (fd < 0) return;
+    int len = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    uint8_t *buf = (len > 0 && (uint32_t)len <= WALLPAPER_MAX_FILE)
+                 ? (uint8_t *)malloc((size_t)len) : (uint8_t *)0;
+    int got = 0;
+    while (buf && got < len) {
+        int n = read(fd, buf + got, len - got);
+        if (n <= 0) break;
+        got += n;
+    }
+    close(fd);
+
+    bmp_info_t bi;
+    canvas_t *bg = (canvas_t *)0;
+    if (buf && got == len && bmp_parse(buf, (uint32_t)len, &bi) == 0 &&
+        (bg = canvas_create(g_sw, g_sh)) != (canvas_t *)0) {
+        wm_wallpaper_render(bg, buf, &bi, WM_DESKTOP_COL);
+        wm_set_wallpaper(bg);
+        printf("[wm] wallpaper %s %dx%d\r\n", WALLPAPER_PATH, bi.w, bi.h);
+    } else {
+        printf("[wm] wallpaper %s: not a 24/32-bit BMP, or out of memory\r\n",
+               WALLPAPER_PATH);
+    }
+    if (buf) free(buf);
 }
 
 /* ── Power button: open (or bring forward) the confirmation dialog ───────── */
@@ -339,8 +385,29 @@ static uint32_t g_hz;
 static uint32_t g_last_click;
 static int      g_last_click_x, g_last_click_y, g_last_click_win;
 
-static void send_mouse(window_t *w, wm_ev_type_t type, int mx, int my,
-                       uint8_t button, uint8_t buttons)
+/* The last press inside a window's content, for WM_EV_MOUSE_BTN `clicks`
+ * (an app's double-click, ROADMAP3 18.5).  A double-click's second press
+ * starts a new count, so a triple click is double + single. */
+static uint32_t g_cclick_t;
+static int      g_cclick_x, g_cclick_y, g_cclick_win;
+static uint8_t  g_cclick_btn;
+
+static int content_clicks(int win, uint8_t button, int mx, int my)
+{
+    uint32_t now = getticks();
+    int dbl = g_cclick_win == win && g_cclick_btn == button &&
+              wm_is_double_click(now - g_cclick_t, g_hz,
+                                 mx - g_cclick_x, my - g_cclick_y);
+    g_cclick_win = dbl ? 0 : win;
+    g_cclick_btn = button;
+    g_cclick_t   = now;
+    g_cclick_x   = mx;
+    g_cclick_y   = my;
+    return dbl ? 2 : 1;
+}
+
+static void send_mouse_n(window_t *w, wm_ev_type_t type, int mx, int my,
+                         uint8_t button, uint8_t buttons, int clicks)
 {
     if (!w || !w->on_event || w->want_close) return;
     wm_event_t ev = wm_event_make(type);
@@ -348,7 +415,14 @@ static void send_mouse(window_t *w, wm_ev_type_t type, int mx, int my,
     ev.y       = my - w->bounds.y;
     ev.button  = button;
     ev.buttons = buttons;
+    ev.clicks  = (uint8_t)clicks;
     w->on_event(w, &ev);
+}
+
+static void send_mouse(window_t *w, wm_ev_type_t type, int mx, int my,
+                       uint8_t button, uint8_t buttons)
+{
+    send_mouse_n(w, type, mx, my, button, buttons, 0);
 }
 
 /* A click on window-list button `idx`: restore / minimize / raise+focus. */
@@ -456,7 +530,8 @@ static void mouse_press(int mx, int my, uint8_t button, uint8_t buttons)
         wm_in_content(w, mx, my)) {
         if (!g_capture) g_capture = w->id;
         if (g_capture == w->id)
-            send_mouse(w, WM_EV_MOUSE_BTN, mx, my, button, buttons);
+            send_mouse_n(w, WM_EV_MOUSE_BTN, mx, my, button, buttons,
+                         content_clicks(w->id, button, mx, my));
     }
 }
 
@@ -546,6 +621,8 @@ int main(void)
     const rect_t taskbar_rect = { 0, g_sh - TASKBAR_H, g_sw, TASKBAR_H };
     const uint32_t hz = gethz();
     g_hz = hz;
+
+    load_wallpaper();
 
     /* 3. The Apps menu's labels; the tray clock's first reading. */
     int i;

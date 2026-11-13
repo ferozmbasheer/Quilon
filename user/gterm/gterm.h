@@ -110,6 +110,15 @@ typedef struct {
     gterm_ansi_state_t ansi_state;
     char               ansi_buf[GTERM_ANSI_BUF];
     int                ansi_len;
+
+    /* Scrollback (ROADMAP3 18.5): lines that scrolled off the top, in a
+     * ring the caller supplies (gterm_set_history; NULL = none).  `view` is
+     * how many lines the display is scrolled back, 0 = live. */
+    gterm_cell_t     (*hist)[GTERM_MAX_COLS];
+    int                hist_cap;
+    int                hist_head;     /* next slot to write */
+    int                hist_n;        /* lines held (<= hist_cap) */
+    int                view;
 } gterm_t;
 
 /* ── Internal helpers (static inline — no external dependencies) ─────────── */
@@ -137,10 +146,31 @@ static inline int gterm_parse_params(const char *str, int params[],
     return n;
 }
 
+/* Save grid row `row` as the newest scrollback line.  A display scrolled
+ * back stays on the same text (view moves up with it).                     */
+static inline void gterm_hist_push(gterm_t *t, int row)
+{
+    if (!t->hist || t->hist_cap <= 0) return;
+    gterm_cell_t *dst = t->hist[t->hist_head];
+    for (int c = 0; c < GTERM_MAX_COLS; c++) {
+        if (c < t->cols) {
+            dst[c] = t->cells[row][c];
+        } else {
+            dst[c].ch = ' ';
+            dst[c].fg = GT_DEFAULT_FG;
+            dst[c].bg = GT_DEFAULT_BG;
+        }
+    }
+    t->hist_head = (t->hist_head + 1) % t->hist_cap;
+    if (t->hist_n < t->hist_cap) t->hist_n++;
+    if (t->view > 0 && t->view < t->hist_n) t->view++;
+}
+
 /* Scroll the grid up by one row; fill the new bottom row with blanks.       */
 static inline void gterm_scroll_up(gterm_t *t)
 {
     int r, c;
+    gterm_hist_push(t, 0);
     for (r = 0; r < t->rows - 1; r++)
         for (c = 0; c < t->cols; c++)
             t->cells[r][c] = t->cells[r + 1][c];
@@ -298,6 +328,8 @@ static inline void gterm_init(gterm_t *t)
     t->ansi_buf[0] = '\0';
     t->rows        = GTERM_ROWS;
     t->cols        = GTERM_COLS;
+    t->hist        = (gterm_cell_t (*)[GTERM_MAX_COLS])0;
+    t->hist_cap    = t->hist_head = t->hist_n = t->view = 0;
     for (r = 0; r < GTERM_MAX_ROWS; r++)
         for (c = 0; c < GTERM_MAX_COLS; c++) {
             t->cells[r][c].ch = ' ';
@@ -319,6 +351,8 @@ static inline void gterm_resize(gterm_t *t, int rows, int cols)
     cols = gterm_clamp(cols, 1, GTERM_MAX_COLS);
     int shift = t->cursor_row - (rows - 1);
     if (shift < 0) shift = 0;
+    for (r = 0; r < shift && r < t->rows; r++)   /* lines that scroll away */
+        gterm_hist_push(t, r);
 
     for (r = 0; r < GTERM_MAX_ROWS; r++) {
         for (c = 0; c < GTERM_MAX_COLS; c++) {
@@ -336,6 +370,38 @@ static inline void gterm_resize(gterm_t *t, int rows, int cols)
     t->cols       = cols;
     t->cursor_row = gterm_clamp(t->cursor_row - shift, 0, rows - 1);
     t->cursor_col = gterm_clamp(t->cursor_col, 0, cols - 1);
+    if (t->view > t->hist_n) t->view = t->hist_n;
+}
+
+/* Give the terminal a scrollback ring of `cap` lines (memory owned by the
+ * caller; `buf` NULL or cap 0 = no scrollback).                            */
+static inline void gterm_set_history(gterm_t *t,
+                                     gterm_cell_t (*buf)[GTERM_MAX_COLS],
+                                     int cap)
+{
+    t->hist      = buf;
+    t->hist_cap  = buf ? cap : 0;
+    t->hist_head = t->hist_n = t->view = 0;
+}
+
+/* Scroll the display back (delta > 0) or forward through the scrollback,
+ * clamped to [0, hist_n].  Returns 1 if the view changed.                   */
+static inline int gterm_scroll_view(gterm_t *t, int delta)
+{
+    int v = gterm_clamp(t->view + delta, 0, t->hist_n);
+    if (v == t->view) return 0;
+    t->view = v;
+    return 1;
+}
+
+/* The cells shown on display row r (0 = top) given the current view: a
+ * scrollback line, or a grid row.                                          */
+static inline const gterm_cell_t *gterm_view_row(const gterm_t *t, int r)
+{
+    int g = r - t->view;
+    if (g >= 0) return t->cells[g];
+    int k = -g;                                   /* 1 = newest history line */
+    return t->hist[(t->hist_head - k + t->hist_cap) % t->hist_cap];
 }
 
 /* Feed one byte through the ANSI state machine, updating the cell grid.     */

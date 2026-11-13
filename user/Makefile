@@ -90,17 +90,39 @@ $(1)/$(1).elf: $$(CRT0_O) $(1)/main.o $$(LIBGFX_A) $$(LIBC_A) link.ld
 endef
 $(foreach d,$(PROG_DIRS),$(eval $(call PROG_link,$(d))))
 
+# ── Desktop wallpaper (ROADMAP3 18.5) ────────────────────────────────────────
+# The disk gets /desktop.bmp, which the WM loads at startup:
+#   (default)                 the demo scene from tools/make_wallpaper.py
+#   WALLPAPER=path/to/x.bmp   your own (24/32-bit uncompressed BMP)
+#   WALLPAPER=none            no wallpaper (plain desktop colour)
+# The top-level Makefile turns a path absolute before it gets here.
+ifeq ($(WALLPAPER),none)
+WALLPAPER_FILES =
+else ifeq ($(WALLPAPER),)
+WALLPAPER_FILES = desktop.bmp
+desktop-demo.bmp: ../tools/make_wallpaper.py
+	python3 ../tools/make_wallpaper.py $@
+desktop.bmp: desktop-demo.bmp
+	cp $< $@
+.PHONY: desktop.bmp
+else
+WALLPAPER_FILES = desktop.bmp
+desktop.bmp: $(WALLPAPER)
+	cp $< $@
+.PHONY: desktop.bmp
+endif
+
 # ── Disk image ────────────────────────────────────────────────────────────────
-disk: all
-	python3 ../tools/make_disk.py $(DISK) $(ASM_ELFS) $(PROG_ELFS)
+disk: all $(WALLPAPER_FILES)
+	python3 ../tools/make_disk.py $(DISK) $(ASM_ELFS) $(PROG_ELFS) $(WALLPAPER_FILES)
 
 # ext2 image with the same contents (section 16.2).  Needs mke2fs on the host.
 # The kernel probes ext2 before FAT16, so booting with this image attached
 # instead of disk.img exercises the ext2 driver.
 EXT2_DISK ?= ../ext2.img
 
-ext2disk: all
-	python3 ../tools/make_ext2_disk.py $(EXT2_DISK) $(ASM_ELFS) $(PROG_ELFS)
+ext2disk: all $(WALLPAPER_FILES)
+	python3 ../tools/make_ext2_disk.py $(EXT2_DISK) $(ASM_ELFS) $(PROG_ELFS) $(WALLPAPER_FILES)
 
 # ── WM: bundles the compositor + all graphical apps into one ELF ─────────────
 # Apps are clone(CLONE_VM) threads; no IPC needed — they share WM heap.
@@ -122,13 +144,16 @@ clock/clock_app.o: clock/clock_app.c wm/wm.h
 filebr/filebr_app.o: filebr/filebr_app.c wm/wm.h
 	$(CC) $(WM_CFLAGS) -c -o $@ filebr/filebr_app.c
 
+wm/widgets.o: wm/widgets.c wm/widgets.h wm/wm.h
+	$(CC) $(WM_CFLAGS) -c -o $@ wm/widgets.c
+
 wm/power_app.o: wm/power_app.c wm/wm.h
 	$(CC) $(WM_CFLAGS) -c -o $@ wm/power_app.c
 
 textview/textview_app.o: textview/textview_app.c wm/wm.h
 	$(CC) $(WM_CFLAGS) -c -o $@ textview/textview_app.c
 
-WM_OBJS = wm/main.o wm/wm_compositor.o wm/power_app.o \
+WM_OBJS = wm/main.o wm/wm_compositor.o wm/power_app.o wm/widgets.o \
           gterm/gterm_app.o \
           clock/clock_app.o \
           filebr/filebr_app.o \
@@ -150,5 +175,5 @@ DEPS := $(PROG_OBJS:.o=.d) $(WM_OBJS:.o=.d)
 clean:
 	$(MAKE) -C $(LIBC_DIR) clean
 	$(MAKE) -C $(LIBGFX_DIR) clean
-	rm -f hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) $(WM_OBJS) \
+	rm -f desktop.bmp desktop-demo.bmp hello.o $(ASM_ELFS) $(PROG_OBJS) $(PROG_ELFS) $(WM_OBJS) \
 	      $(PROG_OBJS:.o=.d) $(WM_OBJS:.o=.d)

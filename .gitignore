@@ -64,3 +64,8 @@ build/
 
 # Serial log kept by tools/smoke_test.sh when a run fails
 smoke-fail.log
+
+# Desktop wallpaper copied in by `make disk WALLPAPER=...` (ROADMAP3 18.5)
+user/desktop.bmp
+user/desktop-demo.bmp
+/desktop.bmp

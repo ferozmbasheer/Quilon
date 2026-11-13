@@ -162,6 +162,9 @@ typedef struct {
     int          y;
     uint8_t      buttons;     /* MOUSE_BTN_* state (after this event)     */
     uint8_t      button;      /* MOUSE_BTN / MOUSE_UP: the button changed */
+    uint8_t      clicks;      /* MOUSE_BTN: 2 = second press of a double-click
+                                 (same window + button, WM_DBLCLICK_MS/PX),
+                                 else 1.  ROADMAP3 18.5. */
     char         ascii;       /* KEY: the character, 0 for special keys  */
     uint8_t      mods;        /* KEY: WM_MOD_* (wm_keys.h)                */
     int          keycode;     /* KEY: WM_KEY_* or the (lower-case) char   */
@@ -1329,6 +1332,13 @@ void wm_draw_menu(canvas_t *screen, int sh, int taskbar_h,
                   const char *const *labels, int n, int hover);
 /* A raised, labelled button (taskbar and dialog buttons share the look). */
 void wm_draw_button(canvas_t *c, rect_t r, const char *label);
+/* The chrome's 3D bevels, for the widget kit (18.5): raised = light top/left,
+ * dark bottom/right; sunken = the reverse.  Only the 1-2 px edges are drawn. */
+void wm_bevel_raised(canvas_t *c, rect_t r);
+void wm_bevel_sunken(canvas_t *c, rect_t r);
+/* Desktop wallpaper (18.5): a screen-sized canvas the compositor copies the
+ * desktop from instead of filling it with WM_DESKTOP_COL.  NULL = none. */
+void wm_set_wallpaper(canvas_t *bg);
 
 /* Ask the WM loop to power the machine off after the current frame is on
  * screen (the power dialog's "Power off").  Defined in main.c. */
@@ -1336,5 +1346,7 @@ void wm_request_poweroff(void);
 
 /* Launch a text viewer window for the given file path. */
 void wm_open_textview(const char *path);
+/* Run the program at `path` in a new Terminal window (ROADMAP3 18.5). */
+void wm_open_program(const char *path);
 
 #endif /* _USER_WM_WM_H */

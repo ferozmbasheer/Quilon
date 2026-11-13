@@ -1,10 +1,11 @@
 /*
  * Quilon OS -- Text Viewer app (section 14.4, single-threaded WM)
  *
- * Reads a file path from win->title and displays its contents.  Scroll with
- * the arrows, Page Up/Down, Home/End, d/u, or the mouse wheel.
- * Implemented as non-blocking WM callbacks (on_event); per-window state
- * (the loaded lines + scroll position) lives in win->app_state.
+ * Displays the file the WM passes to textview_open().  Scroll with the
+ * arrows, Page Up/Down, Home/End, d/u, the mouse wheel or the scrollbar
+ * (widget kit, ROADMAP3 18.5).  Implemented as non-blocking WM callbacks
+ * (on_event); per-window state (the loaded lines + the scroll view) lives in
+ * win->app_state.
  */
 
 #include <unistd.h>
@@ -12,15 +13,17 @@
 #include <stdlib.h>
 #include <gfx.h>
 #include "../wm/wm.h"
+#include "../wm/widgets.h"
 
 #define MAX_LINE_LEN  128
 #define MAX_LINES     512
 
+#define TV_BG  GFX_RGB(15, 15, 15)
+#define TV_FG  GFX_RGB(200, 200, 200)
+
 typedef struct {
     char (*lines)[MAX_LINE_LEN];   /* heap: MAX_LINES * MAX_LINE_LEN */
-    int    nlines;
-    int    scroll;
-    int    rows;
+    wg_slist_t view;               /* the lines + scrollbar (18.5)    */
 } tv_state_t;
 
 static int tv_read_file(const char *path, char lines[][MAX_LINE_LEN], int max)
@@ -54,49 +57,50 @@ static int tv_read_file(const char *path, char lines[][MAX_LINE_LEN], int max)
     return n;
 }
 
+/* Row text for the list widget. */
+static const char *tv_row(void *ctx, int i, color_t *fg)
+{
+    tv_state_t *st = (tv_state_t *)ctx;
+    *fg = TV_FG;
+    return st->lines[i];
+}
+
 static void tv_render(window_t *win)
 {
     tv_state_t *st = (tv_state_t *)win->app_state;
-    canvas_t   *c  = win->backbuf;
-    int r;
-    gfx_fill(c, GFX_RGB(15, 15, 15));
-    for (r = 0; r < st->rows && st->scroll + r < st->nlines; r++)
-        gfx_draw_text(c, 0, r * GFX_CHAR_H, st->lines[st->scroll + r],
-                      GFX_RGB(200, 200, 200), GFX_RGB(15, 15, 15));
+    wg_slist_draw(win->backbuf, &st->view, TV_BG, tv_row, st);
     win->dirty = 1;
+}
+
+static void tv_layout(tv_state_t *st, int w, int h)
+{
+    wg_slist_layout(&st->view, (rect_t){ 0, 0, w, h });
 }
 
 static void tv_event(window_t *win, const wm_event_t *ev)
 {
     tv_state_t *st = (tv_state_t *)win->app_state;
-    if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
-    if (ev->type == WM_EV_RESIZE) {           /* ROADMAP3 18.3 */
-        st->rows   = ev->height / GFX_CHAR_H;
-        st->scroll = wm_scroll_clamp(st->scroll, 0, st->nlines, st->rows);
+    wg_list_t  *l  = &st->view.list;
+    int old_top = l->top;
+
+    switch (ev->type) {
+    case WM_EV_CLOSE:
+        win->want_close = 1;
+        return;
+    case WM_EV_RESIZE:                        /* ROADMAP3 18.3 */
+        tv_layout(st, ev->width, ev->height);
         tv_render(win);
         return;
-    }
-
-    int delta = 0;
-    if (ev->type == WM_EV_SCROLL) {
-        delta = ev->wheel * WM_WHEEL_ROWS;
-    } else if (ev->type == WM_EV_KEY) {
-        switch (ev->keycode) {
-        case 'd': case WM_KEY_DOWN: delta = 1;            break;
-        case 'u': case WM_KEY_UP:   delta = -1;           break;
-        case WM_KEY_PGDN:           delta = st->rows - 1; break;
-        case WM_KEY_PGUP:           delta = -(st->rows - 1); break;
-        case WM_KEY_HOME:           delta = -st->nlines;  break;
-        case WM_KEY_END:            delta = st->nlines;   break;
-        default: return;
-        }
-    } else {
+    case WM_EV_KEY:
+        if (ev->keycode == 'd')      wg_list_key(l, WM_KEY_DOWN);
+        else if (ev->keycode == 'u') wg_list_key(l, WM_KEY_UP);
+        else if (!wg_list_key(l, ev->keycode)) return;
+        if (l->top != old_top) tv_render(win);
+        return;
+    default:                                  /* wheel + scrollbar (18.5) */
+        if (wg_slist_mouse(&st->view, ev, 0) != WG_SL_NONE) tv_render(win);
         return;
     }
-    int ns = wm_scroll_clamp(st->scroll, delta, st->nlines, st->rows);
-    if (ns == st->scroll) return;
-    st->scroll = ns;
-    tv_render(win);
 }
 
 static void tv_destroy(window_t *win)
@@ -110,16 +114,18 @@ static void tv_destroy(window_t *win)
     if (win->backbuf) { canvas_free(win->backbuf); win->backbuf = (canvas_t *)0; }
 }
 
-void textview_open(window_t *win)
+void textview_open(window_t *win, const char *path)
 {
     tv_state_t *st = (tv_state_t *)malloc(sizeof(tv_state_t));
     if (!st) { win->want_close = 1; return; }
     st->lines = (char (*)[MAX_LINE_LEN])malloc(MAX_LINES * MAX_LINE_LEN);
     if (!st->lines) { free(st); win->want_close = 1; return; }
 
-    st->nlines = tv_read_file(win->title, st->lines, MAX_LINES);
-    st->rows   = win->backbuf->h / GFX_CHAR_H;
-    st->scroll = 0;
+    memset(&st->view, 0, sizeof st->view);
+    st->view.list.n     = tv_read_file(path, st->lines, MAX_LINES);
+    st->view.list.sel   = -1;                 /* a viewer: no selection */
+    st->view.list.row_h = GFX_CHAR_H;
+    tv_layout(st, win->backbuf->w, win->backbuf->h);
 
     win->app_state  = st;
     win->on_event   = tv_event;

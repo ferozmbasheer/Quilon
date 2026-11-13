@@ -19,6 +19,8 @@ make kbdtest  # headless keyboard test: shift, arrows, Ctrl-C (text + desktop)
 make termtest # headless: `exit` in a terminal window closes it (nested shell doesn't)
 make eventtest # headless 18.2 events: fast click, Alt-Tab, Alt-F4, wheel present
 make powertest # headless: shell `poweroff` and the desktop Power button stop QEMU
+make appstest # headless 18.5: Files opens a .txt in Textview and runs an .elf
+              #   in a Terminal (which closes on a key after the program exits)
 make disk     # rebuild the FAT16 disk.img
 make ext2disk # rebuild ext2.img (needs host mke2fs)
 make clean
@@ -70,8 +72,11 @@ Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 16**
 read-only, booting off an ext2 disk); next is Section 17 (porting Lua, a text
 editor, TinyCC), starting with the new 17.0 prerequisites (17.0.1 keyboard + Ctrl-C is done)
 and interleaved with Section 18 (desktop polish; 18.1 idle, damage-driven WM loop,
-18.2 richer input events, 18.3 window operations and 18.4 taskbar (Apps menu,
-window list, RTC tray clock) are done; next 18.5 widget kit). The WM was reworked from CLONE_VM threads to a
+18.2 richer input events, 18.3 window operations, 18.4 taskbar (Apps menu,
+window list, RTC tray clock) and 18.5 widget kit + app upgrades (scrollbars,
+Files path bar / open .elf in a Terminal, terminal scrollback + scrollbar, a
+demo wallpaper on both disks -- `WALLPAPER=file.bmp|none` overrides) are
+done -- Section 18 is complete; next is the rest of 17.0). The WM was reworked from CLONE_VM threads to a
 **single-threaded event loop** (apps = callbacks) — see `resume.md` and the
 "WM architecture" / "thread concurrency" project memories.
 

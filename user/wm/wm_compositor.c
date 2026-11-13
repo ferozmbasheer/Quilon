@@ -110,6 +110,13 @@ static void sunken_bevel(canvas_t *c, int x, int y, int w, int h)
     gfx_fill_rect(c, (rect_t){x+w-1, y,     1,   h}, WM_FRAME_HI);
 }
 
+void wm_bevel_raised(canvas_t *c, rect_t r) { raised_bevel(c, r.x, r.y, r.w, r.h); }
+void wm_bevel_sunken(canvas_t *c, rect_t r) { sunken_bevel(c, r.x, r.y, r.w, r.h); }
+
+/* ── Desktop wallpaper (ROADMAP3 18.5) ───────────────────────────────────── */
+static canvas_t *g_wallpaper;
+void wm_set_wallpaper(canvas_t *bg) { g_wallpaper = bg; }
+
 /* ── Title-bar buttons + grip (ROADMAP3 18.3) ──────────────────────────── */
 
 /* A 2-px-thick line: the glyphs are too thin to read at 1 px. */
@@ -192,7 +199,10 @@ void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip)
     if (!screen->has_clip) { gfx_clear_clip(screen); return; }   /* empty */
 
     /* 1. Desktop background. */
-    gfx_fill_rect(screen, clip, WM_DESKTOP_COL);
+    if (g_wallpaper)        /* pre-rendered, screen-sized: a straight copy */
+        gfx_blit(screen, clip.x, clip.y, g_wallpaper, clip);
+    else
+        gfx_fill_rect(screen, clip, WM_DESKTOP_COL);
 
     /* 2. Back-to-front via z_order (z_order[0]=back, z_order[num_windows-1]=front). */
     for (i = 0; i < s->num_windows; i++) {

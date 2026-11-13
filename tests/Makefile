@@ -62,7 +62,7 @@ USER_LIBC_INCLUDES = -I../user/libc/include
 # ── Test binaries ──────────────────────────────────────────────────────────
 
 BINDIR = bin
-TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_gterm $(BINDIR)/test_ata_dma $(BINDIR)/test_ext2 $(BINDIR)/test_addrspace $(BINDIR)/test_kbd $(BINDIR)/test_rtc
+TESTS  = $(BINDIR)/test_string $(BINDIR)/test_printf $(BINDIR)/test_pmm $(BINDIR)/test_paging $(BINDIR)/test_pit $(BINDIR)/test_usermode $(BINDIR)/test_syscall $(BINDIR)/test_vfs $(BINDIR)/test_fat16 $(BINDIR)/test_elf $(BINDIR)/test_process $(BINDIR)/test_signal $(BINDIR)/test_libc $(BINDIR)/test_pipe $(BINDIR)/test_initrd $(BINDIR)/test_vma $(BINDIR)/test_cow $(BINDIR)/test_pci $(BINDIR)/test_rtl8139 $(BINDIR)/test_net $(BINDIR)/test_dns $(BINDIR)/test_vbe $(BINDIR)/test_smp $(BINDIR)/test_ansi $(BINDIR)/test_psf $(BINDIR)/test_waitq $(BINDIR)/test_clone $(BINDIR)/test_mouse $(BINDIR)/test_gfx $(BINDIR)/test_wm $(BINDIR)/test_widgets $(BINDIR)/test_gterm $(BINDIR)/test_ata_dma $(BINDIR)/test_ext2 $(BINDIR)/test_addrspace $(BINDIR)/test_kbd $(BINDIR)/test_rtc
 
 .PHONY: all build run clean help
 
@@ -400,6 +400,18 @@ $(BINDIR)/test_wm: test_wm.c framework.h \
 	$(CC) $(CFLAGS) -I../user/libgfx/include -I../user/libc/include \
 	    -I../user/wm \
 	    -o $@ test_wm.c ../user/wm/wm_compositor.c ../user/libgfx/gfx.c
+
+# Widget kit + Files path logic + BMP wallpaper (ROADMAP3 18.5).  widgets.c
+# draws through libgfx and the compositor's bevels, so both are linked.
+$(BINDIR)/test_widgets: test_widgets.c framework.h \
+                        ../user/wm/widgets.h ../user/wm/widgets.c \
+                        ../user/wm/bmp.h ../user/filebr/fb_path.h \
+                        ../user/wm/wm.h ../user/wm/wm_compositor.c \
+                        ../user/libgfx/gfx.c ../user/libgfx/include/gfx.h
+	$(CC) $(CFLAGS) -I../user/libgfx/include -I../user/libc/include \
+	    -I../user/wm \
+	    -o $@ test_widgets.c ../user/wm/widgets.c \
+	    ../user/wm/wm_compositor.c ../user/libgfx/gfx.c
 
 # Graphical Terminal emulator tests (section 14.3)
 # gterm.h is header-only (all static inline) — no .c file is linked.

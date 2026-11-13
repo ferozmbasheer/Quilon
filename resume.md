@@ -77,7 +77,15 @@ focus, bevelled min/max/close with close hover; gterm grid is resizable;
 buttons, window list (click = focus / minimize / restore), tray clock from
 the new CMOS RTC driver + `SYS_GETTIME` (61, UTC), one window slot reserved
 for the Power dialog; headless tests open apps via the menu (`OPEN_TERM`);
-**next 18.5** widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
+**18.5 widget kit — done** (2026-11-12): `user/wm/widgets.{h,c}` (scrollbar,
+list, scroll list, text input, button, label), `clicks` on mouse events for
+double-click, Files (Up + editable path bar, `..`, sorted, opens dirs /
+`.elf` in a Terminal via `wm_open_program` / text in Textview), Textview
+scrollbar + full path via `textview_open(win, path)`, terminal scrollback
+(256 lines; scrollbar / wheel / Shift-PgUp), `/desktop.bmp` wallpaper
+(a generated demo scene by default, scaled to the screen;
+`make disk WALLPAPER=file.bmp|none`); `make appstest`.
+**Section 18 is complete**) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
 newlib/PDCLib port) → 17.1–17.3. The 15.x and 16.x details below are
 kept as a record.
 

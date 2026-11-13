@@ -62,11 +62,11 @@ build) real programs inside Quilon.
     - 18.2 Richer Input Events for Apps
     - 18.3 Window Operations (resize, maximize, minimize, placement)
     - 18.4 Taskbar: Window List and Tray
-    - 18.5 A Small Widget Kit and App Upgrades
+    - 18.5 A Small Widget Kit and App Upgrades ✓
 
 **Order of work (2026-11):** 17.0.1 (keyboard, ✓ done) first — it unblocks typing
 code, Ctrl-C, and arrow keys for both the ports and the desktop. Then
-Section 18 (desktop polish; 18.1 – 18.4 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
+Section 18 (desktop polish; 18.1 – 18.5 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
 
 ---
 
@@ -116,6 +116,7 @@ the new 17.0 prerequisites — interleaved with Section 18, desktop polish.)*
 | Richer input events (18.2) | `user/wm/wm_keys.h`, `user/wm/main.c`, `mouse.c`, `kbd_xlate.c` | ✓ Complete — keycode + mods, press/release/drag per button, scroll wheel, Alt-Tab / Alt-F4 |
 | Window operations (18.3) | `user/wm/wm.h`, `user/wm/main.c`, `wm_compositor.c`, `user/gterm/gterm.h` | ✓ Complete — grip resize (outline drag), maximize/restore (button + title double-click), minimize (Alt-Tab restores), cascade placement, new windows focused |
 | Taskbar (18.4) | `user/wm/wm.h`, `user/wm/main.c`, `wm_compositor.c`, `kernel/kernel/rtc.c` (`SYS_GETTIME` 61) | ✓ Complete — Apps menu (from `g_apps[]`), window list (focus / minimize / restore), tray clock from the CMOS RTC (UTC); a window slot is kept for the Power dialog |
+| Widget kit + apps (18.5) | `user/wm/widgets.{h,c}`, `user/filebr/`, `user/textview/`, `user/gterm/gterm.h`, `user/wm/bmp.h` | ✓ Complete — scrollbar / list / text input; Files path bar + open `.elf` in a Terminal; terminal scrollback; optional `/desktop.bmp` wallpaper |
 | Power off | `arch/i386/power.c`, `SYS_POWEROFF` (60), `user/wm/power_app.c` | ✓ `poweroff` in both shells + a taskbar Power button with a confirm dialog (emulator PM ports; no ACPI table parsing yet) |
 | In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (29 checks) + `wmtest` (desktop) + `kbdtest` (keyboard) + `termtest` + `powertest` + `eventtest` |
 
@@ -1961,6 +1962,67 @@ Original plan:
   memory (`SYS_MEMINFO`).
 
 ### 18.5 A Small Widget Kit and App Upgrades
+
+> **✓ Done (2026-11-12).** As built (user space only; no kernel change):
+> - **Widget kit** `user/wm/widgets.h` (pure logic, host-tested) +
+>   `widgets.c` (drawing, using the chrome's bevels, now exported as
+>   `wm_bevel_raised/sunken`): label (cut with ".."), button (sunk while
+>   held), vertical scrollbar `wg_vscroll_t` (arrows, track paging, thumb
+>   with a minimum size, `wg_vscroll_pos_at` for drags), list view
+>   `wg_list_t` (rows, selection or none, Up/Down/PgUp/PgDn/Home/End),
+>   **scroll list** `wg_slist_t` = list + scrollbar + the whole mouse protocol
+>   (wheel, arrows, paging, thumb drag via capture, click selects,
+>   double-click activates), and a one-line text input `wg_input_t`
+>   (insert, Backspace/Delete, Left/Right/Home/End, horizontal scroll;
+>   Enter/Esc reported).  libgfx's font fills only the top 8 rows of its
+>   16-px cell, so widgets centre on `WG_GLYPH_H` (8) and clip each row.
+> - **Double-click for apps:** `WM_EV_MOUSE_BTN` has a new `clicks` field
+>   (2 = second press of a double-click in the same window with the same
+>   button; `WM_DBLCLICK_MS/PX`).
+> - **Files:** toolbar with an **Up** button and an editable **path bar**
+>   (click it, Ctrl-L or `/`; Enter goes to a directory or opens a file,
+>   Esc cancels), `..` entry, listing sorted (`..`, dirs, files; A-Z ignoring
+>   case), scrollbar + wheel, click selects / double-click or Enter opens,
+>   Backspace = up (the directory you left is selected).  Opening: a
+>   directory is entered, an **`.elf` runs in a new Terminal window**
+>   (`wm_open_program` → `gterm_open_prog`; the window stays open after the
+>   program exits, showing `[exited with code N -- press a key to close]`;
+>   Ctrl-C sends SIGINT straight to it), anything else opens in Textview.
+>   Files keeps its own path and never leaves the WM in another directory:
+>   the kernel cwd isn't per-process yet (REVIEW.md), so a listing is
+>   chdir there → readdir → chdir back.  Pure path logic
+>   (`fb_path_join`, `fb_parent`, `fb_open_kind`, `fb_sort`) in
+>   `user/filebr/fb_path.h`.
+> - **Textview:** a scroll list without selection: scrollbar, wheel,
+>   arrows/PgUp/PgDn/Home/End.  The **full path is passed to
+>   `textview_open(win, path)`**: it used to go through the 32-byte title.
+> - **Terminal scrollback:** a 256-line ring (`GTERM_HIST_LINES`, ~480 KiB,
+>   heap, optional) of lines that scroll off the top or are cut by a
+>   shrinking resize (`gterm_hist_push`, `gterm_set_history`,
+>   `gterm_scroll_view`, `gterm_view_row` in `gterm.h`).  A widget-kit
+>   scrollbar down the right edge (the grid is `WG_SB_W` narrower) -- arrows,
+>   track paging, thumb drag -- plus the wheel, Shift-PgUp/PgDn and
+>   Shift-Up/Down scroll it; a scrolled-back view stays on the same text while
+>   output arrives and hides the cursor; typing returns to the live screen.
+> - **Wallpaper:** `/desktop.bmp`, if present (24/32-bit uncompressed BMP,
+>   `user/wm/bmp.h`), is rendered once at startup into a screen-sized canvas:
+>   tiled if at most 128x128 (`BMP_TILE_MAX`), else scaled (bilinear, 16.16
+>   fixed point) to cover the screen, centred and cropped.  The compositor
+>   then copies the desktop from it instead of filling (`wm_set_wallpaper`),
+>   so the cost per damage rect is unchanged.  **Both disks ship a demo**: a
+>   256x160 dusk mountain-lake scene generated by `tools/make_wallpaper.py`
+>   (123 KB -- the FAT16 disk is 1 MB); `make disk WALLPAPER=file.bmp` (or
+>   `ext2disk`) uses your own, `WALLPAPER=none` none.
+> - **Tests.** `tests/test_widgets.c` (scrollbar geometry/hit/drag
+>   round-trip, list navigation, the scroll list's mouse protocol, text
+>   editing, drawn pixels, Files path logic and sort, BMP parsing and
+>   centre/tile rendering); `test_gterm.c`: scrollback push/view/clamp, the
+>   view staying put under new output, ring wrap, lines lost to a resize.
+>   **`make appstest`**: Files → double-click README.TXT opens a Textview;
+>   double-click HELLO.ELF runs it in a Terminal that closes on a key after
+>   the program exits.
+
+Original plan:
 
 Apps hand-draw everything today. Add a tiny retained-nothing helper set to
 `libgfx` (or `user/wm/widgets.c`): button, label, vertical scrollbar, list

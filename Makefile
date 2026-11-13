@@ -21,9 +21,17 @@
 
 HOST ?= $(shell ./default-host.sh)
 
-.PHONY: all build headers iso disk ext2disk run smoke ktest wmtest kbdtest powertest termtest eventtest test clean check-toolchain
+.PHONY: all build headers iso disk ext2disk run smoke ktest wmtest kbdtest powertest termtest eventtest appstest test clean check-toolchain
 
 all: build
+
+# `make disk WALLPAPER=img.bmp` (ROADMAP3 18.5) replaces the demo wallpaper;
+# WALLPAPER=none leaves it off.  The user/ sub-make runs in another
+# directory, so hand it an absolute path.
+ifneq ($(filter-out none,$(WALLPAPER)),)
+override WALLPAPER := $(abspath $(WALLPAPER))
+endif
+export WALLPAPER
 
 # Fail early with a clear message if the cross toolchain is missing, instead of
 # letting the first compiler invocation deep inside a sub-make fail obscurely.
@@ -88,6 +96,19 @@ kbdtest: check-toolchain
 OPEN_MENU  = {mouse:-3000,-3000}{mouse:30,786}{click}{wait:1}{mouse:-3000,-3000}
 OPEN_TERM  = $(OPEN_MENU){mouse:60,715}{click}
 OPEN_CLOCK = $(OPEN_MENU){mouse:60,737}{click}
+OPEN_FILES = $(OPEN_MENU){mouse:60,759}{click}
+
+# Files + widget kit (ROADMAP3 18.5), on the FAT16 disk: open Files (content
+# at (40,80); a 26-px toolbar, then 16-px rows: README.TXT is row 9 -> y 258,
+# HELLO.ELF row 4 -> y 178, after COUNTER.ELF and the demo DESKTOP.BMP).
+# Double-click README.TXT -> a Textview; click the Files title bar to bring it
+# forward; double-click HELLO.ELF -> it runs in a
+# Terminal window that stays open after the program exits, until a key.
+APPS_KEYS = startx\n{until:[wm] screen}{wait:2}$(OPEN_FILES){wait:3}{mouse:-3000,-3000}{mouse:100,258}{dblclick}{wait:3}{mouse:-3000,-3000}{mouse:100,70}{click}{wait:1}{mouse:-3000,-3000}{mouse:100,178}{dblclick}{wait:4}q{wait:2}
+appstest: check-toolchain
+	@SMOKE_KEYS='$(APPS_KEYS)' SMOKE_SENTINEL="[wm] closed 'HELLO.ELF'" \
+	    SMOKE_ALSO="[wm] opened '/README.TXT' in textview" \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
 
 # Desktop regression (REVIEW.md E): startx, then open and close a Terminal three
 # times with the mouse (Apps menu -> Terminal, close box at (670,70) on the

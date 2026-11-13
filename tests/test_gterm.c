@@ -542,6 +542,92 @@ static void test_resize_keeps_cursor_visible(void)
 
 /* ── Entry point ─────────────────────────────────────────────────────────── */
 
+
+/* ── Scrollback (ROADMAP3 18.5) ──────────────────────────────────────────── */
+
+static gterm_cell_t g_hist[8][GTERM_MAX_COLS];
+
+/* Feed "L0\n" .. "L<n-1>\n". */
+static void feed_lines(gterm_t *t, int n)
+{
+    for (int i = 0; i < n; i++) {
+        char buf[8] = "L";
+        int k = 1;
+        if (i >= 10) buf[k++] = (char)('0' + i / 10);
+        buf[k++] = (char)('0' + i % 10);
+        buf[k++] = '\n';
+        buf[k] = '\0';
+        feed(t, buf);
+    }
+}
+
+static void test_scrollback_push_and_view(void)
+{
+    static gterm_t t;
+    gterm_init(&t);
+    gterm_resize(&t, 4, 20);
+    feed_lines(&t, 4);              /* 4 newlines on 4 rows: one scroll */
+    ASSERT_EQ(t.hist_n, 0, "no history without a buffer");
+
+    gterm_init(&t);
+    gterm_set_history(&t, g_hist, 8);
+    gterm_resize(&t, 4, 20);
+    feed_lines(&t, 6);              /* rows 0..3 now L3 L4 L5 "" */
+    ASSERT_EQ(t.hist_n, 3, "three lines scrolled off");
+    ASSERT_EQ(t.cells[0][1].ch, '3', "grid top is L3");
+    ASSERT_EQ(gterm_view_row(&t, 0)[1].ch, '3', "view 0 = the live grid");
+
+    ASSERT(gterm_scroll_view(&t, 2), "scrolled back 2");
+    ASSERT_EQ(gterm_view_row(&t, 0)[1].ch, '1', "top shows L1");
+    ASSERT_EQ(gterm_view_row(&t, 1)[1].ch, '2', "then L2");
+    ASSERT_EQ(gterm_view_row(&t, 2)[1].ch, '3', "then the grid's L3");
+
+    ASSERT(gterm_scroll_view(&t, 99), "clamped to the oldest line");
+    ASSERT_EQ(t.view, 3, "view <= hist_n");
+    ASSERT_EQ(gterm_view_row(&t, 0)[1].ch, '0', "oldest = L0");
+    ASSERT(!gterm_scroll_view(&t, 1), "no further back");
+    ASSERT(gterm_scroll_view(&t, -99), "back to live");
+    ASSERT_EQ(t.view, 0, "live");
+}
+
+static void test_scrollback_stable_and_ring(void)
+{
+    static gterm_t t;
+    gterm_init(&t);
+    gterm_set_history(&t, g_hist, 8);
+    gterm_resize(&t, 4, 20);
+    feed_lines(&t, 6);
+    gterm_scroll_view(&t, 1);       /* top shows L2 */
+    feed_lines(&t, 1);              /* new output scrolls one more line */
+    ASSERT_EQ(t.view, 2, "view follows the text it shows");
+    ASSERT_EQ(gterm_view_row(&t, 0)[1].ch, '2', "still L2 on top");
+
+    gterm_scroll_view(&t, -99);
+    feed_lines(&t, 20);             /* overflow the 8-line ring */
+    ASSERT_EQ(t.hist_n, 8, "ring full");
+    gterm_scroll_view(&t, 99);
+    /* Written: L0..L5, L0, then L0..L19 -- 27 lines.  The 4-row grid holds
+     * the last 3 + a blank row, so 24 scrolled off and the ring keeps the
+     * newest 8 of those: L9..L16, the oldest L9. */
+    ASSERT_EQ(gterm_view_row(&t, 0)[1].ch, '9', "oldest kept is L9");
+    ASSERT_EQ(gterm_view_row(&t, 7)[2].ch, '6', "newest kept is L16");
+    ASSERT_EQ(gterm_view_row(&t, 8)[2].ch, '7', "then the grid's L17");
+}
+
+static void test_scrollback_resize_saves_lines(void)
+{
+    static gterm_t t;
+    gterm_init(&t);
+    gterm_set_history(&t, g_hist, 8);
+    gterm_resize(&t, 6, 20);
+    feed(&t, "A\nB\nC\nD\nE");      /* cursor on row 4 */
+    gterm_resize(&t, 2, 20);        /* rows A B C scroll away */
+    ASSERT_EQ(t.hist_n, 3, "shrinking pushes the lost rows");
+    ASSERT_EQ(t.cells[0][0].ch, 'D', "grid keeps D E");
+    gterm_scroll_view(&t, 3);
+    ASSERT_EQ(gterm_view_row(&t, 0)[0].ch, 'A', "A is in the scrollback");
+}
+
 int main(void)
 {
     RUN_SUITE(test_init);
@@ -580,6 +666,10 @@ int main(void)
 
     RUN_SUITE(test_resize_grow_shrink);
     RUN_SUITE(test_resize_keeps_cursor_visible);
+
+    RUN_SUITE(test_scrollback_push_and_view);
+    RUN_SUITE(test_scrollback_stable_and_ring);
+    RUN_SUITE(test_scrollback_resize_saves_lines);
 
     TEST_SUMMARY();
 }

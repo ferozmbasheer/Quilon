@@ -1,10 +1,24 @@
 /*
- * Quilon OS -- File Browser app (section 14.4, single-threaded WM)
+ * Quilon OS -- File Browser app (section 14.4; widget kit, ROADMAP3 18.5)
  *
- * Scrollable directory listing.  Up/Down (or j/k), Page Up/Down and Home/End
- * move the selection; Enter or clicking the selected row navigates into a
- * directory or opens a file in a textview; the mouse wheel scrolls.  Implemented as non-blocking WM
- * callbacks (on_event for keys/close); per-window state in win->app_state.
+ *   [Up] [ /path/of/this/dir           ]     toolbar: button + path bar
+ *   ..                                  |^|
+ *   SUBDIR                              |#|  list view + scrollbar
+ *   README.TXT                          | |
+ *   HELLO.ELF                           |v|
+ *
+ * Click selects, double-click (or Enter) opens: a directory is entered, an
+ * .elf runs in a new Terminal window, anything else opens in a Textview.
+ * Backspace or the Up button goes to the parent.  Click the path bar (or
+ * press Ctrl-L / '/') to type a path; Enter goes there, Esc cancels.  Wheel,
+ * arrows, Page Up/Down, Home/End and the scrollbar scroll.
+ *
+ * The browser keeps its own directory path and never leaves the process in
+ * it: the kernel's cwd isn't per process yet (REVIEW.md), so a lasting
+ * chdir() here would move every terminal's shell too.  Listing a directory
+ * is chdir there, readdir, chdir back.
+ *
+ * Non-blocking WM callbacks; per-window state in win->app_state.
  */
 
 #include <unistd.h>
@@ -13,86 +27,180 @@
 #include <dirent.h>
 #include <gfx.h>
 #include "../wm/wm.h"
+#include "../wm/widgets.h"
+#include "fb_path.h"
 
-#define LIST_ITEM_H  16
-#define MAX_ENTRIES  64
+#define MAX_ENTRIES  256
+#define LIST_ITEM_H   16
+#define TOOLBAR_H     26
+#define UP_BTN        ((rect_t){ 4, 3, 36, 20 })
 
-typedef struct {
-    char name[64];
-    int  is_dir;
-} fb_entry_t;
+#define FB_BG         GFX_RGB(20, 20, 20)
+#define FB_DIR_FG     GFX_RGB(100, 180, 255)
+#define FB_FILE_FG    GFX_RGB(220, 220, 220)
+#define FB_PROG_FG    GFX_RGB(120, 220, 120)
 
 typedef struct {
     fb_entry_t entries[MAX_ENTRIES];
-    int        n;
-    int        scroll;
-    int        selected;
-    int        rows;
+    char       cwd[FB_PATH_MAX];      /* the directory shown            */
+    wg_slist_t view;                  /* entries + scrollbar            */
+    wg_input_t path;                  /* the path bar                   */
+    int        editing;               /* 1 = keys go to the path bar    */
+    int        up_down;               /* Up button held                 */
 } fb_state_t;
 
-static int fb_read_dir(fb_entry_t *entries, int max)
+static rect_t fb_path_rect(int w) { return (rect_t){ 44, 3, w - 48, 20 }; }
+
+/* Read directory `dir` into st->entries.  -1 (and nothing changed) if it
+ * can't be entered. */
+static int fb_load(fb_state_t *st, const char *dir)
 {
-    dirent_t ent;
-    unsigned int i = 0;
+    char saved[FB_PATH_MAX];
+    if (!getcwd(saved, sizeof saved)) { saved[0] = '/'; saved[1] = '\0'; }
+    if (chdir(dir) != 0) return -1;
+
     int n = 0;
-    while (n < max && readdir(i, &ent) == 0) {
-        int len = strlen(ent.name);
-        if (len >= 64) len = 63;
-        int j;
-        for (j = 0; j < len; j++) entries[n].name[j] = ent.name[j];
-        entries[n].name[len] = '\0';
-        entries[n].is_dir    = (ent.type == DIRENT_TYPE_DIR);
+    if (!(dir[0] == '/' && dir[1] == '\0')) {          /* a way back up */
+        fb_copy(st->entries[0].name, "..");
+        st->entries[0].is_dir = 1;
+        n = 1;
+    }
+    dirent_t ent;
+    for (unsigned int i = 0; n < MAX_ENTRIES && readdir(i, &ent) == 0; i++) {
+        /* "." is useless here; ".." we added ourselves (root has none). */
+        if (ent.name[0] == '.' && (!ent.name[1] ||
+            (ent.name[1] == '.' && !ent.name[2])))
+            continue;
+        int len = (int)strlen(ent.name);
+        if (len >= FB_NAME_MAX) len = FB_NAME_MAX - 1;
+        memcpy(st->entries[n].name, ent.name, (size_t)len);
+        st->entries[n].name[len] = '\0';
+        st->entries[n].is_dir = (ent.type == DIRENT_TYPE_DIR);
         n++;
-        i++;
     }
-    return n;
+    chdir(saved);
+
+    fb_sort(st->entries, n);
+    if (dir != st->cwd) fb_copy(st->cwd, dir);
+    st->view.list.n   = n;
+    st->view.list.top = 0;
+    st->view.list.sel = n > 0 ? 0 : -1;
+    wg_input_set(&st->path, st->cwd);
+    return 0;
 }
 
-static void fb_render(canvas_t *c, fb_state_t *st)
+static const char *fb_row(void *ctx, int i, color_t *fg)
 {
-    int i;
-    gfx_fill(c, GFX_RGB(20, 20, 20));
-    for (i = st->scroll; i < st->n; i++) {
-        int y = (i - st->scroll) * LIST_ITEM_H;
-        if (y + LIST_ITEM_H > c->h) break;
-        color_t bg = (i == st->selected) ? GFX_RGB(50, 50, 150)
-                                         : GFX_RGB(20, 20, 20);
-        gfx_fill_rect(c, (rect_t){0, y, c->w, LIST_ITEM_H}, bg);
-        color_t fg = st->entries[i].is_dir ? GFX_RGB(100, 180, 255)
-                                           : GFX_RGB(220, 220, 220);
-        gfx_draw_text(c, 4, y + 1, st->entries[i].name, fg, bg);
+    fb_state_t *st = (fb_state_t *)ctx;
+    fb_entry_t *e  = &st->entries[i];
+    switch (fb_open_kind(e->name, e->is_dir)) {
+    case FB_OPEN_DIR:  *fg = FB_DIR_FG;  break;
+    case FB_OPEN_PROG: *fg = FB_PROG_FG; break;
+    default:           *fg = FB_FILE_FG; break;
+    }
+    return e->name;
+}
+
+static void fb_render(window_t *win)
+{
+    fb_state_t *st = (fb_state_t *)win->app_state;
+    canvas_t   *c  = win->backbuf;
+    gfx_fill_rect(c, (rect_t){ 0, 0, c->w, TOOLBAR_H }, WG_FACE);
+    wg_button_draw(c, UP_BTN, "Up", st->up_down);
+    wg_input_draw(c, fb_path_rect(c->w), &st->path, st->editing);
+    wg_slist_draw(c, &st->view, FB_BG, fb_row, st);
+    win->dirty = 1;
+}
+
+static void fb_layout(fb_state_t *st, int w, int h)
+{
+    wg_slist_layout(&st->view, (rect_t){ 0, TOOLBAR_H, w, h - TOOLBAR_H });
+}
+
+/* Go to `path` (relative to the shown directory, or absolute): enter a
+ * directory, open a file. */
+static void fb_go(fb_state_t *st, const char *name, int is_dir)
+{
+    char full[FB_PATH_MAX];
+    if (fb_path_join(st->cwd, name, full) != 0) return;
+    switch (fb_open_kind(full, is_dir)) {
+    case FB_OPEN_DIR:  fb_load(st, full);   break;
+    case FB_OPEN_PROG: wm_open_program(full); break;
+    default:           wm_open_textview(full); break;
     }
 }
 
-/* Open the selected entry: navigate into a directory, or open a file in a
- * textview.  Shared by the Enter key and a click on the selected row. */
+static void fb_up(fb_state_t *st);
+
 static void fb_activate(fb_state_t *st)
 {
-    if (st->selected < 0 || st->selected >= st->n) return;
+    int i = st->view.list.sel;
+    if (i < 0 || i >= st->view.list.n) return;
+    if (strcmp(st->entries[i].name, "..") == 0) { fb_up(st); return; }
+    fb_go(st, st->entries[i].name, st->entries[i].is_dir);
+}
 
-    if (st->entries[st->selected].is_dir) {
-        chdir(st->entries[st->selected].name);
-        st->n = fb_read_dir(st->entries, MAX_ENTRIES);
-        st->scroll = st->selected = 0;
-    } else {
-        /* Build absolute path: cwd + "/" + filename. */
-        char path[320];
-        char cwd_buf[256];
-        int j = 0;
-        if (getcwd(cwd_buf, sizeof(cwd_buf))) {
-            int cl = (int)strlen(cwd_buf);
-            int k;
-            for (k = 0; k < cl && j < (int)sizeof(path) - 1; k++)
-                path[j++] = cwd_buf[k];
-            if (j > 0 && path[j - 1] != '/' && j < (int)sizeof(path) - 1)
-                path[j++] = '/';
+/* Select the entry called `name`, if there is one. */
+static void fb_select_name(fb_state_t *st, const char *name)
+{
+    for (int i = 0; i < st->view.list.n; i++)
+        if (strcmp(st->entries[i].name, name) == 0) {
+            wg_list_select(&st->view.list, i);
+            return;
         }
-        int nl = (int)strlen(st->entries[st->selected].name);
-        int k;
-        for (k = 0; k < nl && j < (int)sizeof(path) - 1; k++)
-            path[j++] = st->entries[st->selected].name[k];
-        path[j] = '\0';
-        wm_open_textview(path);
+}
+
+/* To the parent directory, with the one we came from selected. */
+static void fb_up(fb_state_t *st)
+{
+    char up[FB_PATH_MAX], child[FB_NAME_MAX];
+    const char *base = st->cwd;
+    for (const char *p = st->cwd; *p; p++)
+        if (*p == '/' && p[1]) base = p + 1;
+    int n = 0;
+    while (base[n] && base[n] != '/' && n < FB_NAME_MAX - 1) { child[n] = base[n]; n++; }
+    child[n] = '\0';
+    fb_copy(up, st->cwd);
+    fb_parent(up);
+    if (fb_load(st, up) == 0) fb_select_name(st, child);
+}
+
+/* Enter in the path bar: a directory is shown, a file opened. */
+static void fb_path_enter(fb_state_t *st)
+{
+    char full[FB_PATH_MAX];
+    stat_t sb;
+    st->editing = 0;
+    if (fb_path_join(st->cwd, st->path.buf, full) == 0 &&
+        stat(full, &sb) == 0) {
+        fb_go(st, full, S_ISDIR(sb.st_type));
+        if (!S_ISDIR(sb.st_type)) wg_input_set(&st->path, st->cwd);
+    } else {
+        wg_input_set(&st->path, st->cwd);          /* no such path */
+    }
+}
+
+static void fb_key(fb_state_t *st, const wm_event_t *ev)
+{
+    if (st->editing) {
+        switch (wg_input_key(&st->path, ev->keycode, ev->ascii)) {
+        case WG_IN_ENTER:  fb_path_enter(st); break;
+        case WG_IN_CANCEL: st->editing = 0; wg_input_set(&st->path, st->cwd); break;
+        default: break;
+        }
+        return;
+    }
+    if ((ev->keycode == 'l' && (ev->mods & WM_MOD_CTRL)) || ev->keycode == '/') {
+        st->editing = 1;
+        if (ev->keycode == '/') wg_input_set(&st->path, "/");
+        return;
+    }
+    switch (ev->keycode) {
+    case WM_KEY_ENTER:     fb_activate(st); return;
+    case WM_KEY_BACKSPACE: fb_up(st);       return;
+    case 'j': wg_list_key(&st->view.list, WM_KEY_DOWN); return;
+    case 'k': wg_list_key(&st->view.list, WM_KEY_UP);   return;
+    default:  wg_list_key(&st->view.list, ev->keycode); return;
     }
 }
 
@@ -100,69 +208,47 @@ static void fb_event(window_t *win, const wm_event_t *ev)
 {
     fb_state_t *st = (fb_state_t *)win->app_state;
 
-    if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
-
-    if (ev->type == WM_EV_RESIZE) {           /* ROADMAP3 18.3 */
-        st->rows = ev->height / LIST_ITEM_H;
-        if (st->rows < 1) st->rows = 1;
-        st->scroll = wm_scroll_clamp(st->scroll, 0, st->n, st->rows);
-        if (st->selected >= st->scroll + st->rows)
-            st->scroll = st->selected - st->rows + 1;
-        fb_render(win->backbuf, st);
-        win->dirty = 1;
+    switch (ev->type) {
+    case WM_EV_CLOSE:
+        win->want_close = 1;
         return;
-    }
-
-    /* Mouse click: select the clicked row; a click on the already-selected
-     * row activates it (navigate into a dir / open a file). */
-    if (ev->type == WM_EV_SCROLL) {
-        int ns = wm_scroll_clamp(st->scroll, ev->wheel * WM_WHEEL_ROWS,
-                                 st->n, st->rows);
-        if (ns != st->scroll) {
-            st->scroll = ns;
-            fb_render(win->backbuf, st);
-            win->dirty = 1;
-        }
-        return;
-    }
-
-    if (ev->type == WM_EV_MOUSE_BTN) {
-        if (ev->button != MOUSE_BTN_LEFT) return;
-        int row = st->scroll + ev->y / LIST_ITEM_H;
-        if (row >= 0 && row < st->n) {
-            if (row == st->selected) {
-                fb_activate(st);
-            } else {
-                st->selected = row;
+    case WM_EV_RESIZE:                        /* ROADMAP3 18.3 */
+        fb_layout(st, ev->width, ev->height);
+        break;
+    case WM_EV_KEY:
+        fb_key(st, ev);
+        break;
+    case WM_EV_MOUSE_BTN:
+        if (ev->button == MOUSE_BTN_LEFT && ev->y < TOOLBAR_H) {
+            if (wm_rect_contains(UP_BTN, ev->x, ev->y)) {
+                st->up_down = 1;
+            } else if (wm_rect_contains(fb_path_rect(win->bounds.w),
+                                        ev->x, ev->y)) {
+                st->editing = 1;              /* cursor where clicked */
+                int col = st->path.scroll +
+                          (ev->x - fb_path_rect(win->bounds.w).x - 4 +
+                           GFX_CHAR_W / 2) / GFX_CHAR_W;
+                st->path.cur = col < 0 ? 0 : col > st->path.len ? st->path.len : col;
             }
-            fb_render(win->backbuf, st);
-            win->dirty = 1;
+            break;
         }
-        return;
+        st->editing = 0;
+        if (wg_slist_mouse(&st->view, ev, 1) == WG_SL_ACTIVATE)
+            fb_activate(st);
+        break;
+    case WM_EV_MOUSE_UP:
+        if (st->up_down && ev->button == MOUSE_BTN_LEFT) {
+            st->up_down = 0;
+            if (wm_rect_contains(UP_BTN, ev->x, ev->y)) fb_up(st);
+            break;
+        }
+        if (wg_slist_mouse(&st->view, ev, 1) == WG_SL_NONE) return;
+        break;
+    default:                                  /* wheel, thumb drag */
+        if (wg_slist_mouse(&st->view, ev, 1) == WG_SL_NONE) return;
+        break;
     }
-
-    if (ev->type != WM_EV_KEY) return;
-
-    int move = 0;
-    switch (ev->keycode) {
-    case 'j': case WM_KEY_DOWN: move = 1;             break;
-    case 'k': case WM_KEY_UP:   move = -1;            break;
-    case WM_KEY_PGDN:           move = st->rows - 1;  break;
-    case WM_KEY_PGUP:           move = -(st->rows - 1); break;
-    case WM_KEY_HOME:           move = -st->n;        break;
-    case WM_KEY_END:            move = st->n;         break;
-    case WM_KEY_ENTER:          fb_activate(st);      break;
-    default: return;
-    }
-    st->selected += move;
-    if (st->selected > st->n - 1) st->selected = st->n - 1;
-    if (st->selected < 0)         st->selected = 0;
-    if (st->selected < st->scroll) st->scroll = st->selected;
-    if (st->selected >= st->scroll + st->rows)
-        st->scroll = st->selected - st->rows + 1;
-
-    fb_render(win->backbuf, st);
-    win->dirty = 1;
+    fb_render(win);
 }
 
 static void fb_destroy(window_t *win)
@@ -175,15 +261,20 @@ void filebr_open(window_t *win)
 {
     fb_state_t *st = (fb_state_t *)malloc(sizeof(fb_state_t));
     if (!st) { win->want_close = 1; return; }
-    st->n        = fb_read_dir(st->entries, MAX_ENTRIES);
-    st->scroll   = 0;
-    st->selected = 0;
-    st->rows     = win->backbuf->h / LIST_ITEM_H;
+    memset(st, 0, sizeof *st);
+    st->view.list.row_h = LIST_ITEM_H;
+    fb_layout(st, win->backbuf->w, win->backbuf->h);
+
+    /* Start where the WM was started (normally "/"). */
+    char start[FB_PATH_MAX];
+    if (!getcwd(start, sizeof start) || fb_load(st, start) != 0) {
+        fb_copy(start, "/");
+        fb_load(st, start);
+    }
 
     win->app_state  = st;
     win->on_event   = fb_event;
     win->on_destroy = fb_destroy;
 
-    fb_render(win->backbuf, st);
-    win->dirty = 1;
+    fb_render(win);
 }
