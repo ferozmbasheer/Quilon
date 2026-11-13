@@ -44,13 +44,40 @@
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
 #define WM_MAX_WINDOWS   16
+/* Slots app windows may not take, kept free for WM-owned dialogs (the Power
+ * dialog), so the desktop can always be shut down even with every app slot
+ * full.  App launches go through wm_create_app_window. */
+#define WM_RESERVED_SLOTS 1
 #define WM_TITLE_LEN     32
 #define TITLEBAR_H       20   /* pixels */
 #define WM_CLOSE_BTN_W   16
 #define WM_CLOSE_BTN_H   16
 #define WM_BORDER_W       1
-#define WM_MIN_W         64
+#define WM_MIN_W         96   /* room for the title + 3 title buttons   */
 #define WM_MIN_H         32
+
+/* Title-bar buttons (ROADMAP3 18.3), right to left: close, maximize,
+ * minimize.  All WM_CLOSE_BTN_W x WM_CLOSE_BTN_H, WM_TBTN_GAP apart. */
+#define WM_TBTN_GAP       2
+#define WM_TBTN_CLOSE     0
+#define WM_TBTN_MAX       1
+#define WM_TBTN_MIN       2
+
+/* Resize grip: a square in the bottom-right corner of the content. */
+#define WM_GRIP_SZ       12
+
+/* Cascade placement of new windows (full-rect top-left of the first one;
+ * each next one is offset by a title-bar height). */
+#define WM_CASCADE_X0    40
+#define WM_CASCADE_Y0    60
+#define WM_CASCADE_STEP  TITLEBAR_H
+
+/* At least this much of a dragged window's title bar stays on screen. */
+#define WM_DRAG_KEEP     64
+
+/* Double-click on a title bar: two presses this close in time and space. */
+#define WM_DBLCLICK_MS   400
+#define WM_DBLCLICK_PX     4
 
 /* Mouse cursor footprint on screen, including its 1-px drop shadow.  The
  * damage rect for a cursor at (x, y) is (x, y, WM_CURSOR_W, WM_CURSOR_H). */
@@ -68,9 +95,16 @@
 #define WM_TBAR_FOCUSED     GFX_RGB( 72, 102, 158)   /* muted navy */
 #define WM_TBAR_UNFOCUSED   GFX_RGB(110, 110, 118)   /* gray-blue */
 #define WM_TBAR_TEXT_COL    GFX_WHITE
+#define WM_TBAR_TEXT_UNFOC  GFX_RGB(196, 196, 200)   /* dimmed title text */
 
-/* Close button */
-#define WM_CLOSE_COL        GFX_RGB(180,  50,  50)
+/* Title-bar buttons: bevelled gray with a black glyph; the close button
+ * turns red (white glyph) while the cursor is over it. */
+#define WM_CLOSE_COL        GFX_RGB(180,  50,  50)   /* close, hovered */
+#define WM_TBTN_GLYPH       GFX_BLACK
+
+/* Resize outline drawn while dragging the grip. */
+#define WM_OUTLINE_DARK     GFX_BLACK
+#define WM_OUTLINE_LIGHT    GFX_WHITE
 
 /* 3D bevel colours (used for window chrome and taskbar buttons) */
 #define WM_FRAME_BASE       GFX_RGB(207, 207, 207)   /* light gray fill */
@@ -103,6 +137,11 @@
  *   WM_EV_SCROLL     mouse wheel over the window: `wheel` notches,
  *                    > 0 = towards the user (scroll down), < 0 = up.
  *   WM_EV_CLOSE      the window's close box (or Alt-F4).
+ *   WM_EV_RESIZE     the content area changed size (resize grip, maximize,
+ *                    restore).  `width` x `height` is the new size; the WM
+ *                    has already given the window a new backbuf of that size
+ *                    (holding the old pixels top-left) -- re-lay out and
+ *                    redraw into it.  ROADMAP3 18.3.
  */
 typedef enum {
     WM_EV_NONE       = 0,
@@ -112,6 +151,7 @@ typedef enum {
     WM_EV_CLOSE      = 4,
     WM_EV_MOUSE_UP   = 5,
     WM_EV_SCROLL     = 6,
+    WM_EV_RESIZE     = 7,
 } wm_ev_type_t;
 
 typedef struct {
@@ -124,6 +164,8 @@ typedef struct {
     uint8_t      mods;        /* KEY: WM_MOD_* (wm_keys.h)                */
     int          keycode;     /* KEY: WM_KEY_* or the (lower-case) char   */
     int          wheel;       /* SCROLL: notches                          */
+    int          width;       /* RESIZE: new content size                 */
+    int          height;
     char         seq[WM_KEY_SEQ_MAX];   /* KEY: raw bytes                 */
     int          seq_len;
 } wm_event_t;
@@ -174,6 +216,12 @@ typedef struct wm_window_ {
     int            tick_ms;
     int            wait_fd;
     uint32_t       next_tick;        /* PIT tick the next timed tick is due */
+
+    /* Window operations (ROADMAP3 18.3). */
+    int            resizable;        /* 1 = grip + maximize (default)       */
+    int            minimized;        /* 1 = hidden; still alive and ticking */
+    int            maximized;        /* 1 = fills the screen                */
+    rect_t         restore;          /* bounds to go back to from maximized */
 } window_t;
 
 /* ── WM state ──────────────────────────────────────────────────────────── */
@@ -191,6 +239,17 @@ typedef struct {
     int      drag_win_id;   /* ID of window being dragged, -1 = none     */
     int      drag_ox;       /* cursor X offset within titlebar on drag   */
     int      drag_oy;       /* cursor Y offset within titlebar on drag   */
+
+    /* Grip resize in progress (ROADMAP3 18.3): only an outline follows the
+     * cursor; the window takes resize_rect's size on release. */
+    int      resize_win_id; /* -1 = none                                  */
+    int      resize_ox;     /* content's bottom-right minus press point   */
+    int      resize_oy;
+    rect_t   resize_rect;   /* proposed content bounds                    */
+
+    int      hover_close_id; /* window whose close button is hovered, 0  */
+    int      place_x;       /* full-rect top-left of the last cascaded    */
+    int      place_y;       /*   window; place_x < 0 = none yet           */
 } wm_state_t;
 
 /* ======================================================================== *
@@ -215,14 +274,40 @@ static inline rect_t wm_titlebar_rect(const window_t *w)
     return r;
 }
 
-static inline rect_t wm_close_btn_rect(const window_t *w)
+/*
+ * wm_tbtn_rect -- a title-bar button (WM_TBTN_CLOSE / _MAX / _MIN), packed
+ * right to left.  A window that can't be resized has no maximize button
+ * (an empty rect) and its minimize button moves into that place.
+ */
+static inline rect_t wm_tbtn_rect(const window_t *w, int which)
 {
     rect_t tb = wm_titlebar_rect(w);
-    rect_t r;
-    r.x = tb.x + tb.w - WM_CLOSE_BTN_W - 2;
+    rect_t r = { 0, 0, 0, 0 };
+    int pos = which;
+    if (which == WM_TBTN_MAX && !w->resizable) return r;
+    if (which == WM_TBTN_MIN && !w->resizable) pos = 1;
+    r.x = tb.x + tb.w - (pos + 1) * (WM_CLOSE_BTN_W + WM_TBTN_GAP);
     r.y = tb.y + (TITLEBAR_H - WM_CLOSE_BTN_H) / 2;
     r.w = WM_CLOSE_BTN_W;
     r.h = WM_CLOSE_BTN_H;
+    return r;
+}
+
+static inline rect_t wm_close_btn_rect(const window_t *w)
+{
+    return wm_tbtn_rect(w, WM_TBTN_CLOSE);
+}
+
+/* The resize grip (bottom-right of the content), or an empty rect for a
+ * window that can't be resized right now (fixed-size, or maximized). */
+static inline rect_t wm_grip_rect(const window_t *w)
+{
+    rect_t r = { 0, 0, 0, 0 };
+    if (!w->resizable || w->maximized) return r;
+    r.x = w->bounds.x + w->bounds.w - WM_GRIP_SZ;
+    r.y = w->bounds.y + w->bounds.h - WM_GRIP_SZ;
+    r.w = WM_GRIP_SZ;
+    r.h = WM_GRIP_SZ;
     return r;
 }
 
@@ -245,6 +330,16 @@ static inline int wm_in_titlebar(const window_t *w, int mx, int my)
 static inline int wm_in_close_btn(const window_t *w, int mx, int my)
 {
     return wm_rect_contains(wm_close_btn_rect(w), mx, my);
+}
+
+static inline int wm_in_tbtn(const window_t *w, int which, int mx, int my)
+{
+    return wm_rect_contains(wm_tbtn_rect(w, which), mx, my);
+}
+
+static inline int wm_in_grip(const window_t *w, int mx, int my)
+{
+    return wm_rect_contains(wm_grip_rect(w), mx, my);
 }
 
 static inline int wm_in_content(const window_t *w, int mx, int my)
@@ -276,6 +371,9 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
         s->windows[i].tick_ms     = 0;
         s->windows[i].wait_fd     = -1;
         s->windows[i].next_tick   = 0;
+        s->windows[i].resizable   = 1;
+        s->windows[i].minimized   = 0;
+        s->windows[i].maximized   = 0;
         s->z_order[i]             = i;
     }
     s->num_windows   = 0;
@@ -288,6 +386,13 @@ static inline void wm_state_init(wm_state_t *s, int screen_w, int screen_h)
     s->drag_win_id   = -1;
     s->drag_ox       = 0;
     s->drag_oy       = 0;
+    s->resize_win_id = -1;
+    s->resize_ox     = 0;
+    s->resize_oy     = 0;
+    s->resize_rect.x = s->resize_rect.y = s->resize_rect.w = s->resize_rect.h = 0;
+    s->hover_close_id = 0;
+    s->place_x       = -1;
+    s->place_y       = -1;
 }
 
 /*
@@ -327,6 +432,10 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
     win->tick_ms      = 0;
     win->wait_fd      = -1;
     win->next_tick    = 0;
+    win->resizable    = 1;
+    win->minimized    = 0;
+    win->maximized    = 0;
+    win->restore      = win->bounds;
 
     /* Copy title — avoid string.h dependency. */
     for (i = 0; i < WM_TITLE_LEN - 1 && title && title[i]; i++)
@@ -337,6 +446,18 @@ static inline int wm_create_window(wm_state_t *s, const char *title,
     s->z_order[s->num_windows] = slot;
     s->num_windows++;
     return win->id;
+}
+
+/*
+ * wm_create_app_window -- wm_create_window for ordinary app windows: fails
+ * (-1) once only the WM_RESERVED_SLOTS slots are left, so a WM dialog such as
+ * Power can still open.
+ */
+static inline int wm_create_app_window(wm_state_t *s, const char *title,
+                                       int x, int y, int w, int h)
+{
+    if (s->num_windows >= WM_MAX_WINDOWS - WM_RESERVED_SLOTS) return -1;
+    return wm_create_window(s, title, x, y, w, h);
 }
 
 /* Return slot index of window with given id, or -1.
@@ -357,6 +478,21 @@ static inline window_t *wm_find_window(wm_state_t *s, int id)
 {
     int idx = wm_find_idx(s, id);
     return (idx >= 0) ? &s->windows[idx] : (window_t *)0;
+}
+
+/*
+ * wm_focus_top -- give focus to the frontmost window that isn't minimized
+ * (none if every window is).  Returns its slot, or -1.
+ */
+static inline int wm_focus_top(wm_state_t *s)
+{
+    int i, top = -1;
+    for (i = s->num_windows - 1; i >= 0; i--) {
+        if (!s->windows[s->z_order[i]].minimized) { top = s->z_order[i]; break; }
+    }
+    for (i = 0; i < WM_MAX_WINDOWS; i++)
+        s->windows[i].focused = (i == top) ? 1 : 0;
+    return top;
 }
 
 /*
@@ -397,17 +533,21 @@ static inline void wm_destroy_window(wm_state_t *s, int id)
     w->on_destroy = (wm_on_destroy_fn)0;
     w->tick_ms    = 0;
     w->wait_fd    = -1;
+    w->minimized  = 0;
+    w->maximized  = 0;
+    w->resizable  = 1;
 
     s->num_windows--;
 
-    /* Transfer focus to the new frontmost window if needed. */
-    if (had_focus && s->num_windows > 0) {
-        int top = s->z_order[s->num_windows - 1];
-        s->windows[top].focused = 1;
-    }
+    /* Transfer focus to the new frontmost (visible) window if needed. */
+    if (had_focus) wm_focus_top(s);
 
     if (s->drag_win_id == id)
         s->drag_win_id = -1;
+    if (s->resize_win_id == id)
+        s->resize_win_id = -1;
+    if (s->hover_close_id == id)
+        s->hover_close_id = 0;
 }
 
 /*
@@ -419,6 +559,7 @@ static inline int wm_hittest(const wm_state_t *s, int mx, int my)
     int i;
     for (i = s->num_windows - 1; i >= 0; i--) {
         int slot = s->z_order[i];
+        if (s->windows[slot].minimized) continue;
         if (wm_in_window(&s->windows[slot], mx, my))
             return slot;
     }
@@ -454,19 +595,181 @@ static inline void wm_focus(wm_state_t *s, int slot)
         s->windows[i].focused = (i == slot && s->windows[i].id != 0) ? 1 : 0;
 }
 
+/* ── Minimize / maximize (ROADMAP3 18.3) ───────────────────────────────── */
+
+/*
+ * wm_minimize -- hide the window at `slot`.  It stays alive (ticking, its
+ * shell running) but is not drawn, hit-tested or focused.  It moves to the
+ * BACK of z_order, so the next Alt-Tab brings it straight back; focus goes
+ * to the frontmost visible window.
+ */
+static inline void wm_minimize(wm_state_t *s, int slot)
+{
+    window_t *w = &s->windows[slot];
+    if (w->id == 0 || w->minimized) return;
+    int i, z_pos = -1;
+    for (i = 0; i < s->num_windows; i++)
+        if (s->z_order[i] == slot) { z_pos = i; break; }
+    if (z_pos < 0) return;
+    for (i = z_pos; i > 0; i--)
+        s->z_order[i] = s->z_order[i - 1];
+    s->z_order[0] = slot;
+
+    w->minimized = 1;
+    w->focused   = 0;
+    if (s->drag_win_id == w->id)    s->drag_win_id = -1;
+    if (s->resize_win_id == w->id)  s->resize_win_id = -1;
+    if (s->hover_close_id == w->id) s->hover_close_id = 0;
+    wm_focus_top(s);
+}
+
+/* wm_unminimize -- show a minimized window again, raised and focused. */
+static inline void wm_unminimize(wm_state_t *s, int slot)
+{
+    window_t *w = &s->windows[slot];
+    if (w->id == 0) return;
+    w->minimized = 0;
+    w->dirty     = 1;
+    wm_raise(s, slot);
+    wm_focus(s, slot);
+}
+
+/* The content bounds of a maximized window: the whole screen (the WM's
+ * screen_h already excludes the taskbar) below one title bar. */
+static inline rect_t wm_maximized_bounds(const wm_state_t *s)
+{
+    rect_t r = { 0, TITLEBAR_H, s->screen_w, s->screen_h - TITLEBAR_H };
+    return r;
+}
+
+/*
+ * wm_toggle_maximize -- maximize the window at `slot`, remembering its
+ * bounds, or put a maximized one back where it was.  Only bounds change
+ * here; the WM notices the new size and reallocates the backbuf + sends
+ * WM_EV_RESIZE.  A fixed-size window is left alone.
+ */
+static inline void wm_toggle_maximize(wm_state_t *s, int slot)
+{
+    window_t *w = &s->windows[slot];
+    if (w->id == 0 || !w->resizable) return;
+    if (w->maximized) {
+        w->bounds    = w->restore;
+        w->maximized = 0;
+    } else {
+        w->restore   = w->bounds;
+        w->bounds    = wm_maximized_bounds(s);
+        w->maximized = 1;
+    }
+    w->dirty = 1;
+    if (s->drag_win_id == w->id) s->drag_win_id = -1;
+}
+
 /*
  * wm_cycle_focus -- Alt-Tab (ROADMAP3 18.2): raise and focus the BACKMOST
- * window.  Repeating it visits every window in turn (the old front window
- * moves back one place each time).  Returns the newly focused slot, or -1
- * with no windows.
+ * window -- un-minimizing it if it was minimized (minimize puts a window at
+ * the back, so Alt-Tab right after it restores it).  Repeating it visits
+ * every window in turn (the old front window moves back one place each
+ * time).  Returns the newly focused slot, or -1 with no windows.
  */
 static inline int wm_cycle_focus(wm_state_t *s)
 {
     if (s->num_windows <= 0) return -1;
     int slot = s->z_order[0];
+    if (s->windows[slot].minimized) {
+        wm_unminimize(s, slot);
+        return slot;
+    }
     wm_raise(s, slot);
     wm_focus(s, slot);
     return slot;
+}
+
+/* ── Placement (ROADMAP3 18.3) ────────────────────────────────────────────
+ * wm_cascade_pos -- where to put a new w x h window: one title-bar height
+ * down-right of the last cascaded window (WM_CASCADE_X0/Y0 for the first,
+ * or when no windows are open), wrapping back there when it would run off
+ * the screen.  Returns the CONTENT origin (as wm_create_window takes it). */
+static inline void wm_cascade_pos(wm_state_t *s, int w, int h,
+                                  int *out_x, int *out_y)
+{
+    int x = WM_CASCADE_X0, y = WM_CASCADE_Y0;
+    if (s->num_windows > 0 && s->place_x >= 0) {
+        x = s->place_x + WM_CASCADE_STEP;
+        y = s->place_y + WM_CASCADE_STEP;
+        if (x + w > s->screen_w || y + TITLEBAR_H + h > s->screen_h) {
+            x = WM_CASCADE_X0;
+            y = WM_CASCADE_Y0;
+        }
+    }
+    s->place_x = x;
+    s->place_y = y;
+    *out_x = x;
+    *out_y = y + TITLEBAR_H;
+}
+
+/* ── Resize (ROADMAP3 18.3) ────────────────────────────────────────────── */
+
+/*
+ * wm_resize_bounds -- the content bounds window `w` would get with its grip
+ * dragged to (mx, my): the top-left stays put; the size follows the cursor
+ * (keeping the press offset), clamped to WM_MIN_W x WM_MIN_H and so the
+ * window doesn't grow past the screen's right/bottom edge.
+ */
+static inline rect_t wm_resize_bounds(const wm_state_t *s, const window_t *w,
+                                      int mx, int my)
+{
+    rect_t r = w->bounds;
+    r.w = mx + s->resize_ox - r.x;
+    r.h = my + s->resize_oy - r.y;
+    if (r.w > s->screen_w - r.x) r.w = s->screen_w - r.x;
+    if (r.h > s->screen_h - r.y) r.h = s->screen_h - r.y;
+    if (r.w < WM_MIN_W) r.w = WM_MIN_W;
+    if (r.h < WM_MIN_H) r.h = WM_MIN_H;
+    return r;
+}
+
+/* The on-screen outline for a resize in progress (title bar + content). */
+static inline rect_t wm_resize_outline(const wm_state_t *s)
+{
+    rect_t r = s->resize_rect;
+    r.y -= TITLEBAR_H;
+    r.h += TITLEBAR_H;
+    return r;
+}
+
+/* ── Drag clamping (ROADMAP3 18.3) ────────────────────────────────────────
+ * Content origin for a window dragged so its title bar's top-left would be
+ * at (tx, ty): at least WM_DRAG_KEEP pixels of the title bar stay on screen
+ * horizontally (so it can always be grabbed again), and the whole title bar
+ * stays inside the screen vertically. */
+static inline void wm_clamp_drag(const wm_state_t *s, const window_t *w,
+                                 int tx, int ty, int *out_x, int *out_y)
+{
+    int keep = WM_DRAG_KEEP < w->bounds.w ? WM_DRAG_KEEP : w->bounds.w;
+    if (tx < keep - w->bounds.w)   tx = keep - w->bounds.w;
+    if (tx > s->screen_w - keep)   tx = s->screen_w - keep;
+    if (ty > s->screen_h - TITLEBAR_H) ty = s->screen_h - TITLEBAR_H;
+    if (ty < 0)                    ty = 0;
+    *out_x = tx;
+    *out_y = ty + TITLEBAR_H;
+}
+
+/* Two presses `dt` PIT ticks apart and (dx, dy) pixels apart: double-click? */
+static inline int wm_is_double_click(uint32_t dt, uint32_t hz, int dx, int dy)
+{
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    return (uint64_t)dt * 1000u <= (uint64_t)WM_DBLCLICK_MS * hz &&
+           dx <= WM_DBLCLICK_PX && dy <= WM_DBLCLICK_PX;
+}
+
+/* Window id whose close button is under (mx, my) -- only if that window is
+ * the one actually hit there -- or 0.  Drives the close-button hover. */
+static inline int wm_hover_close(const wm_state_t *s, int mx, int my)
+{
+    int hit = wm_hittest(s, mx, my);
+    if (hit < 0) return 0;
+    return wm_in_close_btn(&s->windows[hit], mx, my) ? s->windows[hit].id : 0;
 }
 
 /*
@@ -504,10 +807,12 @@ static inline int wm_button_edges(uint8_t prev, uint8_t now, uint8_t pressed,
 /* ── Mouse event handling ──────────────────────────────────────────────── */
 
 /*
- * wm_handle_mouse_down -- process a button press.
+ * wm_handle_mouse_down -- process a (left) button press.
  *
- * Raises and focuses the hit window.  If the click lands in the title bar,
- * starts a drag.  If in the close button, destroys the window.
+ * Raises and focuses the hit window, then by where the click landed:
+ * close button -> destroy; maximize -> toggle maximize; minimize ->
+ * minimize; resize grip -> start a resize; elsewhere in the title bar ->
+ * start a drag (not while maximized).
  */
 static inline void wm_handle_mouse_down(wm_state_t *s,
                                         int mx, int my, uint8_t buttons)
@@ -532,8 +837,23 @@ static inline void wm_handle_mouse_down(wm_state_t *s,
         wm_destroy_window(s, win_id);
         return;
     }
+    if (wm_in_tbtn(w, WM_TBTN_MAX, mx, my)) {
+        wm_toggle_maximize(s, idx);
+        return;
+    }
+    if (wm_in_tbtn(w, WM_TBTN_MIN, mx, my)) {
+        wm_minimize(s, idx);
+        return;
+    }
+    if (wm_in_grip(w, mx, my)) {
+        s->resize_win_id = win_id;
+        s->resize_ox     = w->bounds.x + w->bounds.w - mx;
+        s->resize_oy     = w->bounds.y + w->bounds.h - my;
+        s->resize_rect   = w->bounds;
+        return;
+    }
 
-    if (wm_in_titlebar(w, mx, my)) {
+    if (wm_in_titlebar(w, mx, my) && !w->maximized) {
         s->drag_win_id = win_id;
         rect_t tb      = wm_titlebar_rect(w);
         s->drag_ox     = mx - tb.x;
@@ -549,6 +869,13 @@ static inline void wm_handle_mouse_move(wm_state_t *s, int mx, int my)
     s->mouse_x = mx;
     s->mouse_y = my;
 
+    if (s->resize_win_id >= 0) {
+        window_t *rw = wm_find_window(s, s->resize_win_id);
+        if (!rw) { s->resize_win_id = -1; return; }
+        s->resize_rect = wm_resize_bounds(s, rw, mx, my);
+        return;
+    }
+
     if (s->drag_win_id < 0) return;
 
     int idx = wm_find_idx(s, s->drag_win_id);
@@ -556,18 +883,9 @@ static inline void wm_handle_mouse_move(wm_state_t *s, int mx, int my)
 
     window_t *w = &s->windows[idx];
 
-    int new_x = mx - s->drag_ox;
-    int new_y = my - s->drag_oy + TITLEBAR_H;
-
-    /* Keep title bar on screen. */
-    if (new_x < -(w->bounds.w - WM_CLOSE_BTN_W * 2))
-        new_x = -(w->bounds.w - WM_CLOSE_BTN_W * 2);
-    if (new_x > s->screen_w - WM_CLOSE_BTN_W * 2)
-        new_x = s->screen_w - WM_CLOSE_BTN_W * 2;
-    if (new_y < TITLEBAR_H)
-        new_y = TITLEBAR_H;
-    if (new_y > s->screen_h)
-        new_y = s->screen_h;
+    /* Keep (enough of) the title bar on screen. */
+    int new_x, new_y;
+    wm_clamp_drag(s, w, mx - s->drag_ox, my - s->drag_oy, &new_x, &new_y);
 
     w->bounds.x = new_x;
     w->bounds.y = new_y;
@@ -575,12 +893,23 @@ static inline void wm_handle_mouse_move(wm_state_t *s, int mx, int my)
 }
 
 /*
- * wm_handle_mouse_up -- end the current drag.
+ * wm_handle_mouse_up -- end the current drag, or finish a resize: the
+ * window takes the outline's size (the WM then reallocates its backbuf
+ * and sends WM_EV_RESIZE).
  */
 static inline void wm_handle_mouse_up(wm_state_t *s)
 {
     s->mouse_buttons = 0;
     s->drag_win_id   = -1;
+    if (s->resize_win_id >= 0) {
+        window_t *w = wm_find_window(s, s->resize_win_id);
+        if (w) {
+            w->bounds.w = s->resize_rect.w;
+            w->bounds.h = s->resize_rect.h;
+            w->dirty    = 1;
+        }
+        s->resize_win_id = -1;
+    }
 }
 
 /* ── Rect algebra (ROADMAP3 18.1) ──────────────────────────────────────── */
@@ -681,6 +1010,22 @@ static inline rect_t wm_cursor_rect(int mx, int my)
 {
     rect_t r = { mx, my, WM_CURSOR_W, WM_CURSOR_H };
     return r;
+}
+
+/* Damage the 2-px frame of rect r (the resize outline) as four strips that
+ * don't overlap each other, rather than the whole rect. */
+#define WM_OUTLINE_W 2
+static inline void wm_damage_frame(wm_damage_t *d, rect_t r)
+{
+    int t = WM_OUTLINE_W;
+    rect_t top = { r.x, r.y, r.w, t };
+    rect_t bot = { r.x, r.y + r.h - t, r.w, t };
+    rect_t lft = { r.x, r.y + t, t, r.h - 2 * t };
+    rect_t rgt = { r.x + r.w - t, r.y + t, t, r.h - 2 * t };
+    wm_damage_add(d, top);
+    wm_damage_add(d, bot);
+    wm_damage_add(d, lft);
+    wm_damage_add(d, rgt);
 }
 
 /* ── Tick scheduling (ROADMAP3 18.1) ─────────────────────────────────────
@@ -804,6 +1149,8 @@ void wm_composite(wm_state_t *s, canvas_t *screen);
  * ROADMAP3 18.1. */
 void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip);
 void wm_draw_cursor(canvas_t *screen, int mx, int my);
+/* The 2-px resize outline (WM_OUTLINE_W) around full-window rect r. */
+void wm_draw_outline(canvas_t *screen, rect_t r);
 /* App buttons from the left, and the Power button at the right end. */
 void wm_draw_taskbar(canvas_t *screen, int sw, int sh, int taskbar_h,
                      const char **labels, int nlabels, int btn_w);

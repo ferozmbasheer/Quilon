@@ -87,9 +87,20 @@ kbdtest: check-toolchain
 # 1280x800 screen).  Each closed terminal's shell must see EOF and exit -- it
 # used to spin forever as an unreaped orphan.
 WM_CYCLE = {mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:670,70}{click}{wait:4}
+#
+# Then window operations (ROADMAP3 18.3), on a fresh boot: open a Terminal
+# (cascade origin: content (40,80) 640x384), drag its resize grip (bottom-right
+# corner, 680,464) by +100,+64 -> 740x448; double-click the title bar ->
+# maximized to 1280x752 (800 - 28 taskbar - 20 title bar); the restore button
+# (1252,10) -> back to 740x448; the minimize button (734,70); Alt-Tab restores
+# it.  "restored" only logs for a window that was minimized.
+WM_OPS_KEYS = startx\n{until:[wm] screen}{wait:2}{mouse:-3000,-3000}{mouse:55,786}{click}{wait:4}{mouse:-3000,-3000}{mouse:676,460}{down}{mouse:50,32}{mouse:50,32}{up}{wait:2}{mouse:-3000,-3000}{mouse:300,70}{dblclick}{wait:2}{mouse:-3000,-3000}{mouse:1252,10}{click}{wait:2}{mouse:-3000,-3000}{mouse:734,70}{click}{wait:2}{key:alt-tab}{wait:2}
 wmtest: check-toolchain
 	@SMOKE_KEYS='startx\n{until:[wm] screen}{wait:2}$(WM_CYCLE)$(WM_CYCLE)$(WM_CYCLE)' \
 	    SMOKE_SENTINEL='exited (code 0)' SMOKE_SENTINEL_COUNT=3 \
+	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
+	@SMOKE_KEYS='$(WM_OPS_KEYS)' SMOKE_SENTINEL="[wm] restored 'Terminal'" \
+	    SMOKE_ALSO="[wm] resized 'Terminal' to 740x448" SMOKE_ALSO_COUNT=2 \
 	    SMOKE_TIMEOUT=$${SMOKE_TIMEOUT:-90} ./tools/smoke_test.sh
 
 # `exit` in a terminal window closes the window -- but only the terminal's own

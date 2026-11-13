@@ -110,6 +110,71 @@ static void sunken_bevel(canvas_t *c, int x, int y, int w, int h)
     gfx_fill_rect(c, (rect_t){x+w-1, y,     1,   h}, WM_FRAME_HI);
 }
 
+/* ── Title-bar buttons + grip (ROADMAP3 18.3) ──────────────────────────── */
+
+/* A 2-px-thick line: the glyphs are too thin to read at 1 px. */
+static void thick_line(canvas_t *c, int x0, int y0, int x1, int y1, color_t col)
+{
+    gfx_draw_line(c, x0, y0, x1, y1, col);
+    gfx_draw_line(c, x0 + 1, y0, x1 + 1, y1, col);
+}
+
+static void draw_tbtn(canvas_t *c, const window_t *w, int which, int hover)
+{
+    rect_t r = wm_tbtn_rect(w, which);
+    if (wm_rect_empty(r)) return;
+    int red = (which == WM_TBTN_CLOSE && hover);
+    color_t face  = red ? WM_CLOSE_COL : WM_FRAME_BASE;
+    color_t glyph = red ? GFX_WHITE : WM_TBTN_GLYPH;
+    gfx_fill_rect(c, r, face);
+    raised_bevel(c, r.x, r.y, r.w, r.h);
+
+    int x0 = r.x + 4, y0 = r.y + 4;          /* glyph box: 7 x 7 */
+    int x1 = r.x + r.w - 6, y1 = r.y + r.h - 6;
+    switch (which) {
+    case WM_TBTN_CLOSE:
+        thick_line(c, x0, y0, x1 - 1, y1, glyph);
+        thick_line(c, x1 - 1, y0, x0, y1, glyph);
+        break;
+    case WM_TBTN_MAX:
+        if (w->maximized) {
+            /* "Restore": two overlapping frames. */
+            gfx_draw_rect(c, (rect_t){ x0 + 2, y0, x1 - x0 - 1, y1 - y0 - 1 }, glyph);
+            gfx_fill_rect(c, (rect_t){ x0, y0 + 2, x1 - x0 - 1, y1 - y0 - 1 }, face);
+            gfx_draw_rect(c, (rect_t){ x0, y0 + 2, x1 - x0 - 1, y1 - y0 - 1 }, glyph);
+            gfx_fill_rect(c, (rect_t){ x0, y0 + 2, x1 - x0 - 1, 2 }, glyph);
+        } else {
+            gfx_draw_rect(c, (rect_t){ x0, y0, x1 - x0 + 1, y1 - y0 + 1 }, glyph);
+            gfx_fill_rect(c, (rect_t){ x0, y0, x1 - x0 + 1, 2 }, glyph);
+        }
+        break;
+    case WM_TBTN_MIN:
+        gfx_fill_rect(c, (rect_t){ x0, y1 - 1, x1 - x0 + 1, 2 }, glyph);
+        break;
+    }
+}
+
+/* Three diagonal ridges in the bottom-right corner of the content. */
+static void draw_grip(canvas_t *c, const window_t *w)
+{
+    rect_t g = wm_grip_rect(w);
+    if (wm_rect_empty(g)) return;
+    int x1 = g.x + g.w - 2, y1 = g.y + g.h - 2;
+    for (int k = 3; k <= 9; k += 3) {
+        gfx_draw_line(c, x1 - k, y1, x1, y1 - k, WM_FRAME_HI);
+        gfx_draw_line(c, x1 - k + 1, y1, x1, y1 - k + 1, WM_FRAME_SHADOW);
+    }
+}
+
+void wm_draw_outline(canvas_t *screen, rect_t r)
+{
+    if (wm_rect_empty(r)) return;
+    gfx_draw_rect(screen, r, WM_OUTLINE_DARK);
+    if (r.w > 2 && r.h > 2)
+        gfx_draw_rect(screen, (rect_t){ r.x + 1, r.y + 1, r.w - 2, r.h - 2 },
+                      WM_OUTLINE_LIGHT);
+}
+
 /* ── Compositor (painter's algorithm) ─────────────────────────────────────── */
 
 /*
@@ -132,38 +197,31 @@ void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip)
     /* 2. Back-to-front via z_order (z_order[0]=back, z_order[num_windows-1]=front). */
     for (i = 0; i < s->num_windows; i++) {
         window_t *w = &s->windows[s->z_order[i]];
+        if (w->minimized) continue;           /* hidden, still alive (18.3) */
 
         rect_t full  = wm_full_rect(w);
         if (!wm_rect_intersects(full, clip)) continue;
 
         rect_t tb    = wm_titlebar_rect(w);
-        rect_t close = wm_close_btn_rect(w);
         color_t tbar_col = w->focused ? WM_TBAR_FOCUSED : WM_TBAR_UNFOCUSED;
 
         int fx = full.x, fy = full.y, fw = full.w, fh = full.h;
 
         /* ── Title bar ─────────────────────────────────────────────────── */
         gfx_fill_rect(screen, tb, tbar_col);
-        /* Title text — vertically centred, leave room on right for close btn. */
+        /* Title text — vertically centred; dimmed when unfocused.  The
+         * buttons are drawn over its right end. */
         gfx_draw_text(screen,
                       tb.x + 6,
                       tb.y + (TITLEBAR_H - GFX_CHAR_H) / 2,
-                      w->title, WM_TBAR_TEXT_COL, tbar_col);
+                      w->title,
+                      w->focused ? WM_TBAR_TEXT_COL : WM_TBAR_TEXT_UNFOC,
+                      tbar_col);
 
-        /* ── Close button ──────────────────────────────────────────────── */
-        gfx_fill_rect(screen, close, WM_CLOSE_COL);
-        /* Draw × with two diagonal lines. */
-        {
-            int pad = 3;
-            gfx_draw_line(screen,
-                          close.x + pad,            close.y + pad,
-                          close.x + close.w-1-pad,  close.y + close.h-1-pad,
-                          GFX_WHITE);
-            gfx_draw_line(screen,
-                          close.x + close.w-1-pad,  close.y + pad,
-                          close.x + pad,            close.y + close.h-1-pad,
-                          GFX_WHITE);
-        }
+        /* ── Title-bar buttons: minimize, maximize, close ──────────────── */
+        draw_tbtn(screen, w, WM_TBTN_MIN,   0);
+        draw_tbtn(screen, w, WM_TBTN_MAX,   0);
+        draw_tbtn(screen, w, WM_TBTN_CLOSE, s->hover_close_id == w->id);
 
         /* ── App canvas ────────────────────────────────────────────────── */
         if (w->backbuf) {
@@ -182,6 +240,7 @@ void wm_composite_rect(wm_state_t *s, canvas_t *screen, rect_t clip)
         sunken_bevel(screen,
                      w->bounds.x, w->bounds.y,
                      w->bounds.w, w->bounds.h);
+        draw_grip(screen, w);
 
         /* ── 3D raised frame (outermost layer, drawn last) ─────────────── */
         raised_bevel(screen, fx, fy, fw, fh);
@@ -199,6 +258,8 @@ void wm_composite(wm_state_t *s, canvas_t *screen)
     wm_composite_rect(s, screen, all);
     for (int i = 0; i < s->num_windows; i++)
         s->windows[s->z_order[i]].dirty = 0;
+    if (s->resize_win_id >= 0)
+        wm_draw_outline(screen, wm_resize_outline(s));
 }
 
 /* ── Taskbar ─────────────────────────────────────────────────────────────── */

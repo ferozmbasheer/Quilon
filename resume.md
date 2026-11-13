@@ -68,9 +68,13 @@ idle damage-driven WM loop — done**, see its "as built" note: `SYS_WAIT_INPUT`
 `SYS_GFX_FLUSH_RECT`, damage rects, `waitq_sleep` halts; idle desktop 100% →
 ~4% host CPU; **18.2 richer events — done**: keycode/mods/raw-seq key events
 (`user/wm/wm_keys.h`), per-button press/release/drag with capture, latched
-kernel button edges, IntelliMouse wheel, Alt-Tab/Alt-F4; **next 18.3**
-resize/min/max/placement -- note new windows still need a click before they
-get focus -- then taskbar window list, widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
+kernel button edges, IntelliMouse wheel, Alt-Tab/Alt-F4; **18.3 window
+operations — done** (2026-11-12): grip resize with an outline + `WM_EV_RESIZE`
+via the loop's size-sync step, maximize/restore (button or title double-click),
+minimize (Alt-Tab restores until 18.4), cascade placement, new windows get
+focus, bevelled min/max/close with close hover; gterm grid is resizable;
+**next 18.4** taskbar window list (also the mouse way to restore a minimized
+window) + tray, then 18.5 widgets) → rest of §17.0 (errno, per-process fds/cwd, libc build-out or
 newlib/PDCLib port) → 17.1–17.3. The 15.x and 16.x details below are
 kept as a record.
 

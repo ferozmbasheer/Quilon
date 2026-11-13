@@ -102,6 +102,17 @@ static void fb_event(window_t *win, const wm_event_t *ev)
 
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
 
+    if (ev->type == WM_EV_RESIZE) {           /* ROADMAP3 18.3 */
+        st->rows = ev->height / LIST_ITEM_H;
+        if (st->rows < 1) st->rows = 1;
+        st->scroll = wm_scroll_clamp(st->scroll, 0, st->n, st->rows);
+        if (st->selected >= st->scroll + st->rows)
+            st->scroll = st->selected - st->rows + 1;
+        fb_render(win->backbuf, st);
+        win->dirty = 1;
+        return;
+    }
+
     /* Mouse click: select the clicked row; a click on the already-selected
      * row activates it (navigate into a dir / open a file). */
     if (ev->type == WM_EV_SCROLL) {

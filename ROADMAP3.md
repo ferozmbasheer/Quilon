@@ -66,7 +66,7 @@ build) real programs inside Quilon.
 
 **Order of work (2026-11):** 17.0.1 (keyboard, ✓ done) first — it unblocks typing
 code, Ctrl-C, and arrow keys for both the ports and the desktop. Then
-Section 18 (desktop polish; 18.1 + 18.2 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
+Section 18 (desktop polish; 18.1 + 18.2 + 18.3 ✓ done), then the rest of 17.0, then 17.1 → 17.3.
 
 ---
 
@@ -114,6 +114,7 @@ the new 17.0 prerequisites — interleaved with Section 18, desktop polish.)*
 | Keyboard + Ctrl-C (17.0.1) | `kbd_xlate.c`, `keyboard.c`, `signal.c`, `process.c` | ✓ Complete — shift/caps/ctrl/alt, arrows as VT100 escapes, Ctrl-C → SIGINT to the foreground job; `kill`/`signal`/`setfg`/`intr` |
 | Idle desktop (18.1) | `syscall.c` (`SYS_WAIT_INPUT`, `SYS_GFX_FLUSH_RECT`), `waitq.c`, `user/wm/` | ✓ Complete — WM sleeps until input/ticks, repaints + flushes only damage rects; idle desktop 100% → ~4% host CPU |
 | Richer input events (18.2) | `user/wm/wm_keys.h`, `user/wm/main.c`, `mouse.c`, `kbd_xlate.c` | ✓ Complete — keycode + mods, press/release/drag per button, scroll wheel, Alt-Tab / Alt-F4 |
+| Window operations (18.3) | `user/wm/wm.h`, `user/wm/main.c`, `wm_compositor.c`, `user/gterm/gterm.h` | ✓ Complete — grip resize (outline drag), maximize/restore (button + title double-click), minimize (Alt-Tab restores), cascade placement, new windows focused |
 | Power off | `arch/i386/power.c`, `SYS_POWEROFF` (60), `user/wm/power_app.c` | ✓ `poweroff` in both shells + a taskbar Power button with a confirm dialog (emulator PM ports; no ACPI table parsing yet) |
 | In-OS regression tests | `user/ktest/`, `tools/qemu_type.py`, `tools/smoke_test.sh` | ✓ `make ktest` (27 checks) + `wmtest` (desktop) + `kbdtest` (keyboard) + `termtest` + `powertest` + `eventtest` |
 
@@ -1846,6 +1847,47 @@ press only, with no release, motion, or which-button.
 - **WM shortcuts:** Alt-Tab cycles focus; Alt-F4 closes the focused window.
 
 ### 18.3 Window Operations
+
+> **✓ Done (2026-11-12).** As built (all user space; no kernel change):
+> - **Resize.** A 12-px grip in the content's bottom-right corner
+>   (`wm_grip_rect`; none on fixed-size or maximized windows).  Dragging it
+>   moves only a 2-px outline (`wm_resize_bounds` clamps to
+>   `WM_MIN_W`x`WM_MIN_H` and the screen; `wm_damage_frame` damages just the
+>   outline's edges).  On release the bounds change; the loop's new
+>   **size-sync step** (`sync_window_size` in main.c) sees a backbuf that no
+>   longer matches, allocates a new one (old pixels copied top-left), frees
+>   the old, and sends **`WM_EV_RESIZE`** (`ev.width`/`ev.height`).  Apps
+>   must therefore never cache `win->backbuf`.  gterm's grid is now dynamic
+>   (`rows`/`cols` up to `GTERM_MAX_ROWS`x`GTERM_MAX_COLS` = 64x160,
+>   `gterm_resize` keeps the cursor line visible, no reflow -- the shell isn't
+>   told the size, there is no TIOCGWINSZ); textview/Files recompute their
+>   rows, the clock re-centres.  `WM_MIN_W` 64 → 96 to fit three buttons.
+> - **Maximize/restore.** Title-bar button or double-click on the bare title
+>   bar (`wm_is_double_click`, 400 ms / 4 px); `restore` keeps the old bounds.
+>   A maximized window can't be dragged and has no grip.  Same size-sync path.
+> - **Minimize.** `minimized` flag: the window stays in `z_order` (moved to
+>   the BACK) and keeps ticking, but isn't drawn, hit-tested, hovered or
+>   focused (`wm_focus_top` picks the frontmost visible window, also on
+>   destroy).  Until 18.4's window list, **Alt-Tab is the way back**: it
+>   un-minimizes the backmost window, i.e. the most recently minimized.
+> - **Placement.** `wm_cascade_pos`: first window at (40,60), each next one
+>   +TITLEBAR_H down-right, wrapping to the origin at the screen edge (and
+>   when no windows are open).  Drags are clamped by `wm_clamp_drag` (64 px
+>   of title bar stays on screen; never above the top).  **New windows now
+>   get the focus** (`focus_new`) -- they used to need a click.
+> - **Chrome.** Bevelled gray min/max/close buttons with black glyphs (max
+>   shows a "restore" glyph while maximized; a fixed-size window -- the Power
+>   dialog, `resizable = 0` -- has no max button); the close button turns red
+>   while hovered (`hover_close_id`); unfocused title text is dimmed.
+> - **Tests.** `test_wm.c`: button layout, grip resize + clamps, max/restore
+>   round trip, minimize/z-order/focus invariants + Alt-Tab restore, cascade
+>   wrap, drag clamp, double-click, compositor (minimized not drawn, chrome,
+>   outline), frame damage.  `test_gterm.c`: grow/shrink/clamp, cursor kept
+>   visible, no stale cells.  `make wmtest` gains a second boot: grip resize
+>   to 740x448, double-click maximize (1280x752), restore button, minimize,
+>   Alt-Tab restore (new `{dblclick}` token in `tools/qemu_type.py`).
+
+Original plan:
 
 - **Resize:** a grip in the bottom-right corner (and/or edges). On release,
   allocate a new `backbuf`, send `WM_EV_RESIZE`; the app re-lays out and

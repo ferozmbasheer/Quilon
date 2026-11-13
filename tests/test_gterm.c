@@ -478,6 +478,68 @@ static void test_param_parser(void)
     ASSERT_EQ(params[2], 3,  "three ints: param[2] = 3");
 }
 
+/* ── Resize (ROADMAP3 18.3) ──────────────────────────────────────────────── */
+
+static void test_resize_grow_shrink(void)
+{
+    gterm_t t = make_fresh();
+    ASSERT_EQ(t.rows, GTERM_ROWS, "default rows");
+    ASSERT_EQ(t.cols, GTERM_COLS, "default cols");
+
+    feed(&t, "hello");
+    gterm_resize(&t, 40, 120);
+    ASSERT_EQ(t.rows, 40, "grown rows");
+    ASSERT_EQ(t.cols, 120, "grown cols");
+    ASSERT_EQ(t.cells[0][0].ch, 'h', "text kept top-left");
+    ASSERT_EQ(t.cells[0][100].ch, ' ', "new columns blank");
+    ASSERT_EQ(t.cells[30][0].ch, ' ', "new rows blank");
+    ASSERT_EQ(t.cursor_col, 5, "cursor kept");
+
+    /* Long line now wraps at 120. */
+    gterm_init(&t);
+    gterm_resize(&t, 40, 120);
+    for (int i = 0; i < 121; i++) gterm_write_char(&t, 'x');
+    ASSERT_EQ(t.cursor_row, 1, "wraps at the new width");
+    ASSERT_EQ(t.cells[0][119].ch, 'x', "column 119 used");
+
+    /* Scrolling uses the new height. */
+    gterm_init(&t);
+    gterm_resize(&t, 10, 20);
+    for (int i = 0; i < 15; i++) feed(&t, "\n");
+    ASSERT_EQ(t.cursor_row, 9, "cursor stops at the last of 10 rows");
+
+    /* Clamped to 1..max. */
+    gterm_resize(&t, 0, 0);
+    ASSERT(t.rows == 1 && t.cols == 1, "min 1x1");
+    gterm_resize(&t, 9999, 9999);
+    ASSERT(t.rows == GTERM_MAX_ROWS && t.cols == GTERM_MAX_COLS, "max clamp");
+}
+
+static void test_resize_keeps_cursor_visible(void)
+{
+    gterm_t t = make_fresh();
+    /* Fill rows 0..20 with their row letter; cursor ends on row 20. */
+    for (int r = 0; r <= 20; r++) {
+        char line[3] = { (char)('A' + r), r < 20 ? '\n' : 0, 0 };
+        feed(&t, line);
+    }
+    ASSERT_EQ(t.cursor_row, 20, "cursor on row 20");
+
+    gterm_resize(&t, 10, 40);
+    ASSERT_EQ(t.cursor_row, 9, "cursor on the last row of the shorter grid");
+    ASSERT_EQ(t.cells[9][0].ch, 'A' + 20, "the cursor's line kept");
+    ASSERT_EQ(t.cells[0][0].ch, 'A' + 11, "top lines scrolled away");
+
+    /* Growing again doesn't resurrect stale cells. */
+    gterm_resize(&t, 24, 80);
+    ASSERT_EQ(t.cells[10][0].ch, ' ', "row below the old grid blank");
+    ASSERT_EQ(t.cells[0][50].ch, ' ', "column right of the old grid blank");
+
+    /* Clear screen covers exactly the grid. */
+    feed(&t, "\033[2J");
+    ASSERT_EQ(t.cursor_row, 0, "home after clear");
+}
+
 /* ── Entry point ─────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -515,6 +577,9 @@ int main(void)
 
     RUN_SUITE(test_write_batch);
     RUN_SUITE(test_param_parser);
+
+    RUN_SUITE(test_resize_grow_shrink);
+    RUN_SUITE(test_resize_keeps_cursor_visible);
 
     TEST_SUMMARY();
 }

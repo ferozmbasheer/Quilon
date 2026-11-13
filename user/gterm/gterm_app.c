@@ -41,15 +41,15 @@ static void gterm_render(gterm_t *t, canvas_t *c, int cur_visible)
 {
     int r, col;
     gfx_fill(c, (color_t)GT_DEFAULT_BG);
-    for (r = 0; r < GTERM_ROWS; r++) {
-        for (col = 0; col < GTERM_COLS; col++) {
+    for (r = 0; r < t->rows; r++) {
+        for (col = 0; col < t->cols; col++) {
             gterm_cell_t *cell = &t->cells[r][col];
             char str[2] = { cell->ch ? cell->ch : ' ', '\0' };
             gfx_draw_text(c, col * GTERM_CELL_W, r * GTERM_CELL_H,
                           str, (color_t)cell->fg, (color_t)cell->bg);
         }
     }
-    if (cur_visible) {
+    if (cur_visible && t->cursor_col < t->cols) {
         gterm_cell_t *cc = &t->cells[t->cursor_row][t->cursor_col];
         rect_t cr = { t->cursor_col * GTERM_CELL_W,
                       t->cursor_row * GTERM_CELL_H,
@@ -107,6 +107,13 @@ static void gterm_event(window_t *win, const wm_event_t *ev)
 {
     gterm_state_t *st = (gterm_state_t *)win->app_state;
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
+    if (ev->type == WM_EV_RESIZE) {           /* ROADMAP3 18.3 */
+        gterm_resize(&st->term, ev->height / GTERM_CELL_H,
+                     ev->width / GTERM_CELL_W);
+        gterm_render(&st->term, win->backbuf, 1);
+        win->dirty = 1;
+        return;
+    }
     if (ev->type != WM_EV_KEY || ev->seq_len <= 0) return;
 
     /* Ctrl-C (ROADMAP3 17.0.1): the WM reads the keyboard on the shell's
@@ -199,6 +206,8 @@ void gterm_open(window_t *win)
     }
 
     gterm_init(&st->term);
+    gterm_resize(&st->term, win->backbuf->h / GTERM_CELL_H,
+                 win->backbuf->w / GTERM_CELL_W);
 
     win->app_state  = st;
     win->on_tick    = gterm_tick;

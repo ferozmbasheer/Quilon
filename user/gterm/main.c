@@ -134,7 +134,7 @@ int main(void)
     pthread_create(&kbd_tid, NULL, keyboard_thread, NULL);
 
     /* 6. Initialise terminal state and do an initial render. */
-    gterm_t term;
+    static gterm_t term;   /* ~120 KiB: keep it off the stack */
     gterm_init(&term);
     gterm_render(&term, screen, TITLEBAR_H, 1);
     gfx_flush();

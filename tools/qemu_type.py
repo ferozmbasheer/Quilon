@@ -12,6 +12,7 @@ then plays <script>.  Plain characters are typed with HMP `sendkey`; a literal
     {click}          left button press + release
     {rclick}         right button press + release
     {fastclick}      left press + release with no pause between them
+    {dblclick}       two left clicks well inside the WM's double-click time
     {wheel:N}        N scroll-wheel notches (+ = down, - = up)
     {down} / {up}    left button press / release alone (drag = down, mouse, up)
     {dump:FILE}      QEMU screendump of the display to FILE (PPM)
@@ -109,6 +110,11 @@ def main():
                 # Press + release with no pause: shorter than one WM loop
                 # iteration, so only the kernel's latched edges see it.
                 hmp('mouse_button 1', 0)
+                hmp('mouse_button 0', 0.2)
+            elif name == 'dblclick':
+                hmp('mouse_button 1', 0.05)
+                hmp('mouse_button 0', 0.05)
+                hmp('mouse_button 1', 0.05)
                 hmp('mouse_button 0', 0.2)
             elif name == 'down':
                 hmp('mouse_button 1', 0.2)

@@ -70,6 +70,12 @@ static void tv_event(window_t *win, const wm_event_t *ev)
 {
     tv_state_t *st = (tv_state_t *)win->app_state;
     if (ev->type == WM_EV_CLOSE) { win->want_close = 1; return; }
+    if (ev->type == WM_EV_RESIZE) {           /* ROADMAP3 18.3 */
+        st->rows   = ev->height / GFX_CHAR_H;
+        st->scroll = wm_scroll_clamp(st->scroll, 0, st->nlines, st->rows);
+        tv_render(win);
+        return;
+    }
 
     int delta = 0;
     if (ev->type == WM_EV_SCROLL) {

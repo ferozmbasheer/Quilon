@@ -31,12 +31,17 @@
 
 /* ── Dimensions ─────────────────────────────────────────────────────────── */
 
+/* Default grid (a new terminal); the window can be resized (ROADMAP3 18.3)
+ * to anything from 1x1 up to GTERM_MAX_COLS x GTERM_MAX_ROWS -- enough for
+ * a maximized window on a 1280x1024 screen. */
 #define GTERM_COLS       80
 #define GTERM_ROWS       24
+#define GTERM_MAX_COLS  160
+#define GTERM_MAX_ROWS   64
 #define GTERM_CELL_W      8   /* pixels per character cell (GFX_CHAR_W) */
 #define GTERM_CELL_H     16   /* pixels per character cell (GFX_CHAR_H) */
 
-/* Pixel size of the terminal content area */
+/* Pixel size of the default terminal content area */
 #define GTERM_PX_W  (GTERM_COLS * GTERM_CELL_W)
 #define GTERM_PX_H  (GTERM_ROWS * GTERM_CELL_H)
 
@@ -92,7 +97,9 @@ typedef enum {
 /* ── Terminal state ──────────────────────────────────────────────────────── */
 
 typedef struct {
-    gterm_cell_t       cells[GTERM_ROWS][GTERM_COLS];
+    gterm_cell_t       cells[GTERM_MAX_ROWS][GTERM_MAX_COLS];
+    int                rows;          /* current grid size (<= the max) */
+    int                cols;
     int                cursor_row;
     int                cursor_col;
     gterm_color_t      cur_fg;
@@ -134,14 +141,14 @@ static inline int gterm_parse_params(const char *str, int params[],
 static inline void gterm_scroll_up(gterm_t *t)
 {
     int r, c;
-    for (r = 0; r < GTERM_ROWS - 1; r++)
-        for (c = 0; c < GTERM_COLS; c++)
+    for (r = 0; r < t->rows - 1; r++)
+        for (c = 0; c < t->cols; c++)
             t->cells[r][c] = t->cells[r + 1][c];
 
-    for (c = 0; c < GTERM_COLS; c++) {
-        t->cells[GTERM_ROWS - 1][c].ch = ' ';
-        t->cells[GTERM_ROWS - 1][c].fg = t->cur_fg;
-        t->cells[GTERM_ROWS - 1][c].bg = t->cur_bg;
+    for (c = 0; c < t->cols; c++) {
+        t->cells[t->rows - 1][c].ch = ' ';
+        t->cells[t->rows - 1][c].fg = t->cur_fg;
+        t->cells[t->rows - 1][c].bg = t->cur_bg;
     }
 }
 
@@ -150,21 +157,21 @@ static inline void gterm_newline(gterm_t *t)
 {
     t->cursor_col = 0;
     t->cursor_row++;
-    if (t->cursor_row >= GTERM_ROWS) {
+    if (t->cursor_row >= t->rows) {
         gterm_scroll_up(t);
-        t->cursor_row = GTERM_ROWS - 1;
+        t->cursor_row = t->rows - 1;
     }
 }
 
 /* Write a printable character at the cursor and advance.                    */
 static inline void gterm_put_char(gterm_t *t, char ch)
 {
-    if (t->cursor_col >= GTERM_COLS) {
+    if (t->cursor_col >= t->cols) {
         t->cursor_col = 0;
         t->cursor_row++;
-        if (t->cursor_row >= GTERM_ROWS) {
+        if (t->cursor_row >= t->rows) {
             gterm_scroll_up(t);
-            t->cursor_row = GTERM_ROWS - 1;
+            t->cursor_row = t->rows - 1;
         }
     }
     t->cells[t->cursor_row][t->cursor_col].ch = ch;
@@ -193,35 +200,35 @@ static inline void gterm_dispatch_csi(gterm_t *t,
     case 'H': {   /* \033[r;cH -- cursor position (1-based, default 1) */
         int r = params[0] ? params[0] - 1 : 0;
         int c = (np >= 2 && params[1]) ? params[1] - 1 : 0;
-        t->cursor_row = gterm_clamp(r, 0, GTERM_ROWS - 1);
-        t->cursor_col = gterm_clamp(c, 0, GTERM_COLS - 1);
+        t->cursor_row = gterm_clamp(r, 0, t->rows - 1);
+        t->cursor_col = gterm_clamp(c, 0, t->cols - 1);
         break;
     }
     case 'A': {   /* cursor up */
         int n = params[0] ? params[0] : 1;
-        t->cursor_row = gterm_clamp(t->cursor_row - n, 0, GTERM_ROWS - 1);
+        t->cursor_row = gterm_clamp(t->cursor_row - n, 0, t->rows - 1);
         break;
     }
     case 'B': {   /* cursor down */
         int n = params[0] ? params[0] : 1;
-        t->cursor_row = gterm_clamp(t->cursor_row + n, 0, GTERM_ROWS - 1);
+        t->cursor_row = gterm_clamp(t->cursor_row + n, 0, t->rows - 1);
         break;
     }
     case 'C': {   /* cursor right */
         int n = params[0] ? params[0] : 1;
-        t->cursor_col = gterm_clamp(t->cursor_col + n, 0, GTERM_COLS - 1);
+        t->cursor_col = gterm_clamp(t->cursor_col + n, 0, t->cols - 1);
         break;
     }
     case 'D': {   /* cursor left */
         int n = params[0] ? params[0] : 1;
-        t->cursor_col = gterm_clamp(t->cursor_col - n, 0, GTERM_COLS - 1);
+        t->cursor_col = gterm_clamp(t->cursor_col - n, 0, t->cols - 1);
         break;
     }
     case 'J': {   /* \033[2J -- clear screen */
         if (params[0] == 2) {
             int r, c;
-            for (r = 0; r < GTERM_ROWS; r++)
-                for (c = 0; c < GTERM_COLS; c++) {
+            for (r = 0; r < t->rows; r++)
+                for (c = 0; c < t->cols; c++) {
                     t->cells[r][c].ch = ' ';
                     t->cells[r][c].fg = t->cur_fg;
                     t->cells[r][c].bg = t->cur_bg;
@@ -233,7 +240,7 @@ static inline void gterm_dispatch_csi(gterm_t *t,
     }
     case 'K': {   /* \033[K -- erase to end of line */
         int c;
-        for (c = t->cursor_col; c < GTERM_COLS; c++) {
+        for (c = t->cursor_col; c < t->cols; c++) {
             t->cells[t->cursor_row][c].ch = ' ';
             t->cells[t->cursor_row][c].fg = t->cur_fg;
             t->cells[t->cursor_row][c].bg = t->cur_bg;
@@ -289,12 +296,46 @@ static inline void gterm_init(gterm_t *t)
     t->ansi_state  = GTERM_ST_NORMAL;
     t->ansi_len    = 0;
     t->ansi_buf[0] = '\0';
-    for (r = 0; r < GTERM_ROWS; r++)
-        for (c = 0; c < GTERM_COLS; c++) {
+    t->rows        = GTERM_ROWS;
+    t->cols        = GTERM_COLS;
+    for (r = 0; r < GTERM_MAX_ROWS; r++)
+        for (c = 0; c < GTERM_MAX_COLS; c++) {
             t->cells[r][c].ch = ' ';
             t->cells[r][c].fg = GT_DEFAULT_FG;
             t->cells[r][c].bg = GT_DEFAULT_BG;
         }
+}
+
+/*
+ * gterm_resize -- change the grid to rows x cols (clamped to 1..max).  Text
+ * stays anchored top-left; if the grid gets too short for the cursor's row,
+ * the top lines scroll away so the cursor (the prompt) stays visible.
+ * Newly exposed cells are blank.  Nothing is reflowed.
+ */
+static inline void gterm_resize(gterm_t *t, int rows, int cols)
+{
+    int r, c;
+    rows = gterm_clamp(rows, 1, GTERM_MAX_ROWS);
+    cols = gterm_clamp(cols, 1, GTERM_MAX_COLS);
+    int shift = t->cursor_row - (rows - 1);
+    if (shift < 0) shift = 0;
+
+    for (r = 0; r < GTERM_MAX_ROWS; r++) {
+        for (c = 0; c < GTERM_MAX_COLS; c++) {
+            int sr = r + shift;               /* sr >= r: copy is in place */
+            if (r < rows && c < cols && sr < t->rows && c < t->cols) {
+                t->cells[r][c] = t->cells[sr][c];
+            } else {
+                t->cells[r][c].ch = ' ';
+                t->cells[r][c].fg = GT_DEFAULT_FG;
+                t->cells[r][c].bg = GT_DEFAULT_BG;
+            }
+        }
+    }
+    t->rows       = rows;
+    t->cols       = cols;
+    t->cursor_row = gterm_clamp(t->cursor_row - shift, 0, rows - 1);
+    t->cursor_col = gterm_clamp(t->cursor_col, 0, cols - 1);
 }
 
 /* Feed one byte through the ANSI state machine, updating the cell grid.     */

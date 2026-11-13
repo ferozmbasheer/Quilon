@@ -20,6 +20,7 @@
  *                                              event to the focused window
  *   3. tick the windows that are due        -> clock updates, pipe draining
  *   4. destroy windows that requested close (want_close)
+ *   4b. give resized windows a new backbuf + WM_EV_RESIZE (18.3)
  *   5. recomposite + flush ONLY the damaged screen rects (cursor, moved or
  *      dirty windows, taskbar)
  *
@@ -46,17 +47,19 @@ int  gterm_reap_pending(void);  /* 1 while a closed terminal's shell is unreaped
 
 /* ── App table ────────────────────────────────────────────────────────────── */
 
+/* New windows are cascaded (wm_cascade_pos, ROADMAP3 18.3) rather than put
+ * at a fixed per-app spot, which stacked a second Terminal exactly on top of
+ * the first. */
 typedef struct {
     const char      *label;
     void           (*open)(window_t *);
     int              w, h;         /* default window content size */
-    int              x, y;         /* default window position     */
 } app_entry_t;
 
 static const app_entry_t g_apps[] = {
-    { "Terminal", gterm_open,   640, 384,  40, 60 },
-    { "Clock",    clock_open,   160,  40, 440, 60 },
-    { "Files",    filebr_open,  320, 320, 200, 80 },
+    { "Terminal", gterm_open,   640, 384 },
+    { "Clock",    clock_open,   160,  40 },
+    { "Files",    filebr_open,  320, 320 },
 };
 #define G_NOAPPS  ((int)(sizeof g_apps / sizeof g_apps[0]))
 
@@ -75,10 +78,12 @@ static int         g_power_win;  /* id of the open power dialog, 0 = none   */
 
 void wm_request_poweroff(void) { g_poweroff = 1; }
 
-/* Mark a window's whole on-screen footprint (chrome + content) damaged. */
+/* Mark a window's whole on-screen footprint (chrome + content) damaged.
+ * A minimized window has none. */
 static void damage_window(const window_t *w)
 {
-    if (w && w->id != 0) wm_damage_add(&g_damage, wm_full_rect(w));
+    if (w && w->id != 0 && !w->minimized)
+        wm_damage_add(&g_damage, wm_full_rect(w));
 }
 
 /* The focused window, or NULL. */
@@ -90,13 +95,23 @@ static window_t *focused_window(void)
     return (window_t *)0;
 }
 
+/* A newly opened window takes the focus (it used to need a click first). */
+static void focus_new(window_t *w)
+{
+    damage_window(focused_window());          /* old focus loses its title */
+    wm_focus(&g_wm, wm_find_idx(&g_wm, w->id));
+    w->dirty = 1;
+}
+
 /* ── Launch an app in a new window ───────────────────────────────────────── */
 
 static void wm_launch(int app_idx)
 {
     const app_entry_t *a = &g_apps[app_idx];
 
-    int id = wm_create_window(&g_wm, a->label, a->x, a->y + TITLEBAR_H, a->w, a->h);
+    int x, y;
+    wm_cascade_pos(&g_wm, a->w, a->h, &x, &y);
+    int id = wm_create_app_window(&g_wm, a->label, x, y, a->w, a->h);
     if (id < 0) {
         printf("[wm] no free window slot for '%s'\r\n", a->label);
         return;
@@ -113,6 +128,7 @@ static void wm_launch(int app_idx)
     }
     gfx_fill(win->backbuf, GFX_BLACK);
 
+    focus_new(win);
     /* The app installs its callbacks + app_state and draws its first frame. */
     a->open(win);
 
@@ -132,8 +148,13 @@ void wm_open_textview(const char *path)
     if (*title == '\0')
         title = path;
 
-    int id = wm_create_window(&g_wm, title, 60, 60 + TITLEBAR_H, 560, 360);
-    if (id < 0) return;
+    int x, y;
+    wm_cascade_pos(&g_wm, 560, 360, &x, &y);
+    int id = wm_create_app_window(&g_wm, title, x, y, 560, 360);
+    if (id < 0) {
+        printf("[wm] no free window slot for '%s'\r\n", title);
+        return;
+    }
 
     window_t *win = wm_find_window(&g_wm, id);
     if (!win) return;
@@ -148,6 +169,7 @@ void wm_open_textview(const char *path)
     if (!win->backbuf) { wm_destroy_window(&g_wm, id); return; }
     gfx_fill(win->backbuf, GFX_BLACK);
 
+    focus_new(win);
     textview_open(win);
 }
 
@@ -159,6 +181,7 @@ static void wm_open_power_dialog(void)
     if (w) {                                  /* already open: raise + focus */
         damage_window(focused_window());
         int slot = wm_find_idx(&g_wm, w->id);
+        if (w->minimized) wm_unminimize(&g_wm, slot);
         wm_raise(&g_wm, slot);
         wm_focus(&g_wm, slot);
         damage_window(w);
@@ -166,13 +189,18 @@ static void wm_open_power_dialog(void)
     }
     int x = (g_sw - WM_POWER_DLG_W) / 2;
     int y = (g_sh - WM_POWER_DLG_H) / 2;
+    /* A plain wm_create_window: Power may take the reserved slot. */
     int id = wm_create_window(&g_wm, "Power", x, y, WM_POWER_DLG_W, WM_POWER_DLG_H);
-    if (id < 0) return;
+    if (id < 0) {
+        printf("[wm] no free window slot for 'Power'\r\n");
+        return;
+    }
     w = wm_find_window(&g_wm, id);
     if (!w) return;
     w->backbuf = canvas_create(WM_POWER_DLG_W, WM_POWER_DLG_H);
     if (!w->backbuf) { wm_destroy_window(&g_wm, id); return; }
-    damage_window(focused_window());          /* old focus loses its title */
+    w->resizable = 0;                         /* a fixed-size dialog */
+    focus_new(w);
     power_dialog_open(w);
     g_power_win = id;
 }
@@ -199,8 +227,12 @@ static void handle_key(const wm_key_t *k)
 
     if (k->keycode == WM_KEY_TAB && k->mods == WM_MOD_ALT) {   /* Alt-Tab */
         damage_window(f);
+        int back = g_wm.num_windows > 0 ? g_wm.z_order[0] : -1;
+        int was_min = back >= 0 && g_wm.windows[back].minimized;
         int slot = wm_cycle_focus(&g_wm);
         if (slot >= 0) damage_window(&g_wm.windows[slot]);
+        if (was_min && slot == back)
+            printf("[wm] restored '%s'\r\n", g_wm.windows[slot].title);
         return;
     }
     if (k->keycode == WM_KEY_F1 + 3 && (k->mods & WM_MOD_ALT)) {  /* Alt-F4 */
@@ -249,6 +281,11 @@ static void drain_keyboard(void)
 
 static int g_capture;            /* id of the window holding the mouse, 0 */
 
+/* The last left press on a title bar, for double-click = maximize. */
+static uint32_t g_hz;
+static uint32_t g_last_click;
+static int      g_last_click_x, g_last_click_y, g_last_click_win;
+
 static void send_mouse(window_t *w, wm_ev_type_t type, int mx, int my,
                        uint8_t button, uint8_t buttons)
 {
@@ -290,14 +327,42 @@ static void mouse_press(int mx, int my, uint8_t button, uint8_t buttons,
     damage_window(focused_window());
     damage_window(w);
     if (button == MOUSE_BTN_LEFT) {
-        wm_handle_mouse_down(&g_wm, mx, my, buttons);   /* + titlebar drag */
+        /* Double-click on the bare title bar toggles maximize. */
+        int on_bar = wm_in_titlebar(w, mx, my) &&
+                     !wm_in_tbtn(w, WM_TBTN_MAX, mx, my) &&
+                     !wm_in_tbtn(w, WM_TBTN_MIN, mx, my);
+        uint32_t now = getticks();
+        if (on_bar && g_last_click_win == w->id &&
+            wm_is_double_click(now - g_last_click, g_hz,
+                               mx - g_last_click_x, my - g_last_click_y)) {
+            g_last_click_win = 0;
+            wm_raise(&g_wm, hit);
+            wm_focus(&g_wm, hit);
+            wm_toggle_maximize(&g_wm, hit);
+        } else {
+            g_last_click_win = on_bar ? w->id : 0;
+            g_last_click     = now;
+            g_last_click_x   = mx;
+            g_last_click_y   = my;
+            /* + maximize/minimize buttons, grip resize, titlebar drag */
+            wm_handle_mouse_down(&g_wm, mx, my, buttons);
+            if (w->minimized)
+                printf("[wm] minimized '%s'\r\n", w->title);
+        }
+        /* New bounds (maximize) or a new focus (minimize). */
+        damage_window(w);
+        damage_window(focused_window());
+        if (g_wm.resize_win_id == w->id)
+            wm_damage_frame(&g_damage, wm_resize_outline(&g_wm));
     } else {
         wm_raise(&g_wm, hit);
         wm_focus(&g_wm, hit);
     }
 
-    /* Content clicks go to the app (titlebar clicks are the WM's). */
-    if (wm_in_content(w, mx, my)) {
+    /* Content clicks go to the app (titlebar, buttons and grip are the
+     * WM's). */
+    if (!w->minimized && g_wm.resize_win_id != w->id &&
+        wm_in_content(w, mx, my)) {
         if (!g_capture) g_capture = w->id;
         if (g_capture == w->id)
             send_mouse(w, WM_EV_MOUSE_BTN, mx, my, button, buttons);
@@ -306,11 +371,56 @@ static void mouse_press(int mx, int my, uint8_t button, uint8_t buttons,
 
 static void mouse_release(int mx, int my, uint8_t button, uint8_t buttons)
 {
-    if (button == MOUSE_BTN_LEFT) wm_handle_mouse_up(&g_wm);
+    if (button == MOUSE_BTN_LEFT) {
+        /* A finished resize repaints the outline, and the window at its old
+         * and new size (the backbuf is reallocated later this iteration). */
+        window_t *rw = wm_find_window(&g_wm, g_wm.resize_win_id);
+        if (rw) {
+            wm_damage_frame(&g_damage, wm_resize_outline(&g_wm));
+            damage_window(rw);
+        }
+        wm_handle_mouse_up(&g_wm);
+        damage_window(rw);
+    }
     if (g_capture) {
         send_mouse(wm_find_window(&g_wm, g_capture), WM_EV_MOUSE_UP,
                    mx, my, button, buttons);
         if (buttons == 0) g_capture = 0;
+    }
+}
+
+/* ── Resize (ROADMAP3 18.3) ───────────────────────────────────────────────
+ * The pure logic (grip release, maximize, restore) only changes bounds.
+ * Here a window whose backbuf no longer matches gets a new one -- the old
+ * pixels copied top-left so a slow app doesn't flash black -- and is told
+ * with WM_EV_RESIZE so it can re-lay out and redraw.  If the canvas can't
+ * be allocated, the window keeps its old size. */
+static void sync_window_size(window_t *w)
+{
+    canvas_t *old = w->backbuf;
+    if (!old || (old->w == w->bounds.w && old->h == w->bounds.h)) return;
+
+    canvas_t *nc = canvas_create(w->bounds.w, w->bounds.h);
+    if (!nc) {
+        damage_window(w);
+        w->bounds.w = old->w;
+        w->bounds.h = old->h;
+        w->maximized = 0;
+        damage_window(w);
+        return;
+    }
+    gfx_fill(nc, GFX_BLACK);
+    gfx_blit(nc, 0, 0, old, (rect_t){ 0, 0, old->w, old->h });
+    w->backbuf = nc;
+    canvas_free(old);
+    w->dirty = 1;
+    printf("[wm] resized '%s' to %dx%d\r\n", w->title, w->bounds.w, w->bounds.h);
+
+    if (w->on_event) {
+        wm_event_t ev = wm_event_make(WM_EV_RESIZE);
+        ev.width  = w->bounds.w;
+        ev.height = w->bounds.h;
+        w->on_event(w, &ev);
     }
 }
 
@@ -344,6 +454,7 @@ int main(void)
     wm_damage_init(&g_damage, g_sw, g_sh);
     const rect_t taskbar_rect = { 0, g_sh - TASKBAR_H, g_sw, TASKBAR_H };
     const uint32_t hz = gethz();
+    g_hz = hz;
 
     /* 3. Build the static label array for wm_draw_taskbar. */
     const char *labels[G_NOAPPS];
@@ -414,11 +525,25 @@ int main(void)
         }
 
         if (moved) {
-            /* A drag repaints where the window was and where it now is. */
+            /* A drag repaints where the window was and where it now is; a
+             * resize only moves its outline. */
             window_t *dw = wm_find_window(&g_wm, g_wm.drag_win_id);
+            int resizing = g_wm.resize_win_id >= 0;
             damage_window(dw);
+            if (resizing) wm_damage_frame(&g_damage, wm_resize_outline(&g_wm));
             wm_handle_mouse_move(&g_wm, me.x, me.y);
             damage_window(dw);
+            if (resizing) wm_damage_frame(&g_damage, wm_resize_outline(&g_wm));
+
+            /* Close-button hover highlight. */
+            int hov = bstate ? 0 : wm_hover_close(&g_wm, me.x, me.y);
+            if (hov != g_wm.hover_close_id) {
+                window_t *ow = wm_find_window(&g_wm, g_wm.hover_close_id);
+                window_t *nw = wm_find_window(&g_wm, hov);
+                if (ow) wm_damage_add(&g_damage, wm_close_btn_rect(ow));
+                if (nw) wm_damage_add(&g_damage, wm_close_btn_rect(nw));
+                g_wm.hover_close_id = hov;
+            }
             /* Motion with a button held goes to the window that got the
              * press (drag-select); plain hovering is not reported. */
             if (g_capture && bstate)
@@ -472,16 +597,22 @@ int main(void)
                 if (w->id == g_capture)   g_capture = 0;
                 printf("[wm] closed '%s' (win id=%d)\r\n", w->title, w->id);
                 damage_window(w);
+                if (g_wm.resize_win_id == w->id)      /* drop its outline */
+                    wm_damage_frame(&g_damage, wm_resize_outline(&g_wm));
                 wm_destroy_window(&g_wm, w->id);
                 /* Focus may have passed to the new frontmost window. */
                 damage_window(focused_window());
             }
         }
 
+        /* -- Resized windows: new backbuf + WM_EV_RESIZE (18.3) ------------ */
+        for (i = 0; i < WM_MAX_WINDOWS; i++)
+            if (g_wm.windows[i].id != 0) sync_window_size(&g_wm.windows[i]);
+
         /* -- Dirty windows (new pixels, moved, or just created) ------------ */
         for (i = 0; i < g_wm.num_windows; i++) {
             window_t *w = &g_wm.windows[g_wm.z_order[i]];
-            if (w->dirty) { damage_window(w); w->dirty = 0; }
+            if (w->dirty) { damage_window(w); w->dirty = 0; }   /* not if minimized */
         }
 
         if (g_damage.n == 0) continue;
@@ -497,6 +628,10 @@ int main(void)
                 gfx_clear_clip(g_screen);
             }
         }
+        /* A resize in progress shows only an outline, over everything but
+         * the cursor. */
+        if (g_wm.resize_win_id >= 0)
+            wm_draw_outline(g_screen, wm_resize_outline(&g_wm));
         /* Cursor last so it stays on top of windows AND the taskbar.  Where
          * nothing under it was repainted this rewrites identical pixels. */
         wm_draw_cursor(g_screen, g_wm.mouse_x, g_wm.mouse_y);

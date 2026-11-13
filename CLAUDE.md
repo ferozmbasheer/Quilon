@@ -12,7 +12,8 @@ make test     # host unit-test suite (host gcc only) — run on every change
 make run      # boot under QEMU (GUI)
 make smoke    # headless QEMU boot smoke test
 make ktest    # headless in-OS kernel regression tests (user/ktest) — run on kernel changes
-make wmtest   # headless desktop test: open/close terminals via the mouse
+make wmtest   # headless desktop test: open/close terminals via the mouse, then
+              #   resize / maximize / restore / minimize + Alt-Tab restore (18.3)
 make kbdtest  # headless keyboard test: shift, arrows, Ctrl-C (text + desktop)
 make termtest # headless: `exit` in a terminal window closes it (nested shell doesn't)
 make eventtest # headless 18.2 events: fast click, Alt-Tab, Alt-F4, wheel present
@@ -67,8 +68,9 @@ Current status and plan: [ROADMAP3.md](ROADMAP3.md). **Done through Section 16**
 (graphical desktop stable; BSD sockets + DNS + wget; ATA Bus Master DMA; ext2
 read-only, booting off an ext2 disk); next is Section 17 (porting Lua, a text
 editor, TinyCC), starting with the new 17.0 prerequisites (17.0.1 keyboard + Ctrl-C is done)
-and interleaved with Section 18 (desktop polish; 18.1 idle, damage-driven WM loop
-and 18.2 richer input events are done; next 18.3 window operations). The WM was reworked from CLONE_VM threads to a
+and interleaved with Section 18 (desktop polish; 18.1 idle, damage-driven WM loop,
+18.2 richer input events and 18.3 window operations are done; next 18.4
+taskbar window list + tray). The WM was reworked from CLONE_VM threads to a
 **single-threaded event loop** (apps = callbacks) — see `resume.md` and the
 "WM architecture" / "thread concurrency" project memories.
 

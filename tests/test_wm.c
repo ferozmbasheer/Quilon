@@ -19,6 +19,7 @@
  *     - wm_find_window / idx      -- lookup by ID
  *     - wm_destroy_window         -- slot compacted; focus transferred
  *     - table full (WM_MAX_WINDOWS) -- 17th create returns -1
+ *     - reserved slot: app windows stop one short so Power can still open
  *
  *   Z-order & focus
  *     - wm_raise                  -- window moves to front; hittest agrees
@@ -34,7 +35,7 @@
  *   Compositor pixel output
  *     - wm_composite draws desktop background
  *     - title bar pixels match focused/unfocused colours
- *     - close button region is red
+ *     - close button region is red only while hovered (18.3)
  *     - content area of a window with a known backbuf is blitted correctly
  *     - cursor pixels appear at the right location
  *     - wm_draw_cursor writes white pixels at the sprite positions
@@ -282,6 +283,31 @@ static void test_max_windows(void)
     int extra = wm_create_window(&s, "Extra", 0, 50, 80, 60);
     ASSERT_EQ(extra, -1, "17th window creation fails");
     ASSERT_EQ(s.num_windows, WM_MAX_WINDOWS, "count unchanged after failed create");
+}
+
+/* App windows stop WM_RESERVED_SLOTS short of the table so the Power dialog
+ * (a plain wm_create_window) can always open. */
+static void test_reserved_slot_for_power(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 600);
+
+    int i, n = 0;
+    for (i = 0; i < WM_MAX_WINDOWS + 4; i++)
+        if (wm_create_app_window(&s, "App", 0, 50, 80, 60) > 0) n++;
+    ASSERT_EQ(n, WM_MAX_WINDOWS - WM_RESERVED_SLOTS, "apps stop short of full table");
+    ASSERT_EQ(s.num_windows, WM_MAX_WINDOWS - WM_RESERVED_SLOTS, "count = app limit");
+
+    int pw = wm_create_window(&s, "Power", 0, 50, 80, 60);
+    ASSERT(pw > 0, "power dialog still opens with all app slots full");
+    ASSERT_EQ(wm_create_app_window(&s, "App", 0, 50, 80, 60), -1,
+              "app still refused once power is open");
+
+    /* Closing an app frees a slot for apps again. */
+    wm_destroy_window(&s, pw);
+    wm_destroy_window(&s, s.windows[s.z_order[0]].id);
+    ASSERT(wm_create_app_window(&s, "App", 0, 50, 80, 60) > 0,
+           "app opens after a slot frees");
 }
 
 /* ── Z-order & focus ─────────────────────────────────────────────────────── */
@@ -541,10 +567,14 @@ static void test_compositor_titlebar_colour(void)
     ASSERT(any_col_in_rect(screen, w->bounds, GFX_RED),
            "content area has red pixels from backbuf blit");
 
-    /* Close button area should contain WM_CLOSE_COL (red — same value, test logic). */
+    /* The close button is gray until hovered, then red (ROADMAP3 18.3). */
     rect_t cb = wm_close_btn_rect(w);
+    ASSERT(!any_col_in_rect(screen, cb, WM_CLOSE_COL),
+           "close button not red when not hovered");
+    s.hover_close_id = id;
+    wm_composite(&s, screen);
     ASSERT(any_col_in_rect(screen, cb, WM_CLOSE_COL),
-           "close button region contains close-button colour");
+           "hovered close button contains close-button colour");
 
     canvas_free(w->backbuf);
     w->backbuf = (canvas_t *)0;
@@ -1130,6 +1160,306 @@ static void test_cycle_focus(void)
     ASSERT_EQ(s.windows[sc].focused, 1, "and come back to where we started");
 }
 
+/* ── ROADMAP3 18.3: window operations ────────────────────────────────────── */
+
+static void test_title_buttons_layout(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 600);
+    int id = wm_create_window(&s, "W", 100, 100, 200, 100);
+    window_t *w = wm_find_window(&s, id);
+    rect_t tb = wm_titlebar_rect(w);
+    rect_t c = wm_tbtn_rect(w, WM_TBTN_CLOSE);
+    rect_t m = wm_tbtn_rect(w, WM_TBTN_MAX);
+    rect_t n = wm_tbtn_rect(w, WM_TBTN_MIN);
+
+    ASSERT(c.x > m.x && m.x > n.x, "close, max, min packed right to left");
+    ASSERT(!wm_rect_intersects(c, m) && !wm_rect_intersects(m, n),
+           "buttons don't overlap");
+    ASSERT(n.x >= tb.x + 6 + 2 * GFX_CHAR_W, "room left for some title");
+    ASSERT(wm_rect_intersect(n, tb).w == n.w && wm_rect_intersect(c, tb).h == c.h,
+           "buttons inside the title bar");
+
+    /* A fixed-size window has no maximize button; minimize takes its place. */
+    w->resizable = 0;
+    ASSERT(wm_rect_empty(wm_tbtn_rect(w, WM_TBTN_MAX)), "no max button");
+    ASSERT_EQ(wm_tbtn_rect(w, WM_TBTN_MIN).x, m.x, "min moved into max's place");
+    ASSERT(wm_rect_empty(wm_grip_rect(w)), "no grip on a fixed-size window");
+
+    /* Minimum width leaves the title buttons inside the window. */
+    int id2 = wm_create_window(&s, "tiny", 0, 50, 1, 1);
+    window_t *t = wm_find_window(&s, id2);
+    ASSERT(wm_tbtn_rect(t, WM_TBTN_MIN).x > t->bounds.x,
+           "min-width window still fits its buttons");
+}
+
+static void test_resize_grip_clamp(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 600);
+    int id = wm_create_window(&s, "R", 100, 100, 200, 150);
+    window_t *w = wm_find_window(&s, id);
+    rect_t g = wm_grip_rect(w);
+    ASSERT_EQ(g.x + g.w, 300, "grip at the content's right edge");
+    ASSERT_EQ(g.y + g.h, 250, "grip at the content's bottom edge");
+
+    /* Press 2 px inside the corner, drag +50,+30. */
+    wm_handle_mouse_down(&s, 298, 248, 1);
+    ASSERT_EQ(s.resize_win_id, id, "grip press starts a resize");
+    ASSERT_EQ(s.drag_win_id, -1, "not a drag");
+    wm_handle_mouse_move(&s, 348, 278);
+    ASSERT_EQ(s.resize_rect.w, 250, "outline width follows the cursor");
+    ASSERT_EQ(s.resize_rect.h, 180, "outline height follows the cursor");
+    ASSERT_EQ(w->bounds.w, 200, "window itself unchanged during the drag");
+    rect_t ol = wm_resize_outline(&s);
+    ASSERT_EQ(ol.y, 100 - TITLEBAR_H, "outline includes the title bar");
+
+    /* Way up-left: clamped to the minimum. */
+    wm_handle_mouse_move(&s, 0, 0);
+    ASSERT_EQ(s.resize_rect.w, WM_MIN_W, "min width");
+    ASSERT_EQ(s.resize_rect.h, WM_MIN_H, "min height");
+
+    /* Way down-right: clamped to the screen. */
+    wm_handle_mouse_move(&s, 5000, 5000);
+    ASSERT_EQ(s.resize_rect.x + s.resize_rect.w, 800, "no wider than the screen");
+    ASSERT_EQ(s.resize_rect.y + s.resize_rect.h, 600, "no taller than the screen");
+
+    wm_handle_mouse_move(&s, 348, 278);
+    wm_handle_mouse_up(&s);
+    ASSERT_EQ(s.resize_win_id, -1, "resize ended");
+    ASSERT_EQ(w->bounds.x, 100, "top-left fixed (x)");
+    ASSERT_EQ(w->bounds.y, 100, "top-left fixed (y)");
+    ASSERT_EQ(w->bounds.w, 250, "window took the new width on release");
+    ASSERT_EQ(w->bounds.h, 180, "window took the new height on release");
+    ASSERT_EQ(w->dirty, 1, "and is dirty");
+
+    /* Destroying the window mid-resize cancels it. */
+    wm_handle_mouse_down(&s, 348, 278, 1);
+    ASSERT_EQ(s.resize_win_id, id, "resizing again");
+    wm_destroy_window(&s, id);
+    ASSERT_EQ(s.resize_win_id, -1, "resize cancelled by destroy");
+}
+
+static void test_maximize_restore(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 572);
+    int id = wm_create_window(&s, "M", 100, 120, 200, 150);
+    window_t *w = wm_find_window(&s, id);
+    int slot = wm_find_idx(&s, id);
+    rect_t orig = w->bounds;
+
+    rect_t mb = wm_tbtn_rect(w, WM_TBTN_MAX);
+    wm_handle_mouse_down(&s, mb.x + 2, mb.y + 2, 1);
+    ASSERT_EQ(w->maximized, 1, "max button maximizes");
+    ASSERT_EQ(w->bounds.x, 0, "maximized x");
+    ASSERT_EQ(w->bounds.y, TITLEBAR_H, "maximized: title bar at the top");
+    ASSERT_EQ(w->bounds.w, 800, "full width");
+    ASSERT_EQ(w->bounds.h, 572 - TITLEBAR_H, "full height above the taskbar");
+    ASSERT_EQ(s.drag_win_id, -1, "max button doesn't start a drag");
+    ASSERT(wm_rect_empty(wm_grip_rect(w)), "no grip while maximized");
+
+    /* The title bar can't drag a maximized window. */
+    wm_handle_mouse_down(&s, 20, 5, 1);
+    ASSERT_EQ(s.drag_win_id, -1, "no drag while maximized");
+
+    /* Restore (button now at the new right edge). */
+    mb = wm_tbtn_rect(w, WM_TBTN_MAX);
+    wm_handle_mouse_down(&s, mb.x + 2, mb.y + 2, 1);
+    ASSERT_EQ(w->maximized, 0, "restored");
+    ASSERT(w->bounds.x == orig.x && w->bounds.y == orig.y &&
+           w->bounds.w == orig.w && w->bounds.h == orig.h,
+           "round trip restores the exact bounds");
+
+    /* Programmatic toggle twice is also a round trip. */
+    wm_toggle_maximize(&s, slot);
+    wm_toggle_maximize(&s, slot);
+    ASSERT(w->bounds.w == orig.w && w->bounds.h == orig.h, "toggle x2 round trip");
+
+    /* Fixed-size windows ignore maximize. */
+    w->resizable = 0;
+    wm_toggle_maximize(&s, slot);
+    ASSERT_EQ(w->maximized, 0, "fixed-size window not maximized");
+}
+
+static int count_focused(const wm_state_t *s)
+{
+    int n = 0;
+    for (int k = 0; k < WM_MAX_WINDOWS; k++) n += s->windows[k].focused;
+    return n;
+}
+
+static void test_minimize_restore(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 600);
+    int a = wm_create_window(&s, "A", 10, 30, 100, 80);
+    int b = wm_create_window(&s, "B", 200, 30, 100, 80);
+    int c = wm_create_window(&s, "C", 400, 30, 100, 80);
+    int sa = wm_find_idx(&s, a), sb = wm_find_idx(&s, b), sc = wm_find_idx(&s, c);
+    (void)sa;
+    wm_focus(&s, sc);
+
+    /* Minimize C with its button. */
+    window_t *wc = &s.windows[sc];
+    rect_t nb = wm_tbtn_rect(wc, WM_TBTN_MIN);
+    wm_handle_mouse_down(&s, nb.x + 2, nb.y + 2, 1);
+    ASSERT_EQ(wc->minimized, 1, "min button minimizes");
+    ASSERT_EQ(wc->id, c, "minimized window is still alive");
+    ASSERT_EQ(s.num_windows, 3, "and still counted");
+    ASSERT_EQ(s.z_order[0], sc, "minimized window goes to the back");
+    ASSERT_EQ(wc->focused, 0, "minimized window loses focus");
+    ASSERT_EQ(s.windows[sb].focused, 1, "frontmost visible window gets focus");
+    ASSERT_EQ(count_focused(&s), 1, "exactly one focused");
+    ASSERT_EQ(wm_hittest(&s, 450, 60), -1, "a minimized window can't be hit");
+    ASSERT_EQ(wm_hover_close(&s, nb.x + 2, nb.y + 2), 0, "nor hovered");
+
+    /* Every slot in z_order is unique and active (invariant). */
+    int seen[WM_MAX_WINDOWS] = {0};
+    for (int i = 0; i < s.num_windows; i++) {
+        ASSERT(s.windows[s.z_order[i]].id != 0, "z_order slot active");
+        ASSERT_EQ(seen[s.z_order[i]]++, 0, "z_order slot unique");
+    }
+
+    /* Minimize the rest: nobody has focus. */
+    wm_minimize(&s, sb);
+    wm_minimize(&s, wm_find_idx(&s, a));
+    ASSERT_EQ(count_focused(&s), 0, "all minimized: no focus");
+
+    /* Alt-Tab restores the most recently minimized (backmost) window. */
+    int slot = wm_cycle_focus(&s);
+    ASSERT_EQ(slot, wm_find_idx(&s, a), "Alt-Tab picks the last minimized");
+    ASSERT_EQ(s.windows[slot].minimized, 0, "and un-minimizes it");
+    ASSERT_EQ(s.windows[slot].focused, 1, "focused");
+    ASSERT_EQ(s.z_order[s.num_windows - 1], slot, "at the front");
+    ASSERT_EQ(s.windows[slot].dirty, 1, "repainted");
+
+    wm_unminimize(&s, sc);
+    ASSERT_EQ(wc->minimized, 0, "unminimize");
+    ASSERT_EQ(s.z_order[s.num_windows - 1], sc, "restored window in front");
+    ASSERT_EQ(count_focused(&s), 1, "exactly one focused after restore");
+
+    /* Destroying the focused window skips minimized ones for focus. */
+    wm_destroy_window(&s, c);
+    ASSERT_EQ(s.windows[sb].focused, 0, "minimized B not given focus");
+    ASSERT_EQ(s.windows[wm_find_idx(&s, a)].focused, 1, "visible A gets it");
+}
+
+static void test_cascade_placement(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 572);
+    int x, y;
+    wm_cascade_pos(&s, 300, 200, &x, &y);
+    ASSERT_EQ(x, WM_CASCADE_X0, "first window at the cascade origin");
+    ASSERT_EQ(y, WM_CASCADE_Y0 + TITLEBAR_H, "content below its title bar");
+    wm_create_window(&s, "1", x, y, 300, 200);
+
+    int x2, y2;
+    wm_cascade_pos(&s, 300, 200, &x2, &y2);
+    ASSERT_EQ(x2, x + WM_CASCADE_STEP, "second offset right");
+    ASSERT_EQ(y2, y + WM_CASCADE_STEP, "second offset down");
+    wm_create_window(&s, "2", x2, y2, 300, 200);
+
+    /* Keep cascading until it would run off the screen, then wrap. */
+    int px = x2, wrapped = 0;
+    for (int i = 0; i < 40 && !wrapped; i++) {
+        int nx, ny;
+        wm_cascade_pos(&s, 300, 200, &nx, &ny);
+        ASSERT(nx + 300 <= 800 && ny + 200 <= 572, "placed fully on screen");
+        if (nx < px) wrapped = 1;
+        px = nx;
+    }
+    ASSERT(wrapped, "cascade wraps at the screen edge");
+
+    /* With no windows open it starts over. */
+    wm_state_t s2;
+    wm_state_init(&s2, 800, 572);
+    s2.place_x = 300; s2.place_y = 300;
+    wm_cascade_pos(&s2, 100, 100, &x, &y);
+    ASSERT_EQ(x, WM_CASCADE_X0, "no windows: back to the origin");
+}
+
+static void test_drag_clamp(void)
+{
+    wm_state_t s;
+    wm_state_init(&s, 800, 572);
+    int id = wm_create_window(&s, "D", 100, 100, 200, 100);
+    window_t *w = wm_find_window(&s, id);
+    wm_handle_mouse_down(&s, 110, 100 - TITLEBAR_H + 5, 1);
+    ASSERT_EQ(s.drag_win_id, id, "dragging");
+
+    wm_handle_mouse_move(&s, -5000, -5000);
+    ASSERT(w->bounds.x + w->bounds.w >= WM_DRAG_KEEP, "title bar kept on screen (left)");
+    ASSERT_EQ(w->bounds.y - TITLEBAR_H, 0, "title bar can't go above the screen");
+
+    wm_handle_mouse_move(&s, 5000, 5000);
+    ASSERT(w->bounds.x <= 800 - WM_DRAG_KEEP, "title bar kept on screen (right)");
+    ASSERT_EQ(w->bounds.y, 572, "title bar bottom at the screen bottom");
+}
+
+static void test_double_click(void)
+{
+    ASSERT(wm_is_double_click(10, 100, 0, 0), "100 ms apart: double");
+    ASSERT(wm_is_double_click(40, 100, 3, -4), "400 ms, 4 px: double");
+    ASSERT(!wm_is_double_click(41, 100, 0, 0), "410 ms: two clicks");
+    ASSERT(!wm_is_double_click(10, 100, 5, 0), "5 px apart: two clicks");
+}
+
+static void test_composite_minimized_and_chrome(void)
+{
+    canvas_t *screen = canvas_create(400, 300);
+    wm_state_t s;
+    wm_state_init(&s, 400, 300);
+    int id = wm_create_window(&s, "Min", 50, 80, 200, 100);
+    window_t *w = wm_find_window(&s, id);
+    w->backbuf = canvas_create(200, 100);
+    gfx_fill(w->backbuf, GFX_RED);
+    wm_focus(&s, 0);
+
+    wm_composite(&s, screen);
+    rect_t mb = wm_tbtn_rect(w, WM_TBTN_MIN);
+    ASSERT(any_col_in_rect(screen, mb, WM_FRAME_BASE), "min button is bevelled gray");
+    ASSERT(any_col_in_rect(screen, mb, WM_TBTN_GLYPH), "with a glyph");
+    ASSERT(any_col_in_rect(screen, wm_grip_rect(w), WM_FRAME_SHADOW), "grip drawn");
+    ASSERT(any_col_in_rect(screen, wm_titlebar_rect(w), WM_TBAR_TEXT_COL),
+           "focused title text");
+    wm_focus(&s, -1);
+    wm_composite(&s, screen);
+    ASSERT(any_col_in_rect(screen, wm_titlebar_rect(w), WM_TBAR_TEXT_UNFOC),
+           "unfocused title text is dimmed");
+
+    wm_minimize(&s, 0);
+    wm_composite(&s, screen);
+    ASSERT_EQ(count_col(screen, GFX_RED), 0, "minimized window not drawn");
+
+    /* The resize outline is drawn over everything during a grip drag. */
+    wm_unminimize(&s, 0);
+    rect_t g = wm_grip_rect(w);
+    wm_handle_mouse_down(&s, g.x + 1, g.y + 1, 1);
+    wm_handle_mouse_move(&s, 380, 280);
+    wm_composite(&s, screen);
+    rect_t ol = wm_resize_outline(&s);
+    ASSERT_EQ(pixel_at(screen, ol.x + ol.w - 1, ol.y + ol.h - 1), WM_OUTLINE_DARK,
+              "outline corner drawn");
+
+    canvas_free(w->backbuf);
+    w->backbuf = (canvas_t *)0;
+    canvas_free(screen);
+}
+
+static void test_damage_frame(void)
+{
+    wm_damage_t d;
+    wm_damage_init(&d, 800, 600);
+    wm_damage_frame(&d, (rect_t){ 100, 100, 200, 150 });
+    int area = 0;
+    for (int i = 0; i < d.n; i++) area += d.r[i].w * d.r[i].h;
+    ASSERT(area < 200 * 150 / 2, "frame damage is the edges, not the whole rect");
+    ASSERT(area >= 2 * (200 + 150) * WM_OUTLINE_W - 4 * WM_OUTLINE_W * WM_OUTLINE_W,
+           "covers all four edges");
+}
+
 int main(void)
 {
     RUN_SUITE(test_geometry_rect_contains);
@@ -1141,6 +1471,7 @@ int main(void)
     RUN_SUITE(test_create_window);
     RUN_SUITE(test_destroy_window);
     RUN_SUITE(test_max_windows);
+    RUN_SUITE(test_reserved_slot_for_power);
 
     RUN_SUITE(test_hittest_basic);
     RUN_SUITE(test_hittest_stacking);
@@ -1183,6 +1514,16 @@ int main(void)
     RUN_SUITE(test_key_stream);
     RUN_SUITE(test_button_edges);
     RUN_SUITE(test_cycle_focus);
+
+    RUN_SUITE(test_title_buttons_layout);
+    RUN_SUITE(test_resize_grip_clamp);
+    RUN_SUITE(test_maximize_restore);
+    RUN_SUITE(test_minimize_restore);
+    RUN_SUITE(test_cascade_placement);
+    RUN_SUITE(test_drag_clamp);
+    RUN_SUITE(test_double_click);
+    RUN_SUITE(test_composite_minimized_and_chrome);
+    RUN_SUITE(test_damage_frame);
 
     TEST_SUMMARY();
 }

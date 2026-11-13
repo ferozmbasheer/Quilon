@@ -40,16 +40,22 @@ static void clock_tick(window_t *win)
     int_to_2dig(str + 3, m); str[5] = ':';
     int_to_2dig(str + 6, s); str[8] = '\0';
 
+    /* Centred, so it stays in the middle of a resized window. */
     canvas_t *c = win->backbuf;
     gfx_fill(c, GFX_RGB(10, 10, 10));
-    gfx_draw_text(c, 40, 12, str, GFX_RGB(0, 255, 128), GFX_RGB(10, 10, 10));
+    gfx_draw_text(c, (c->w - 8 * GFX_CHAR_W) / 2, (c->h - GFX_CHAR_H) / 2,
+                  str, GFX_RGB(0, 255, 128), GFX_RGB(10, 10, 10));
     win->dirty = 1;
 }
 
 static void clock_event(window_t *win, const wm_event_t *ev)
 {
-    if (ev->type == WM_EV_CLOSE)
+    if (ev->type == WM_EV_CLOSE) {
         win->want_close = 1;
+    } else if (ev->type == WM_EV_RESIZE) {    /* redraw at the new size */
+        ((clock_state_t *)win->app_state)->last_sec = (unsigned int)-1;
+        clock_tick(win);
+    }
 }
 
 static void clock_destroy(window_t *win)
